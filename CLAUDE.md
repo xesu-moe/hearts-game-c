@@ -1,6 +1,43 @@
 # Hollow Hearts
 
-A modern redesign of the card game Hearts, built in C with Raylib.
+A deck-building Hearts modification, built in C with Raylib. Players select designed characters as the figures in their deck, unlocking unique Contracts, Host actions, and Revenges.
+
+## Game Vision & Roadmap
+
+### Phase 1: Vanilla Hearts (current)
+
+Build a fully working standard Hearts game first. All engine systems must be designed with Phase 2 in mind, but no modification mechanics are implemented until vanilla Hearts is complete and stable.
+
+### Phase 2: Hollow Hearts Modifications
+
+Once vanilla Hearts is done, integrate the following systems:
+
+#### Characters (Deck Building)
+
+Players select designed characters to be the figures (Jack, Queen, King) in their deck. Each character has unique art and determines which Contracts, Host actions, and Revenges are available to the player. Character selection happens before the game starts.
+
+#### Contracts (Per-Round Secret Missions)
+
+- Each round, players secretly choose a Contract (e.g., "Don't score any heart", "Obtain 4 club cards")
+- Contracts are hidden from other players unless revealed
+- Completing a Contract grants a persistent benefit (e.g., "Score -1 heart every round")
+- Available Contracts depend on the player's chosen character
+
+#### Host (Losing Player's Round Modifier)
+
+- The player who is losing when a round starts becomes the Host
+- The Host chooses a global modifier that affects the entire round for all players
+- Available Host actions depend on the Host's chosen character
+
+#### Revenges (Counter to Queen of Spades)
+
+- When a player is hit by the Queen of Spades played by another player, the victim can activate a Revenge against that specific player
+- Examples: "Reveal the attacker's Contract", "Lead the next hand"
+- Available Revenges depend on the victim's chosen character
+
+### Engine Design Principle
+
+**Build vanilla, architect for mods.** Every system (input, game state, scoring, phases) must have clear extension points for Phase 2 mechanics. Use the Command Pattern for actions, keep game rules data-driven where possible, and ensure the phase FSM can accommodate new phases (character select, contract pick, host action, revenge trigger) without rewriting the core loop.
 
 ## Build
 

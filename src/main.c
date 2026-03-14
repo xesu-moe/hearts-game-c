@@ -1,7 +1,8 @@
 /* ============================================================
  * @deps-implements: (entry point)
- * @deps-requires: game_state.h (GameState, game_state_init), raylib.h
- * @deps-last-changed: 2026-03-14 — Core game loop skeleton
+ * @deps-requires: game_state.h (GameState, game_state_init), input.h
+ *                (input_init, input_poll, input_cmd_pop), raylib.h
+ * @deps-last-changed: 2026-03-14 — Added input system integration
  * ============================================================ */
 
 #include <stdbool.h>
@@ -9,6 +10,7 @@
 #include "raylib.h"
 
 #include "game_state.h"
+#include "input.h"
 
 /* ---- Constants ---- */
 #define WINDOW_WIDTH  1280
@@ -65,12 +67,58 @@ static void clock_update(GameClock *clk)
 static void process_input(GameState *gs)
 {
     (void)gs;
+    input_poll();
 }
 
 static void update(GameState *gs, float dt)
 {
-    (void)gs;
     (void)dt;
+
+    InputCmd cmd;
+    for (int n = 0; n < INPUT_CMD_QUEUE_CAPACITY &&
+                    (cmd = input_cmd_pop()).type != INPUT_CMD_NONE; n++) {
+        switch (gs->phase) {
+        case PHASE_MENU:
+            if (cmd.type == INPUT_CMD_START_GAME ||
+                cmd.type == INPUT_CMD_CONFIRM) {
+                game_state_start_game(gs);
+            }
+            break;
+
+        case PHASE_DEALING:
+            /* Dealing is instant/automatic -- no player input needed. */
+            break;
+
+        case PHASE_PASSING:
+            /* Phase 1: handle card selection for passing.
+             * Will be implemented with rendering (needs card positions
+             * for hit-testing). */
+            break;
+
+        case PHASE_PLAYING:
+            /* Phase 1: handle card play.
+             * Will be implemented with rendering (needs card positions
+             * for hit-testing). */
+            break;
+
+        case PHASE_SCORING:
+            if (cmd.type == INPUT_CMD_CONFIRM ||
+                cmd.type == INPUT_CMD_CLICK) {
+                game_state_advance_scoring(gs);
+            }
+            break;
+
+        case PHASE_GAME_OVER:
+            if (cmd.type == INPUT_CMD_CONFIRM ||
+                cmd.type == INPUT_CMD_CLICK) {
+                game_state_reset_to_menu(gs);
+            }
+            break;
+
+        default:
+            break;
+        }
+    }
 }
 
 static void render(const GameState *gs)
@@ -109,6 +157,7 @@ int main(void)
 
     GameState gs;
     game_state_init(&gs);
+    input_init();
 
     while (!WindowShouldClose()) {
         clock_update(&clk);
