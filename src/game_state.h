@@ -5,15 +5,13 @@
  * @deps-exports: enum GamePhase, enum PassDirection, struct GameState,
  *                game_state_init(), game_state_start_game(),
  *                game_state_reset_to_menu(), game_state_new_round(),
- *                game_state_find_two_of_clubs(), game_state_select_pass(),
- *                game_state_all_passes_ready(), game_state_execute_pass(),
  *                game_state_current_player(), game_state_play_card(),
  *                game_state_complete_trick(), game_state_is_valid_play(),
  *                game_state_is_game_over(), game_state_advance_scoring(),
- *                game_state_get_winners(), GAME_OVER_SCORE
+ *                game_state_get_winners()
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: game_state.c
- * @deps-last-changed: 2026-03-14 — Added scoring advancement and winner functions
+ * @deps-used-by: game_state.c, render.h, main.c
+ * @deps-last-changed: 2026-03-14 — Integrated into render system dependency chain
  * ============================================================ */
 
 #include <stdbool.h>

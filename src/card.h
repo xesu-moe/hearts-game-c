@@ -4,8 +4,8 @@
 /* ============================================================
  * @deps-exports: struct Card, enum Suit, enum Rank, card_to_index(), card_from_index(), card_is_none(), card_equals(), card_name(), card_points()
  * @deps-requires: (none — leaf type)
- * @deps-used-by: card.c, hand.h, deck.h, trick.h
- * @deps-last-changed: 2026-03-13 — Initial creation
+ * @deps-used-by: card.c, hand.h, deck.h, trick.h, card_render.h, render.h
+ * @deps-last-changed: 2026-03-14 — Integrated into render system
  * ============================================================ */
 
 #include <stdbool.h>

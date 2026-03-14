@@ -73,6 +73,9 @@ void game_state_new_round(GameState *gs)
     gs->hearts_broken = false;
     gs->tricks_played = 0;
 
+    /* Always clear trick to prevent stale cards from previous round */
+    trick_init(&gs->current_trick, -1);
+
     if (gs->pass_direction == PASS_NONE) {
         gs->lead_player = game_state_find_two_of_clubs(gs);
         trick_init(&gs->current_trick, gs->lead_player);
