@@ -3,7 +3,8 @@
 
 /* ============================================================
  * @deps-exports: enum GamePhase, enum PassDirection, struct GameState,
- *                game_state_init(), game_state_new_round(),
+ *                game_state_init(), game_state_start_game(),
+ *                game_state_reset_to_menu(), game_state_new_round(),
  *                game_state_find_two_of_clubs(), game_state_select_pass(),
  *                game_state_all_passes_ready(), game_state_execute_pass(),
  *                game_state_current_player(), game_state_play_card(),
@@ -48,7 +49,7 @@ typedef struct GameState {
     Deck          deck;
 
     /* Round tracking */
-    int           round_number;   /* 0-based, increments each round */
+    int           round_number;   /* completed rounds (incremented at end of new_round) */
     PassDirection pass_direction;  /* derived: round_number % PASS_COUNT */
     int           lead_player;    /* who leads current trick */
     bool          hearts_broken;  /* has a heart been played this round */
@@ -64,6 +65,15 @@ typedef struct GameState {
 
 /* Initialize game: set up 4 players (player 0 = human), phase = PHASE_MENU */
 void game_state_init(GameState *gs);
+
+/* Start a new game from PHASE_MENU or PHASE_GAME_OVER. Resets scores and
+ * round_number, then delegates to game_state_new_round(). Returns false
+ * if called from any other phase. */
+bool game_state_start_game(GameState *gs);
+
+/* Reset to menu state. Callable from any phase. Delegates to
+ * game_state_init() for a full wipe. */
+void game_state_reset_to_menu(GameState *gs);
 
 /* Start a new round: shuffle, deal, set pass direction, find 2♣ holder. */
 void game_state_new_round(GameState *gs);

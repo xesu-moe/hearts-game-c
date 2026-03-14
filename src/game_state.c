@@ -1,7 +1,7 @@
 /* ============================================================
  * @deps-implements: game_state.h
  * @deps-requires: game_state.h, player.h, deck.h, trick.h, hand.h, card.h
- * @deps-last-changed: 2026-03-14 — Added scoring advancement and winner functions
+ * @deps-last-changed: 2026-03-14 — Added start_game and reset_to_menu functions
  * ============================================================ */
 
 #include "game_state.h"
@@ -18,6 +18,26 @@ void game_state_init(GameState *gs)
     }
     gs->phase = PHASE_MENU;
     gs->round_number = 0;
+}
+
+bool game_state_start_game(GameState *gs)
+{
+    if (gs->phase != PHASE_MENU && gs->phase != PHASE_GAME_OVER) {
+        return false;
+    }
+
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        gs->players[i].total_score = 0;
+    }
+    gs->round_number = 0;
+
+    game_state_new_round(gs);
+    return true;
+}
+
+void game_state_reset_to_menu(GameState *gs)
+{
+    game_state_init(gs);
 }
 
 int game_state_find_two_of_clubs(const GameState *gs)
