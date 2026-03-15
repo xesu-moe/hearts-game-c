@@ -1,23 +1,26 @@
 /* ============================================================
  * @deps-implements: (entry point)
- * @deps-requires: game_state.h (GameState, game_state_init, game_state_start_game),
- *                input.h (input_init, input_poll, input_cmd_pop, InputCmd),
- *                render.h (RenderState, render_init, render_update, render_draw,
- *                          render_hit_test_button, MenuItem, MENU_ITEM_COUNT),
- *                card_render.h (card_render_init, card_render_shutdown),
- *                raylib.h (InitWindow, SetTargetFPS, GetFrameTime,
- *                WindowShouldClose, CloseWindow)
- * @deps-last-changed: 2026-03-14 — Added menu_items loop with MenuItem enum for hit-testing, handle INPUT_CMD_QUIT
+ * @deps-requires: core/game_state.h (GameState, game_state_init),
+ *                core/input.h (input_init, input_poll, input_cmd_pop),
+ *                render/render.h (RenderState, render_init),
+ *                render/card_render.h (card_render_init, card_render_shutdown),
+ *                phase2/phase2_defs.h (phase2_defs_init),
+ *                phase2/contract_logic.h (contract_state_init),
+ *                raylib.h (InitWindow, SetTargetFPS)
+ * @deps-last-changed: 2026-03-15 — Integrated Phase 2 contract system
  * ============================================================ */
 
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "raylib.h"
 
-#include "card_render.h"
-#include "game_state.h"
-#include "input.h"
-#include "render.h"
+#include "render/card_render.h"
+#include "core/game_state.h"
+#include "core/input.h"
+#include "render/render.h"
+#include "phase2/phase2_defs.h"
+#include "phase2/contract_logic.h"
 
 /* ---- Constants ---- */
 #define WINDOW_WIDTH  1280
@@ -103,6 +106,40 @@ static void flow_init(TurnFlow *flow)
 
 static void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                          float dt);
+
+static const char *p2_player_name(int player_id)
+{
+    static const char *names[] = {"You", "West", "North", "East"};
+    if (player_id >= 0 && player_id < NUM_PLAYERS) return names[player_id];
+    return "???";
+}
+
+/* ---- Phase2 state (file-level so all functions can access it) ---- */
+
+static Phase2State p2;
+
+/* Populate contract UI for human player from Phase2State */
+static void setup_contract_ui(RenderState *rs)
+{
+    int ids[MAX_CONTRACT_OPTIONS];
+    int count = contract_get_available(&p2, 0, ids);
+
+    const char *names[MAX_CONTRACT_OPTIONS];
+    const char *descs[MAX_CONTRACT_OPTIONS];
+
+    for (int i = 0; i < count; i++) {
+        const ContractDef *cd = phase2_get_contract(ids[i]);
+        if (cd) {
+            names[i] = cd->name;
+            descs[i] = cd->description;
+        } else {
+            names[i] = "Unknown";
+            descs[i] = "";
+        }
+    }
+
+    render_set_contract_options(rs, ids, count, names, descs);
+}
 
 /* ---- AI stubs ---- */
 
@@ -235,7 +272,17 @@ static void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_TRICK_COLLECTING:
         if (flow->timer <= 0.0f) {
-            game_state_complete_trick(gs);
+            /* Save trick data before completion reinitializes it */
+            if (p2.enabled && trick_is_complete(&gs->current_trick)) {
+                Trick saved_trick = gs->current_trick;
+                int winner = trick_get_winner(&saved_trick);
+                game_state_complete_trick(gs);
+                if (winner >= 0) {
+                    contract_on_trick_complete(&p2, &saved_trick, winner);
+                }
+            } else {
+                game_state_complete_trick(gs);
+            }
             rs->sync_needed = true;
             flow->step = FLOW_BETWEEN_TRICKS;
             flow->timer = FLOW_BETWEEN_TRICKS_TIME;
@@ -293,6 +340,16 @@ static void process_input(GameState *gs, RenderState *rs, FlowStep flow_step)
                 input_cmd_push((InputCmd){
                     .type = INPUT_CMD_CONFIRM,
                     .source_player = 0,
+                });
+                break;
+            }
+            /* Check contract option click */
+            int contract_hit = render_hit_test_contract(rs, mouse);
+            if (contract_hit >= 0) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_SELECT_CONTRACT,
+                    .source_player = 0,
+                    .contract = { .contract_id = rs->contract_option_ids[contract_hit] },
                 });
                 break;
             }
@@ -364,6 +421,17 @@ static void update(GameState *gs, RenderState *rs, float dt,
             break;
 
         case PHASE_PASSING:
+            if (cmd.type == INPUT_CMD_SELECT_CONTRACT && p2.enabled) {
+                /* Update visual selection */
+                int cid = cmd.contract.contract_id;
+                for (int i = 0; i < rs->contract_option_count; i++) {
+                    if (rs->contract_option_ids[i] == cid) {
+                        rs->selected_contract_idx = i;
+                        contract_select(&p2, 0, cid);
+                        break;
+                    }
+                }
+            }
             if (cmd.type == INPUT_CMD_CONFIRM &&
                 rs->selected_count == PASS_CARD_COUNT) {
                 /* Gather selected cards from render state */
@@ -388,6 +456,17 @@ static void update(GameState *gs, RenderState *rs, float dt,
                     }
                 }
 
+                /* AI picks contracts before pass execution */
+                if (p2.enabled) {
+                    for (int p = 1; p < NUM_PLAYERS; p++) {
+                        if (p2.players[p].contract.contract_id < 0) {
+                            contract_ai_select(&p2, p);
+                        }
+                    }
+                    p2.round.contracts_chosen = contract_all_chosen(&p2);
+                    rs->contract_ui_active = false;
+                }
+
                 /* Execute pass if all ready */
                 if (game_state_all_passes_ready(gs)) {
                     game_state_execute_pass(gs);
@@ -406,8 +485,37 @@ static void update(GameState *gs, RenderState *rs, float dt,
 
         case PHASE_SCORING:
             if (cmd.type == INPUT_CMD_CONFIRM) {
-                game_state_advance_scoring(gs);
-                rs->sync_needed = true;
+                /* Evaluate and apply contract rewards before advancing */
+                if (p2.enabled && !rs->show_contract_results) {
+                    for (int i = 0; i < NUM_PLAYERS; i++) {
+                        contract_evaluate(&p2, i);
+                        contract_apply_reward(&p2, i);
+
+                        /* Populate result text for display */
+                        const ContractInstance *ci = &p2.players[i].contract;
+                        if (ci->contract_id >= 0) {
+                            const ContractDef *cd = phase2_get_contract(ci->contract_id);
+                            const char *name = cd ? cd->name : "Unknown";
+                            const char *status = ci->completed ? "Completed!" : "Failed";
+                            snprintf(rs->contract_result_text[i],
+                                     sizeof(rs->contract_result_text[i]),
+                                     "%s: %s - %s",
+                                     p2_player_name(i), name, status);
+                            rs->contract_result_success[i] = ci->completed;
+                        } else {
+                            rs->contract_result_text[i][0] = '\0';
+                        }
+                    }
+                    rs->show_contract_results = true;
+                } else {
+                    rs->show_contract_results = false;
+                    game_state_advance_scoring(gs);
+                    rs->sync_needed = true;
+                }
+                /* Consume remaining commands to prevent double-advance in
+                 * the same frame (e.g. Enter + mouse click simultaneously) */
+                input_cmd_queue_clear();
+                goto done_processing;
             }
             break;
 
@@ -422,7 +530,8 @@ static void update(GameState *gs, RenderState *rs, float dt,
             break;
         }
     }
-
+done_processing:
+    (void)0;
 }
 
 /* ---- Entry point ---- */
@@ -437,6 +546,10 @@ int main(void)
     GameState gs;
     game_state_init(&gs);
     input_init();
+
+    phase2_defs_init();
+    contract_state_init(&p2);
+    p2.enabled = true;
 
     RenderState rs;
     render_init(&rs);
@@ -462,6 +575,13 @@ int main(void)
             flow_init(&flow);
             rs.sync_needed = true;
         }
+
+        /* Set up contract UI when entering PHASE_PASSING */
+        if (gs.phase == PHASE_PASSING && prev_phase != PHASE_PASSING && p2.enabled) {
+            contract_round_reset(&p2);
+            setup_contract_ui(&rs);
+        }
+
         prev_phase = gs.phase;
 
         /* Flow runs on raw_dt (real time) intentionally — it controls

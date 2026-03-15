@@ -1,0 +1,15 @@
+{
+  "host_actions": [
+    {
+      "id": 0,
+      "name": "Broken Gates",
+      "description": "Hearts are considered broken from the start of the round.",
+      "effects": [
+        {
+          "type": "EFFECT_HEARTS_BREAK_EARLY"
+        }
+      ],
+      "scope": "EFFECT_SCOPE_ALL"
+    }
+  ]
+}

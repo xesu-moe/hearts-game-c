@@ -1,0 +1,73 @@
+{
+  "contracts": [
+    {
+      "id": 0,
+      "name": "Heartless",
+      "description": "Don't collect any hearts this round.",
+      "condition": "COND_AVOID_SUIT",
+      "condition_param": {
+        "suit": "SUIT_HEARTS"
+      },
+      "rewards": [
+        {
+          "type": "EFFECT_FLAT_SCORE_ADJUST",
+          "param": { "points_delta": -3 }
+        }
+      ],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 1,
+      "name": "Club Collector",
+      "description": "Collect at least 4 club cards.",
+      "condition": "COND_COLLECT_N_OF_SUIT",
+      "condition_param": {
+        "suit": "SUIT_CLUBS",
+        "count": 4,
+        "at_least": true
+      },
+      "rewards": [
+        {
+          "type": "EFFECT_FLAT_SCORE_ADJUST",
+          "param": { "points_delta": -2 }
+        }
+      ],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 2,
+      "name": "Clean Hands",
+      "description": "Score 0 points this round.",
+      "condition": "COND_TAKE_NO_POINTS",
+      "condition_param": {},
+      "rewards": [
+        {
+          "type": "EFFECT_FLAT_SCORE_ADJUST",
+          "param": { "points_delta": -5 }
+        }
+      ],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 3,
+      "name": "Trick Master",
+      "description": "Win at least 5 tricks.",
+      "condition": "COND_WIN_N_TRICKS",
+      "condition_param": {
+        "count": 5,
+        "at_least": true
+      },
+      "rewards": [
+        {
+          "type": "EFFECT_POINTS_PER_HEART",
+          "param": { "points_delta": -1 }
+        }
+      ],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    }
+  ]
+}

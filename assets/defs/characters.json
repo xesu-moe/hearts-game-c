@@ -1,0 +1,17 @@
+{
+  "characters": [
+    {
+      "id": 0,
+      "name": "The Warden",
+      "description": "A stern keeper of order. Contracts focus on avoidance.",
+      "figure_type": "FIGURE_KING",
+      "mechanics": {
+        "king": {
+          "contract_ids": [0, -1, -1]
+        }
+      },
+      "portrait_asset": "warden_portrait",
+      "card_art_asset": "warden_card"
+    }
+  ]
+}

@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -Isrc
 LDFLAGS = -lraylib -lm
 
-SRC = $(wildcard src/*.c)
+SRC = $(wildcard src/*.c) $(wildcard src/core/*.c) $(wildcard src/render/*.c) $(wildcard src/phase2/*.c) $(wildcard src/vendor/*.c)
 OBJ = $(SRC:.c=.o)
 BIN = hollow-hearts
 
@@ -11,7 +11,7 @@ all: $(BIN)
 $(BIN): $(OBJ)
 	$(CC) $(OBJ) -o $@ $(LDFLAGS)
 
-src/%.o: src/%.c
+%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:

@@ -1,0 +1,15 @@
+{
+  "revenges": [
+    {
+      "id": 0,
+      "name": "Expose",
+      "description": "Reveal the attacker's contract for the rest of the round.",
+      "effects": [
+        {
+          "type": "EFFECT_REVEAL_CONTRACT"
+        }
+      ],
+      "scope": "EFFECT_SCOPE_TARGET"
+    }
+  ]
+}
