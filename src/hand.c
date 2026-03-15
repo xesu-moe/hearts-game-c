@@ -28,8 +28,9 @@ Card hand_remove_at(Hand *hand, int index)
     }
     Card removed = hand->cards[index];
     hand->count--;
-    if (index < hand->count) {
-        hand->cards[index] = hand->cards[hand->count];
+    /* Shift remaining cards down to preserve sort order */
+    for (int i = index; i < hand->count; i++) {
+        hand->cards[i] = hand->cards[i + 1];
     }
     return removed;
 }

@@ -21,7 +21,7 @@ void hand_init(Hand *hand);
 /* Add a card to the hand. Returns false if hand is full. */
 bool hand_add_card(Hand *hand, Card card);
 
-/* Remove and return the card at the given index (swap-remove).
+/* Remove and return the card at the given index (order-preserving).
  * Returns CARD_NONE if index is out of range. */
 Card hand_remove_at(Hand *hand, int index);
 
