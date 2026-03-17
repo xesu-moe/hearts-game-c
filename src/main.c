@@ -97,10 +97,12 @@ typedef enum FlowStep {
 typedef struct TurnFlow {
     FlowStep step;
     float    timer;
-    int      animating_player;  /* whose card is animating (-1 = none) */
-    int      prev_trick_count;  /* for detecting human play */
+    float    turn_timer;         /* 30s per-turn countdown */
+    int      animating_player;   /* whose card is animating (-1 = none) */
+    int      prev_trick_count;   /* for detecting human play */
 } TurnFlow;
 
+#define FLOW_TURN_TIME_LIMIT   30.0f
 #define FLOW_AI_THINK_TIME     0.4f
 #define FLOW_CARD_ANIM_TIME    0.25f
 #define FLOW_TRICK_DISPLAY_TIME 1.0f
@@ -117,6 +119,7 @@ static void flow_init(TurnFlow *flow)
 {
     flow->step = FLOW_IDLE;
     flow->timer = 0.0f;
+    flow->turn_timer = FLOW_TURN_TIME_LIMIT;
     flow->animating_player = -1;
     flow->prev_trick_count = 0;
 }
@@ -446,10 +449,12 @@ static void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 /* Human's turn */
                 flow->step = FLOW_WAITING_FOR_HUMAN;
                 flow->prev_trick_count = gs->current_trick.num_played;
+                flow->turn_timer = FLOW_TURN_TIME_LIMIT;
             } else if (current > 0) {
                 /* AI's turn */
                 flow->step = FLOW_AI_THINKING;
                 flow->timer = settings_ai_think_time(g_settings.ai_speed);
+                flow->turn_timer = FLOW_TURN_TIME_LIMIT;
             }
             /* current == -1 means no valid player; stay IDLE and
                let the phase-change guard at top handle it next frame */
@@ -459,6 +464,13 @@ static void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_WAITING_FOR_HUMAN: {
         float anim_mult = settings_anim_multiplier(g_settings.anim_speed);
+        flow->turn_timer -= dt;
+
+        /* Auto-play on timeout */
+        if (flow->turn_timer <= 0.0f) {
+            ai_play_card(gs, 0);
+        }
+
         /* Detect if human played a card (num_played increased) */
         if (gs->current_trick.num_played > flow->prev_trick_count) {
             rs->sync_needed = true;
@@ -471,6 +483,7 @@ static void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_AI_THINKING: {
         float anim_mult = settings_anim_multiplier(g_settings.anim_speed);
+        flow->turn_timer -= dt;
         if (flow->timer <= 0.0f) {
             int current = game_state_current_player(gs);
             if (current > 0) {
@@ -1278,6 +1291,9 @@ int main(void)
            visual pacing, not game logic. Game state mutations happen
            inside flow_update only when timers expire. */
         flow_update(&flow, &gs, &rs, clk.raw_dt);
+
+        /* Pass turn timer to render state for display */
+        rs.turn_time_remaining = flow.turn_timer;
 
         /* Set interactive flag after flow_update to reflect final state */
         rs.info_grudge_interactive = (flow.step == FLOW_WAITING_FOR_HUMAN);

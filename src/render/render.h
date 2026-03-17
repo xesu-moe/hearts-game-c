@@ -124,6 +124,7 @@ typedef struct RenderState {
     PassDirection displayed_pass_dir;
     int           last_trick_winner;
     float         trick_winner_timer;
+    float         turn_time_remaining;  /* seconds left for current turn */
 
     /* UI buttons */
     UIButton menu_items[MENU_ITEM_COUNT];

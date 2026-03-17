@@ -47,67 +47,100 @@ void layout_hand_positions(PlayerPosition pos, int card_count,
     float by  = cfg->board_y;
     float bsz = cfg->board_size;
 
-    float arc_deg, radius, center_angle, rot_sign;
-    Vector2 hand_base;
+    /* Scale arc spread by card count so small hands don't over-spread */
+    float count_ratio = fminf((float)card_count, FAN_MAX_CARDS) / FAN_MAX_CARDS;
 
-    switch (pos) {
-    case POS_BOTTOM:
-        arc_deg = FAN_ARC_BOTTOM;
-        radius = FAN_RADIUS_BOTTOM_REF * s;
-        center_angle = -PI / 2.0f;
-        rot_sign = 1.0f;
-        hand_base = (Vector2){bx + bsz * 0.5f, by + bsz - 30.0f * s};
-        break;
-    case POS_TOP:
-        arc_deg = FAN_ARC_OTHER;
-        radius = FAN_RADIUS_OTHER_REF * s;
-        center_angle = PI / 2.0f;
-        rot_sign = -1.0f;
-        hand_base = (Vector2){bx + bsz * 0.5f, by + 20.0f * s};
-        break;
-    case POS_LEFT:
-        arc_deg = FAN_ARC_OTHER;
-        radius = FAN_RADIUS_OTHER_REF * s;
-        center_angle = 0.0f;
-        rot_sign = 1.0f;
-        hand_base = (Vector2){bx + 20.0f * s, by + bsz * 0.5f};
-        break;
-    case POS_RIGHT:
-        arc_deg = FAN_ARC_OTHER;
-        radius = FAN_RADIUS_OTHER_REF * s;
-        center_angle = PI;
-        rot_sign = -1.0f;
-        hand_base = (Vector2){bx + bsz - 20.0f * s, by + bsz * 0.5f};
-        break;
-    default:
-        *out_count = 0;
+    /* ---- Bottom (human) player: independent layout ---- */
+    if (pos == POS_BOTTOM) {
+        float arc_deg = FAN_ARC_BOTTOM;
+        float effective_arc = arc_deg * count_ratio;
+        float arc_rad = effective_arc * DEG2RAD;
+        float radius = FAN_RADIUS_BOTTOM_REF * s;
+        float center_angle = -PI / 2.0f;
+        Vector2 hand_base = {bx + bsz * 0.5f, by + bsz - 30.0f * s};
+        Vector2 arc_center = {
+            hand_base.x - radius * cosf(center_angle),
+            hand_base.y - radius * sinf(center_angle)
+        };
+
+        for (int i = 0; i < card_count; i++) {
+            float t = (card_count == 1)
+                          ? 0.0f
+                          : ((float)i / (float)(card_count - 1) - 0.5f);
+            float card_angle = center_angle + t * arc_rad;
+            out_positions[i] = (Vector2){
+                arc_center.x + radius * cosf(card_angle),
+                arc_center.y + radius * sinf(card_angle)
+            };
+            out_rotations[i] = t * effective_arc;
+        }
         return;
     }
 
-    /* Scale arc spread by card count so small hands don't over-spread */
-    float count_ratio = fminf((float)card_count, FAN_MAX_CARDS) / FAN_MAX_CARDS;
-    float effective_arc_deg = arc_deg * count_ratio;
-    float arc_rad = effective_arc_deg * DEG2RAD;
+    /* ---- Opponents: compute North, then rotate for East/West ---- */
 
-    /* Arc center is behind the hand base (opposite to center_angle direction) */
+    float arc_deg = FAN_ARC_OTHER;
+    float effective_arc = arc_deg * count_ratio;
+    float arc_rad = effective_arc * DEG2RAD;
+    float radius = FAN_RADIUS_OTHER_REF * s;
+
+    /* North base: top-center of board */
+    float center_angle = PI / 2.0f; /* pointing down from arc center */
+    Vector2 north_base = {bx + bsz * 0.5f, by + 20.0f * s};
     Vector2 arc_center = {
-        hand_base.x - radius * cosf(center_angle),
-        hand_base.y - radius * sinf(center_angle)
+        north_base.x - radius * cosf(center_angle),
+        north_base.y - radius * sinf(center_angle)
     };
+
+    /* Build North positions left-to-right (negate t in angle calc) */
+    Vector2 north_pos[13]; /* FAN_MAX_CARDS */
+    float   north_rot[13];
 
     for (int i = 0; i < card_count; i++) {
         float t = (card_count == 1)
                       ? 0.0f
                       : ((float)i / (float)(card_count - 1) - 0.5f);
 
-        float card_angle = center_angle + t * arc_rad;
+        /* Negate t so i=0 lands LEFT of center, i=last lands RIGHT */
+        float card_angle = center_angle - t * arc_rad;
 
-        out_positions[i] = (Vector2){
+        north_pos[i] = (Vector2){
             arc_center.x + radius * cosf(card_angle),
             arc_center.y + radius * sinf(card_angle)
         };
+        /* Negate: left card gets CW tilt, right card gets CCW tilt */
+        north_rot[i] = -t * effective_arc;
+    }
 
-        out_rotations[i] = rot_sign * t * effective_arc_deg;
+    if (pos == POS_TOP) {
+        for (int i = 0; i < card_count; i++) {
+            out_positions[i] = north_pos[i];
+            out_rotations[i] = north_rot[i];
+        }
+        return;
+    }
+
+    /* Rotate North layout around board center to get East / West.
+     * Screen-space CW 90°: (dx,dy) → (-dy, dx)
+     * Screen-space CCW 90°: (dx,dy) → (dy, -dx)  */
+    float cx = bx + bsz * 0.5f;
+    float cy = by + bsz * 0.5f;
+
+    for (int i = 0; i < card_count; i++) {
+        float dx = north_pos[i].x - cx;
+        float dy = north_pos[i].y - cy;
+
+        if (pos == POS_RIGHT) {
+            /* Rotate 90° CW in screen space → right side of board */
+            out_positions[i] = (Vector2){cx - dy, cy + dx};
+            /* Card faces left (toward center): subtract 90° */
+            out_rotations[i] = north_rot[i] - 90.0f;
+        } else { /* POS_LEFT */
+            /* Rotate 90° CCW in screen space → left side of board */
+            out_positions[i] = (Vector2){cx + dy, cy - dx};
+            /* Card faces right (toward center): add 90° */
+            out_rotations[i] = north_rot[i] + 90.0f;
+        }
     }
 }
 

@@ -124,14 +124,16 @@ static void sync_hands(const GameState *gs, RenderState *rs)
         float cw_s = cfg->card_width * rel_scale;
         float ch_s = cfg->card_height * rel_scale;
 
-        /* Compute rotation origin based on player position */
+        /* Compute rotation origin based on player position.
+         * Bottom: pivot at bottom-center (cards fan upward).
+         * Opponents: all use top-center pivot — East/West are derived
+         * from North by rotating the whole layout ±90°, so the same
+         * origin works for all three. */
         Vector2 origin;
-        switch (spos) {
-        case POS_BOTTOM: origin = (Vector2){cw_s * 0.5f, ch_s};       break;
-        case POS_TOP:    origin = (Vector2){cw_s * 0.5f, 0.0f};       break;
-        case POS_LEFT:   origin = (Vector2){0.0f,        ch_s * 0.5f}; break;
-        case POS_RIGHT:  origin = (Vector2){cw_s,        ch_s * 0.5f}; break;
-        default:         origin = (Vector2){0.0f, 0.0f};              break;
+        if (spos == POS_BOTTOM) {
+            origin = (Vector2){cw_s * 0.5f, ch_s};
+        } else {
+            origin = (Vector2){cw_s * 0.5f, 0.0f};
         }
 
         for (int i = 0; i < hand->count; i++) {
@@ -764,9 +766,10 @@ static void draw_subphase_timer(const RenderState *rs, float s)
     int timer_size = (int)(32.0f * s);
     Color timer_col = (secs <= 3) ? RED : GOLD;
 
-    /* Top-right of board area */
-    float bx = rs->layout.board_x + rs->layout.board_size - 60.0f * s;
-    float by = rs->layout.board_y + 10.0f * s;
+    /* Top-right corner of screen (same padding as turn timer) */
+    int tw = MeasureText(timer_text, timer_size);
+    float bx = rs->layout.screen_width - (float)tw - 10.0f * s;
+    float by = 6.0f * s;
     DrawText(timer_text, (int)bx, (int)by, timer_size, timer_col);
 }
 
@@ -1036,22 +1039,39 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     /* Grudge token icons */
     draw_grudge_tokens(rs);
 
-    /* Current player indicator */
+    /* Turn indicator + timer (top-right of board) */
     int current = game_state_current_player(gs);
     if (current >= 0) {
-        PlayerPosition spos = player_screen_pos(current);
-        Vector2 name_pos = layout_name_position(spos, cfg);
-        const char *name = player_name(current);
-        Color col = (current == HUMAN_PLAYER) ? GREEN : YELLOW;
-        DrawText(name, (int)name_pos.x, (int)name_pos.y, (int)(18.0f * s), col);
+        char turn_text[48];
+        if (current == HUMAN_PLAYER) {
+            snprintf(turn_text, sizeof(turn_text), "Your turn");
+        } else {
+            snprintf(turn_text, sizeof(turn_text), "%s's turn",
+                     player_name(current));
+        }
+
+        int secs = (int)ceilf(rs->turn_time_remaining);
+        if (secs < 0) secs = 0;
+
+        char full_text[64];
+        snprintf(full_text, sizeof(full_text), "%s  %d", turn_text, secs);
+
+        int timer_size = (int)(24.0f * s);
+        Color col = (secs <= 5) ? RED : (current == HUMAN_PLAYER ? GREEN : GOLD);
+        int tw = MeasureText(full_text, timer_size);
+        float tx = cfg->screen_width - (float)tw - 10.0f * s;
+        float ty = 6.0f * s;
+        DrawText(full_text, (int)tx, (int)ty, timer_size, col);
     }
 
     /* Trick count */
     char trick_text[32];
     snprintf(trick_text, sizeof(trick_text), "Trick %d/13", gs->tricks_played + 1);
+    int trick_size = (int)(18.0f * s);
+    int trick_tw = MeasureText(trick_text, trick_size);
     DrawText(trick_text,
-             (int)(cfg->board_x + cfg->board_size - 120.0f * s),
-             (int)(cfg->board_y + 30.0f * s), (int)(18.0f * s), LIGHTGRAY);
+             (int)(cfg->screen_width - (float)trick_tw - 10.0f * s),
+             (int)(cfg->board_y + 38.0f * s), trick_size, LIGHTGRAY);
 
     /* Dim unplayable cards for human player during their turn */
     if (current == HUMAN_PLAYER) {
