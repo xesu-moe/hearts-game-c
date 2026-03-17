@@ -118,8 +118,8 @@ static void card_render_face_procedural(Card card, Vector2 pos, float scale,
                                         bool selected, float rotation_deg,
                                         Vector2 origin)
 {
-    float w = CARD_WIDTH * scale;
-    float h = CARD_HEIGHT * scale;
+    float w = CARD_WIDTH_REF * scale;
+    float h = CARD_HEIGHT_REF * scale;
 
     /* Apply rotation transform: translate to pivot, rotate, then offset by origin */
     rlPushMatrix();
@@ -187,8 +187,8 @@ static void card_render_face_procedural(Card card, Vector2 pos, float scale,
 static void card_render_back_procedural(Vector2 pos, float scale, float opacity,
                                         float rotation_deg, Vector2 origin)
 {
-    float w = CARD_WIDTH * scale;
-    float h = CARD_HEIGHT * scale;
+    float w = CARD_WIDTH_REF * scale;
+    float h = CARD_HEIGHT_REF * scale;
 
     rlPushMatrix();
     rlTranslatef(pos.x, pos.y, 0.0f);
@@ -223,8 +223,8 @@ void card_render_face(Card card, Vector2 pos, float scale,
         return;
     }
 
-    float w = CARD_WIDTH * scale;
-    float h = CARD_HEIGHT * scale;
+    float w = CARD_WIDTH_REF * scale;
+    float h = CARD_HEIGHT_REF * scale;
 
     Rectangle src = card_source_rect(card);
     Rectangle dst = {pos.x, pos.y, w, h};
@@ -262,8 +262,8 @@ void card_render_back(Vector2 pos, float scale, float opacity,
         return;
     }
 
-    float w = CARD_WIDTH * scale;
-    float h = CARD_HEIGHT * scale;
+    float w = CARD_WIDTH_REF * scale;
+    float h = CARD_HEIGHT_REF * scale;
 
     Rectangle src = {0, 0, (float)s_card_back.width, (float)s_card_back.height};
     Rectangle dst = {pos.x, pos.y, w, h};

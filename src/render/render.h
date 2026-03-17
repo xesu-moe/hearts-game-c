@@ -2,17 +2,19 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: MenuItem enum, RenderState (with contract_options),
- *                CardVisual, UIButton, render_init(),
- *                render_update(), render_draw(), render_hit_test_card(),
- *                render_hit_test_button(), render_toggle_card_selection(),
- *                render_clear_selection(), render_hit_test_contract(),
- *                render_set_contract_options(), MENU_ITEM_COUNT,
- *                CARD_WIDTH, CARD_HEIGHT, CARD_OVERLAP,
- *                CARD_SELECT_LIFT, MAX_CARD_VISUALS
- * @deps-requires: raylib.h, core/card.h, core/game_state.h, anim.h, layout.h
- * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-15 — Added contract selection UI
+ * @deps-exports: MenuItem enum, RenderState (chat log, info panel,
+ *                particle system), CardVisual, UIButton,
+ *                render_init(), render_update(), render_draw(),
+ *                render_hit_test_card(), render_hit_test_button(),
+ *                render_toggle_card_selection(), render_clear_selection(),
+ *                render_hit_test_contract(), render_set_contract_options(),
+ *                render_chat_log_push(), render_effect_label()
+ * @deps-requires: raylib.h (Rectangle, Vector2), particle.h
+ *                 (ParticleSystem), core/card.h (NUM_PLAYERS),
+ *                 core/game_state.h (GamePhase, PassSubphase),
+ *                 anim.h (EaseType), layout.h, phase2/effect.h
+ * @deps-used-by: main.c, render.c
+ * @deps-last-changed: 2026-03-17 — Added ParticleSystem field to RenderState
  * ============================================================ */
 
 #include <stdbool.h>
@@ -23,13 +25,16 @@
 #include "core/card.h"
 #include "core/game_state.h"
 #include "layout.h"
+#include "particle.h"
+#include "phase2/effect.h"
 
 /* ---- Constants ---- */
 
-#define CARD_WIDTH       80
-#define CARD_HEIGHT      120
-#define CARD_OVERLAP     30
-#define CARD_SELECT_LIFT 20
+/* Reference dimensions at 720p. Runtime sizes come from LayoutConfig. */
+#define CARD_WIDTH_REF       80
+#define CARD_HEIGHT_REF      120
+#define CARD_OVERLAP_REF     30
+#define CARD_SELECT_LIFT_REF 20
 #define MAX_CARD_VISUALS 64
 #define MENU_ITEM_COUNT  6
 
@@ -80,6 +85,9 @@ typedef struct UIButton {
     bool        disabled;  /* grayed out and non-interactive */
 } UIButton;
 
+#define SETTINGS_ROW_COUNT     8  /* 5 active + 3 audio placeholders */
+#define SETTINGS_ACTIVE_COUNT  5
+
 /* ---- Render State ---- */
 
 typedef struct RenderState {
@@ -105,6 +113,11 @@ typedef struct RenderState {
     bool      phase_just_changed;
     float     phase_timer;
 
+    /* Pass subphase display */
+    PassSubphase pass_subphase;
+    float        pass_subphase_remaining;  /* countdown for UI */
+    const char  *pass_status_text;         /* waiting/instruction text, or NULL */
+
     /* Display caches */
     int           displayed_round_points[NUM_PLAYERS];
     int           displayed_total_scores[NUM_PLAYERS];
@@ -129,12 +142,68 @@ typedef struct RenderState {
     bool     contract_result_success[NUM_PLAYERS];
     bool     show_contract_results;
 
+    /* Grudge token display */
+    bool player_has_grudge[NUM_PLAYERS];
+    int  player_grudge_attacker[NUM_PLAYERS];
+
+    /* Chat log (ring buffer) */
+#define CHAT_LOG_MAX 32
+#define CHAT_MSG_LEN 64
+    char chat_msgs[CHAT_LOG_MAX][CHAT_MSG_LEN];
+    int  chat_head;   /* index of oldest message */
+    int  chat_count;  /* number of messages stored (0..CHAT_LOG_MAX) */
+
+    /* Info panel: contract (player 0) */
+    char info_contract_name[32];
+    char info_contract_desc[128];
+    bool info_contract_active;
+
+    /* Info panel: host action */
+    char info_host_name[32];
+    char info_host_desc[128];
+    bool info_host_active;
+
+    /* Info panel: obtained bonuses (persistent effects, player 0) */
+#define INFO_BONUS_MAX 8
+    char info_bonus_text[INFO_BONUS_MAX][48];
+    int  info_bonus_count;
+
+    /* Info panel: grudge/revenge (replaces popup) */
+    bool     info_grudge_available;
+    char     info_grudge_attacker_name[16];
+    UIButton info_revenge_btns[4];
+    int      info_revenge_ids[4];
+    int      info_revenge_count;
+    UIButton info_revenge_skip_btn;
+    bool     info_grudge_interactive;
+
+    /* Grudge discard UI */
+    bool     grudge_discard_ui;
+    int      grudge_pending_attacker;  /* new attacker for discard choice */
+    UIButton btn_keep_old_grudge;
+    UIButton btn_keep_new_grudge;
+
+    /* Settings UI */
+    UIButton settings_rows_prev[SETTINGS_ROW_COUNT];
+    UIButton settings_rows_next[SETTINGS_ROW_COUNT];
+    const char *settings_labels[SETTINGS_ROW_COUNT];
+    char        settings_value_bufs[SETTINGS_ROW_COUNT][32];
+    bool        settings_disabled[SETTINGS_ROW_COUNT];
+    UIButton    btn_settings_back;
+    UIButton    btn_settings_apply;  /* "Apply" for display settings */
+
+    /* Mutable layout config */
+    LayoutConfig layout;
+
     /* Layout dirty flag */
     bool layout_dirty;
 
     /* Flow-driven sync control */
     bool sync_needed;      /* when true, sync_hands() rebuilds visuals */
     int  anim_play_player; /* player whose last card should animate (-1 = none) */
+
+    /* Particle effects */
+    ParticleSystem particles;
 } RenderState;
 
 /* ---- Public API ---- */
@@ -172,5 +241,11 @@ int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos);
  * ids[], names[], descs[] must have at least count elements. */
 void render_set_contract_options(RenderState *rs, const int ids[], int count,
                                  const char *names[], const char *descs[]);
+
+/* Push a message into the chat log ring buffer. */
+void render_chat_log_push(RenderState *rs, const char *msg);
+
+/* Convert an ActiveEffect to a short human-readable label. */
+const char *render_effect_label(const ActiveEffect *ae, char *buf, int buflen);
 
 #endif /* RENDER_H */

@@ -1,20 +1,38 @@
 /* ============================================================
  * @deps-implements: layout.h
- * @deps-requires: layout.h, raylib.h, math.h
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-requires: layout.h (LayoutConfig, PlayerPosition), render.h (REF constants),
+ *                 raylib.h, math.h
+ * @deps-last-changed: 2026-03-17 — Added layout_left_panel_upper/lower implementations
  * ============================================================ */
 
 #include "layout.h"
+#include "render.h"
 
 #include <math.h>
 
-/* ---- Fan arc constants ---- */
+/* ---- Fan arc constants (reference values at 720p) ---- */
 
 #define FAN_ARC_BOTTOM   45.0f   /* degrees — total angular spread for human player */
 #define FAN_ARC_OTHER    30.0f   /* degrees — angular spread for opponent players */
-#define FAN_RADIUS_BOTTOM 800.0f /* virtual circle radius for human player */
-#define FAN_RADIUS_OTHER  600.0f /* virtual circle radius for opponents */
+#define FAN_RADIUS_BOTTOM_REF 800.0f /* virtual circle radius for human player at 720p */
+#define FAN_RADIUS_OTHER_REF  600.0f /* virtual circle radius for opponents at 720p */
 #define FAN_MAX_CARDS    13.0f   /* card count at which full arc is used */
+
+void layout_recalculate(LayoutConfig *cfg, int screen_width, int screen_height)
+{
+    cfg->screen_width  = (float)screen_width;
+    cfg->screen_height = (float)screen_height;
+    cfg->scale         = (float)screen_height / 720.0f;
+    cfg->card_width    = CARD_WIDTH_REF  * cfg->scale;
+    cfg->card_height   = CARD_HEIGHT_REF * cfg->scale;
+    cfg->card_overlap  = CARD_OVERLAP_REF * cfg->scale;
+    cfg->board_size    = (float)screen_height;
+    /* Shift board to the right so it clears the left panel. */
+    float center_x     = ((float)screen_width - cfg->board_size) * 0.5f;
+    float panel_margin = center_x;  /* original left margin = panel area */
+    cfg->board_x       = center_x + panel_margin * 0.5f;
+    cfg->board_y       = 0.0f;
+}
 
 void layout_hand_positions(PlayerPosition pos, int card_count,
                            const LayoutConfig *cfg,
@@ -24,9 +42,10 @@ void layout_hand_positions(PlayerPosition pos, int card_count,
     *out_count = card_count;
     if (card_count <= 0) return;
 
-    float bx  = (float)cfg->board_x;
-    float by  = (float)cfg->board_y;
-    float bsz = (float)cfg->board_size;
+    float s   = cfg->scale;
+    float bx  = cfg->board_x;
+    float by  = cfg->board_y;
+    float bsz = cfg->board_size;
 
     float arc_deg, radius, center_angle, rot_sign;
     Vector2 hand_base;
@@ -34,31 +53,31 @@ void layout_hand_positions(PlayerPosition pos, int card_count,
     switch (pos) {
     case POS_BOTTOM:
         arc_deg = FAN_ARC_BOTTOM;
-        radius = FAN_RADIUS_BOTTOM;
+        radius = FAN_RADIUS_BOTTOM_REF * s;
         center_angle = -PI / 2.0f;
         rot_sign = 1.0f;
-        hand_base = (Vector2){bx + bsz * 0.5f, by + bsz - 30.0f};
+        hand_base = (Vector2){bx + bsz * 0.5f, by + bsz - 30.0f * s};
         break;
     case POS_TOP:
         arc_deg = FAN_ARC_OTHER;
-        radius = FAN_RADIUS_OTHER;
+        radius = FAN_RADIUS_OTHER_REF * s;
         center_angle = PI / 2.0f;
         rot_sign = -1.0f;
-        hand_base = (Vector2){bx + bsz * 0.5f, by + 20.0f};
+        hand_base = (Vector2){bx + bsz * 0.5f, by + 20.0f * s};
         break;
     case POS_LEFT:
         arc_deg = FAN_ARC_OTHER;
-        radius = FAN_RADIUS_OTHER;
+        radius = FAN_RADIUS_OTHER_REF * s;
         center_angle = 0.0f;
         rot_sign = 1.0f;
-        hand_base = (Vector2){bx + 20.0f, by + bsz * 0.5f};
+        hand_base = (Vector2){bx + 20.0f * s, by + bsz * 0.5f};
         break;
     case POS_RIGHT:
         arc_deg = FAN_ARC_OTHER;
-        radius = FAN_RADIUS_OTHER;
+        radius = FAN_RADIUS_OTHER_REF * s;
         center_angle = PI;
         rot_sign = -1.0f;
-        hand_base = (Vector2){bx + bsz - 20.0f, by + bsz * 0.5f};
+        hand_base = (Vector2){bx + bsz - 20.0f * s, by + bsz * 0.5f};
         break;
     default:
         *out_count = 0;
@@ -94,64 +113,69 @@ void layout_hand_positions(PlayerPosition pos, int card_count,
 
 Vector2 layout_trick_position(PlayerPosition pos, const LayoutConfig *cfg)
 {
-    float cx = (float)cfg->board_x + (float)cfg->board_size * 0.5f;
-    float cy = (float)cfg->board_y + (float)cfg->board_size * 0.5f - 30.0f;
-    float offset = 70.0f;
+    float s = cfg->scale;
+    float cx = cfg->board_x + cfg->board_size * 0.5f;
+    float cy = cfg->board_y + cfg->board_size * 0.5f - 30.0f * s;
+    float offset = 70.0f * s;
 
     switch (pos) {
-    case POS_BOTTOM: return (Vector2){cx - 40.0f, cy + offset - 20.0f};
-    case POS_TOP:    return (Vector2){cx - 40.0f, cy - offset - 60.0f};
-    case POS_LEFT:   return (Vector2){cx - offset - 60.0f, cy - 30.0f};
-    case POS_RIGHT:  return (Vector2){cx + offset - 20.0f, cy - 30.0f};
+    case POS_BOTTOM: return (Vector2){cx - 40.0f * s, cy + offset - 20.0f * s};
+    case POS_TOP:    return (Vector2){cx - 40.0f * s, cy - offset - 60.0f * s};
+    case POS_LEFT:   return (Vector2){cx - offset - 60.0f * s, cy - 30.0f * s};
+    case POS_RIGHT:  return (Vector2){cx + offset - 20.0f * s, cy - 30.0f * s};
     default:         return (Vector2){cx, cy};
     }
 }
 
 Vector2 layout_score_position(PlayerPosition pos, const LayoutConfig *cfg)
 {
-    float bx  = (float)cfg->board_x;
-    float by  = (float)cfg->board_y;
-    float bsz = (float)cfg->board_size;
+    float s   = cfg->scale;
+    float bx  = cfg->board_x;
+    float by  = cfg->board_y;
+    float bsz = cfg->board_size;
 
     switch (pos) {
-    case POS_BOTTOM: return (Vector2){bx + bsz * 0.5f - 60.0f, by + bsz - 20.0f};
-    case POS_TOP:    return (Vector2){bx + bsz * 0.5f - 60.0f, by + 5.0f};
-    case POS_LEFT:   return (Vector2){bx + 5.0f, by + bsz * 0.5f + 100.0f};
-    case POS_RIGHT:  return (Vector2){bx + bsz - 120.0f, by + bsz * 0.5f + 100.0f};
+    case POS_BOTTOM: return (Vector2){bx + bsz * 0.5f - 60.0f * s, by + bsz - 20.0f * s};
+    case POS_TOP:    return (Vector2){bx + bsz * 0.5f - 60.0f * s, by + 5.0f * s};
+    case POS_LEFT:   return (Vector2){bx + 5.0f * s, by + bsz * 0.5f + 100.0f * s};
+    case POS_RIGHT:  return (Vector2){bx + bsz - 120.0f * s, by + bsz * 0.5f + 100.0f * s};
     default:         return (Vector2){0, 0};
     }
 }
 
 Vector2 layout_name_position(PlayerPosition pos, const LayoutConfig *cfg)
 {
-    float bx  = (float)cfg->board_x;
-    float by  = (float)cfg->board_y;
-    float bsz = (float)cfg->board_size;
+    float s   = cfg->scale;
+    float bx  = cfg->board_x;
+    float by  = cfg->board_y;
+    float bsz = cfg->board_size;
 
     switch (pos) {
-    case POS_BOTTOM: return (Vector2){bx + bsz * 0.5f - 30.0f, by + bsz - 35.0f};
-    case POS_TOP:    return (Vector2){bx + bsz * 0.5f - 30.0f, by + 5.0f};
-    case POS_LEFT:   return (Vector2){bx + 5.0f, by + bsz * 0.5f + 80.0f};
-    case POS_RIGHT:  return (Vector2){bx + bsz - 100.0f, by + bsz * 0.5f + 80.0f};
+    case POS_BOTTOM: return (Vector2){bx + bsz * 0.5f - 30.0f * s, by + bsz - 35.0f * s};
+    case POS_TOP:    return (Vector2){bx + bsz * 0.5f - 30.0f * s, by + 5.0f * s};
+    case POS_LEFT:   return (Vector2){bx + 5.0f * s, by + bsz * 0.5f + 80.0f * s};
+    case POS_RIGHT:  return (Vector2){bx + bsz - 100.0f * s, by + bsz * 0.5f + 80.0f * s};
     default:         return (Vector2){0, 0};
     }
 }
 
 Vector2 layout_pass_direction_position(const LayoutConfig *cfg)
 {
+    float s = cfg->scale;
     return (Vector2){
-        (float)cfg->board_x + (float)cfg->board_size * 0.5f - 80.0f,
-        (float)cfg->board_y + (float)cfg->board_size * 0.5f - 130.0f
+        cfg->board_x + cfg->board_size * 0.5f - 80.0f * s,
+        cfg->board_y + cfg->board_size * 0.5f - 130.0f * s
     };
 }
 
 Rectangle layout_confirm_button(const LayoutConfig *cfg)
 {
-    float bw = 160.0f;
-    float bh = 50.0f;
+    float s  = cfg->scale;
+    float bw = 160.0f * s;
+    float bh = 50.0f * s;
     return (Rectangle){
-        (float)cfg->board_x + ((float)cfg->board_size - bw) * 0.5f,
-        (float)cfg->board_y + (float)cfg->board_size * 0.5f + 80.0f,
+        cfg->board_x + (cfg->board_size - bw) * 0.5f,
+        cfg->board_y + cfg->board_size * 0.5f + 80.0f * s,
         bw,
         bh
     };
@@ -160,33 +184,74 @@ Rectangle layout_confirm_button(const LayoutConfig *cfg)
 Rectangle layout_board_rect(const LayoutConfig *cfg)
 {
     return (Rectangle){
-        (float)cfg->board_x, (float)cfg->board_y,
-        (float)cfg->board_size, (float)cfg->board_size
+        cfg->board_x, cfg->board_y,
+        cfg->board_size, cfg->board_size
     };
 }
 
 Vector2 layout_board_center(const LayoutConfig *cfg)
 {
     return (Vector2){
-        (float)cfg->board_x + (float)cfg->board_size * 0.5f,
-        (float)cfg->board_y + (float)cfg->board_size * 0.5f
+        cfg->board_x + cfg->board_size * 0.5f,
+        cfg->board_y + cfg->board_size * 0.5f
+    };
+}
+
+Vector2 layout_grudge_token_position(PlayerPosition pos,
+                                     const LayoutConfig *cfg)
+{
+    float s = cfg->scale;
+    Vector2 name = layout_name_position(pos, cfg);
+    switch (pos) {
+    case POS_BOTTOM: return (Vector2){name.x + 70.0f * s, name.y + 2.0f * s};
+    case POS_TOP:    return (Vector2){name.x + 70.0f * s, name.y + 2.0f * s};
+    case POS_LEFT:   return (Vector2){name.x + 70.0f * s, name.y + 2.0f * s};
+    case POS_RIGHT:  return (Vector2){name.x - 24.0f * s, name.y + 2.0f * s};
+    default:         return (Vector2){0, 0};
+    }
+}
+
+Rectangle layout_left_panel_upper(const LayoutConfig *cfg)
+{
+    float pad = 4.0f * cfg->scale;
+    /* Panel width = original centered margin (before board shift). */
+    float panel_w = (cfg->screen_width - cfg->board_size) * 0.5f;
+    float w = panel_w - pad * 2;
+    if (w < 0) w = 0;
+    return (Rectangle){
+        pad, pad, w,
+        cfg->screen_height * 0.5f - pad * 2
+    };
+}
+
+Rectangle layout_left_panel_lower(const LayoutConfig *cfg)
+{
+    float pad = 4.0f * cfg->scale;
+    float half = cfg->screen_height * 0.5f;
+    float panel_w = (cfg->screen_width - cfg->board_size) * 0.5f;
+    float w = panel_w - pad * 2;
+    if (w < 0) w = 0;
+    return (Rectangle){
+        pad, half + pad, w,
+        half - pad * 2
     };
 }
 
 void layout_contract_options(const LayoutConfig *cfg, int count,
                              Rectangle out_rects[])
 {
-    float btn_w = 260.0f;
-    float btn_h = 40.0f;
-    float btn_gap = 6.0f;
+    float s = cfg->scale;
+    float btn_w = 260.0f * s;
+    float btn_h = 52.0f * s;
+    float btn_gap = 6.0f * s;
     float total_h = (float)count * btn_h + (float)(count - 1) * btn_gap;
 
     /* Get confirm button position to stack above it */
     Rectangle confirm = layout_confirm_button(cfg);
-    float bottom_y = confirm.y - 20.0f; /* 20px gap above confirm */
+    float bottom_y = confirm.y - 20.0f * s;
     float top_y = bottom_y - total_h;
 
-    float cx = (float)cfg->board_x + (float)cfg->board_size * 0.5f;
+    float cx = cfg->board_x + cfg->board_size * 0.5f;
 
     for (int i = 0; i < count; i++) {
         out_rects[i] = (Rectangle){

@@ -2,12 +2,12 @@
 #define PHASE2_STATE_H
 
 /* ============================================================
- * @deps-exports: struct KingProgress, struct PlayerPhase2, struct RoundPhase2,
- *                struct Phase2State
- * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT), effect.h (ActiveEffect),
- *                 contract.h (ContractInstance, CONTRACT_TIERS)
- * @deps-used-by: phase2_defs.h
- * @deps-last-changed: 2026-03-15 — Initial creation
+ * @deps-exports: struct KingProgress, struct GrudgeToken, struct PlayerPhase2,
+ *                struct RoundPhase2, struct Phase2State
+ * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT),
+ *                 effect.h (ActiveEffect), contract.h (ContractInstance, CONTRACT_TIERS)
+ * @deps-used-by: phase2_defs.h, contract_logic.c, grudge_logic.h, main.c
+ * @deps-last-changed: 2026-03-16 — Added GrudgeToken struct to PlayerPhase2
  * ============================================================ */
 
 #include <stdbool.h>
@@ -22,6 +22,14 @@ typedef struct KingProgress {
     int  current_tier;         /* 0=easy, 1=medium, 2=hard, 3=exhausted */
     bool tier_completed[CONTRACT_TIERS]; /* true=completed, false=burned or unattempted */
 } KingProgress;
+
+/* --- Grudge Token (persistent revenge trigger) --- */
+
+typedef struct GrudgeToken {
+    bool active;          /* true = player holds a token */
+    int  attacker_id;     /* who played QoS against us */
+    bool used_this_round; /* skip re-prompting after decline */
+} GrudgeToken;
 
 /* --- Per-Player Phase 2 State --- */
 
@@ -41,11 +49,8 @@ typedef struct PlayerPhase2 {
     ActiveEffect persistent_effects[MAX_ACTIVE_EFFECTS];
     int          num_persistent;
 
-    /* Revenge state */
-    bool has_revenge_available;
-    int  qos_attacker_id;   /* Player who played QoS against us, -1 = none */
-    int  chosen_revenge_id; /* Index into g_revenge_defs, -1 = none */
-    bool revenge_used;
+    /* Grudge token (replaces old revenge fields) */
+    GrudgeToken grudge_token;
 } PlayerPhase2;
 
 /* --- Per-Round Phase 2 State --- */

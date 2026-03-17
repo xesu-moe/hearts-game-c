@@ -1,14 +1,14 @@
 /* ============================================================
- * @deps-exports: InputCmdType (with INPUT_CMD_SELECT_CONTRACT),
- *                InputCmd (with contract union member),
- *                InputCmdQueue, InputAction, InputState,
- *                input_init(), input_poll(), input_cmd_push(),
- *                input_cmd_pop(), input_cmd_queue_empty(),
- *                input_cmd_queue_clear(), input_get_state(),
- *                INPUT_CMD_QUEUE_CAPACITY
- * @deps-requires: raylib.h, card.h (Card)
+ * @deps-exports: InputCmdType (SELECT_CONTRACT, SELECT_GRUDGE_REVENGE,
+ *                GRUDGE_DISCARD_CHOICE, SKIP_GRUDGE, OPEN_SETTINGS, etc),
+ *                InputCmd (contract, grudge_revenge, grudge_discard, setting),
+ *                InputCmdQueue, InputAction, InputState, input_init(),
+ *                input_poll(), input_cmd_push(), input_cmd_pop(),
+ *                input_cmd_queue_empty(), input_cmd_queue_clear(),
+ *                input_get_state(), INPUT_CMD_QUEUE_CAPACITY
+ * @deps-requires: raylib.h, card.h (Card, Vector2)
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-15 — Added contract selection command type
+ * @deps-last-changed: 2026-03-17 — Removed INPUT_CMD_ACTIVATE_GRUDGE (modal UI replaced)
  * ============================================================ */
 
 #ifndef INPUT_H
@@ -46,6 +46,17 @@ typedef enum InputCmdType {
     /* Phase 2: Contract selection */
     INPUT_CMD_SELECT_CONTRACT, /* select a contract during passing phase */
 
+    /* Phase 2: Grudge token */
+    INPUT_CMD_SELECT_GRUDGE_REVENGE, /* select which revenge to apply */
+    INPUT_CMD_GRUDGE_DISCARD_CHOICE, /* choose old vs new token when conflict */
+    INPUT_CMD_SKIP_GRUDGE,           /* decline to use grudge this turn */
+
+    /* Settings */
+    INPUT_CMD_OPEN_SETTINGS,
+    INPUT_CMD_SETTING_PREV,          /* navigate setting left */
+    INPUT_CMD_SETTING_NEXT,          /* navigate setting right */
+    INPUT_CMD_APPLY_DISPLAY,         /* apply display settings (window/res/fps) */
+
     INPUT_CMD_COUNT
 } InputCmdType;
 
@@ -70,6 +81,15 @@ typedef struct InputCmd {
 
         /* INPUT_CMD_SELECT_CONTRACT: */
         struct { int contract_id; } contract;
+
+        /* INPUT_CMD_SELECT_GRUDGE_REVENGE: */
+        struct { int revenge_id; } grudge_revenge;
+
+        /* INPUT_CMD_GRUDGE_DISCARD_CHOICE: */
+        struct { int keep_new; } grudge_discard; /* 0=keep old, 1=keep new */
+
+        /* INPUT_CMD_SETTING_PREV, INPUT_CMD_SETTING_NEXT: */
+        struct { int setting_id; } setting; /* which setting row (0-based) */
     };
 } InputCmd;
 

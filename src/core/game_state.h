@@ -2,7 +2,8 @@
 #define GAME_STATE_H
 
 /* ============================================================
- * @deps-exports: enum GamePhase, enum PassDirection, struct GameState,
+ * @deps-exports: enum GamePhase, enum PassDirection, enum PassSubphase,
+ *                struct GameState,
  *                game_state_init(), game_state_start_game(),
  *                game_state_reset_to_menu(), game_state_new_round(),
  *                game_state_current_player(), game_state_play_card(),
@@ -11,7 +12,7 @@
  *                game_state_get_winners()
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
  * @deps-used-by: render.h, main.c
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-last-changed: 2026-03-17 — Added PassSubphase enum
  * ============================================================ */
 
 #include <stdbool.h>
@@ -27,6 +28,7 @@ typedef enum GamePhase {
     PHASE_PLAYING,
     PHASE_SCORING,
     PHASE_GAME_OVER,
+    PHASE_SETTINGS,
     PHASE_COUNT
 } GamePhase;
 
@@ -37,6 +39,12 @@ typedef enum PassDirection {
     PASS_NONE   = 3, /* no passing this round */
     PASS_COUNT  = 4
 } PassDirection;
+
+typedef enum PassSubphase {
+    PASS_SUB_HOST_ACTION = 0,
+    PASS_SUB_CONTRACT    = 1,
+    PASS_SUB_CARD_PASS   = 2
+} PassSubphase;
 
 #define PASS_CARD_COUNT  3
 #define GAME_OVER_SCORE 100

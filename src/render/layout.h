@@ -2,14 +2,17 @@
 #define LAYOUT_H
 
 /* ============================================================
- * @deps-exports: PlayerPosition, LayoutConfig, layout_hand_positions(),
- *                layout_trick_position(), layout_score_position(),
- *                layout_name_position(), layout_pass_direction_position(),
- *                layout_confirm_button(), layout_board_rect(),
- *                layout_board_center(), layout_contract_options()
- * @deps-requires: raylib.h
- * @deps-used-by: render.h, render.c
- * @deps-last-changed: 2026-03-15 — Added contract option button layout
+ * @deps-exports: PlayerPosition enum, LayoutConfig struct,
+ *                layout_hand_positions(), layout_trick_position(),
+ *                layout_score_position(), layout_name_position(),
+ *                layout_pass_direction_position(), layout_confirm_button(),
+ *                layout_board_rect(), layout_board_center(),
+ *                layout_contract_options(), layout_grudge_token_position(),
+ *                layout_left_panel_upper(), layout_left_panel_lower(),
+ *                layout_recalculate()
+ * @deps-requires: raylib.h (Rectangle, Vector2)
+ * @deps-used-by: render.h, render.c, settings.c
+ * @deps-last-changed: 2026-03-17 — Added layout_left_panel_upper/lower for chat/info UI
  * ============================================================ */
 
 #include "raylib.h"
@@ -23,18 +26,19 @@ typedef enum PlayerPosition {
 } PlayerPosition;
 
 typedef struct LayoutConfig {
-    int screen_width;
-    int screen_height;
-    int card_width;
-    int card_height;
-    int card_overlap;
+    float screen_width;
+    float screen_height;
+    float scale;        /* screen_height / 720.0f — UI scale factor */
+    float card_width;   /* CARD_WIDTH_REF * scale */
+    float card_height;  /* CARD_HEIGHT_REF * scale */
+    float card_overlap; /* CARD_OVERLAP_REF * scale */
 
     /* Board area: the square region where all game content renders.
      * board_x, board_y = top-left corner in screen coords.
      * board_size = width and height of the square. */
-    int board_x;
-    int board_y;
-    int board_size;
+    float board_x;
+    float board_y;
+    float board_size;
 } LayoutConfig;
 
 /* Calculate hand card positions for a player in a fan arc layout.
@@ -73,5 +77,19 @@ Vector2 layout_board_center(const LayoutConfig *cfg);
  * count must be <= 4. */
 void layout_contract_options(const LayoutConfig *cfg, int count,
                              Rectangle out_rects[]);
+
+/* Position for grudge token icon relative to a player's name area. */
+Vector2 layout_grudge_token_position(PlayerPosition pos,
+                                     const LayoutConfig *cfg);
+
+/* Upper half of left column (chat log area). */
+Rectangle layout_left_panel_upper(const LayoutConfig *cfg);
+
+/* Lower half of left column (info panel area). */
+Rectangle layout_left_panel_lower(const LayoutConfig *cfg);
+
+/* Recalculate layout dimensions for a new screen size.
+ * Scales all dimensions proportionally from 720p reference. */
+void layout_recalculate(LayoutConfig *cfg, int screen_width, int screen_height);
 
 #endif /* LAYOUT_H */

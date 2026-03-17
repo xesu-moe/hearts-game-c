@@ -21,9 +21,6 @@ void contract_state_init(Phase2State *p2)
 
     for (int i = 0; i < NUM_PLAYERS; i++) {
         p2->players[i].contract.contract_id = -1;
-        p2->players[i].has_revenge_available = false;
-        p2->players[i].qos_attacker_id = -1;
-        p2->players[i].chosen_revenge_id = -1;
         p2->players[i].num_persistent = 0;
 
         /* Mark kings as unassigned (-1) */
