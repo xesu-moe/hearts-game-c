@@ -9,16 +9,13 @@
  *                settings_ai_think_time(), settings_window_mode_name(),
  *                settings_resolution_name(), settings_fps_name(),
  *                settings_anim_speed_name(), settings_ai_speed_name()
- * @deps-requires: layout.h (LayoutConfig)
+ * @deps-requires: (none)
  * @deps-used-by: settings.c, render.c, turn_flow.h, turn_flow.c, update.h, update.c,
  *                settings_ui.h, settings_ui.c, main.c
- * @deps-last-changed: 2026-03-19 — Extended used_by: turn_flow, update, settings_ui modules
+ * @deps-last-changed: 2026-03-20 — Removed LayoutConfig dependency; callers handle layout_recalculate()
  * ============================================================ */
 
 #include <stdbool.h>
-
-/* Forward declaration to avoid circular include */
-struct LayoutConfig;
 
 typedef enum WindowMode {
     WINDOW_MODE_WINDOWED = 0,
@@ -72,7 +69,7 @@ typedef struct GameSettings {
 void  settings_default(GameSettings *s);
 void  settings_load(GameSettings *s);
 void  settings_save(const GameSettings *s);
-void  settings_apply(const GameSettings *s, struct LayoutConfig *layout);
+void  settings_apply(const GameSettings *s);
 
 float settings_anim_multiplier(AnimSpeed speed);
 float settings_ai_think_time(AISpeed speed);

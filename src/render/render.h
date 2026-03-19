@@ -12,7 +12,7 @@
  *                 particle.h, anim.h (CardVisual, MAX_CARD_VISUALS, ANIM_CONTRACT_REVEAL_STAGGER),
  *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS),
  *                 core/game_state.h (GamePhase), phase2/effect.h
- * @deps-used-by: render.c, update.c, main.c, game modules, core/ai.c, phase2 modules
+ * @deps-used-by: render.c, update.c, main.c, game modules, phase2 modules
  * @deps-last-changed: 2026-03-19 — Extended DragState with rearranging fields for hand reordering feature
  * ============================================================ */
 
@@ -32,11 +32,7 @@ struct Phase2State;
 
 /* ---- Constants ---- */
 
-/* Reference dimensions at 720p. Runtime sizes come from LayoutConfig. */
-#define CARD_WIDTH_REF       80
-#define CARD_HEIGHT_REF      120
-#define CARD_OVERLAP_REF     30
-#define CARD_SELECT_LIFT_REF 20
+#include "card_dimens.h"
 #define MENU_ITEM_COUNT  6
 #define MAX_PILE_CARDS   52  /* 13 tricks x 4 cards */
 

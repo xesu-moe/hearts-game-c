@@ -1,7 +1,7 @@
 /* ============================================================
  * @deps-implements: turn_flow.h
  * @deps-requires: turn_flow.h, core/game_state.h, core/settings.h,
- *                 core/ai.h, core/trick.h, render/render.h (CardVisual pool),
+ *                 ai.h, core/trick.h, render/render.h (CardVisual pool),
  *                 render/layout.h (layout_pile_position), render/anim.h
  *                 (CardVisual.pile_owner, ANIM_PILE_*), game/play_phase.h,
  *                 phase2/phase2_state.h, phase2/contract_logic.h,
@@ -16,7 +16,7 @@
 
 #include <stdlib.h>
 
-#include "core/ai.h"
+#include "ai.h"
 #include "core/trick.h"
 #include "render/render.h"
 #include "render/layout.h"

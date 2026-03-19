@@ -1,11 +1,11 @@
 /* ============================================================
  * @deps-implements: card_render.h
- * @deps-requires: card_render.h, render.h, raylib.h, core/card.h, rlgl.h
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-requires: card_render.h, card_dimens.h, raylib.h, core/card.h, rlgl.h
+ * @deps-last-changed: 2026-03-20 — Replaced render.h with card_dimens.h to break unnecessary coupling
  * ============================================================ */
 
 #include "card_render.h"
-#include "render.h"
+#include "card_dimens.h"
 
 #include <stdio.h>
 

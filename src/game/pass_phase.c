@@ -1,6 +1,6 @@
 /* ============================================================
  * @deps-implements: pass_phase.h
- * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, core/ai.h,
+ * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, ai.h,
  *                 render/anim.h (anim_get_speed), render/layout.h,
  *                 render/render.h, phase2/phase2_state.h,
  *                 phase2/contract_logic.h, phase2/vendetta_logic.h,
@@ -14,7 +14,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-#include "core/ai.h"
+#include "ai.h"
 #include "core/hand.h"
 #include "render/anim.h"
 #include "render/layout.h"

@@ -1,13 +1,13 @@
 /* ============================================================
  * @deps-implements: layout.h
  * @deps-requires: layout.h (LayoutConfig, PlayerPosition, ScoringTableLayout),
- *                 render.h (CARD_WIDTH_REF, CARD_HEIGHT_REF, CARD_OVERLAP_REF),
+ *                 card_dimens.h (CARD_WIDTH_REF, CARD_HEIGHT_REF, CARD_OVERLAP_REF),
  *                 raylib.h, math.h
- * @deps-last-changed: 2026-03-19 — Implemented layout_wipe_boundary_x() for scoring animation wipe line
+ * @deps-last-changed: 2026-03-20 — Replaced render.h with card_dimens.h to break near-circular dep
  * ============================================================ */
 
 #include "layout.h"
-#include "render.h"
+#include "card_dimens.h"
 
 #include <math.h>
 

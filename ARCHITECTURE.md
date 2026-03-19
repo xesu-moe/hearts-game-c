@@ -14,7 +14,6 @@ src/
 │   ├── trick.c/h
 │   ├── player.c/h
 │   ├── game_state.c/h
-│   ├── ai.c/h
 │   ├── input.c/h
 │   ├── clock.c/h
 │   └── settings.c/h
@@ -23,9 +22,11 @@ src/
 │   ├── anim.c/h
 │   ├── easing.c/h
 │   ├── layout.c/h
+│   ├── card_dimens.h
 │   ├── card_render.c/h
 │   └── particle.c/h
 ├── game/
+│   ├── ai.c/h
 │   ├── process_input.c/h
 │   ├── update.c/h
 │   ├── turn_flow.c/h
@@ -112,14 +113,6 @@ src/
 | **Owns** | `GamePhase`, `PassDirection`, `PassSubphase`, `GameState`, `game_state_init()`, `game_state_start_game()`, `game_state_reset_to_menu()`, `game_state_new_round()`, `game_state_find_two_of_clubs()`, `game_state_select_pass()`, `game_state_all_passes_ready()`, `game_state_execute_pass()`, `game_state_current_player()`, `game_state_play_card()`, `game_state_complete_trick()`, `game_state_is_valid_play()`, `game_state_is_game_over()`, `game_state_advance_scoring()`, `game_state_get_winners()` |
 | **Does NOT contain** | Rendering, AI decisions, input handling, animation |
 
-#### `src/core/ai.c/h` (26h + 72c lines)
-
-| Field | Value |
-|-------|-------|
-| **Responsibility** | AI decision logic for passing and playing cards |
-| **Owns** | `ai_select_pass()`, `ai_play_card()` |
-| **Does NOT contain** | Rendering, input handling, game state transitions, human player logic |
-
 #### `src/core/input.c/h` (163h + 114c lines)
 
 | Field | Value |
@@ -140,7 +133,7 @@ src/
 
 | Field | Value |
 |-------|-------|
-| **Responsibility** | Persistent game settings: load/save JSON, apply window/fps/layout, name helpers |
+| **Responsibility** | Persistent game settings: load/save JSON, apply window/fps, name helpers |
 | **Owns** | `WindowMode`, `AnimSpeed`, `AISpeed`, `Resolution`, `GameSettings`, `RESOLUTIONS[]`, `FPS_OPTIONS[]`, `settings_default()`, `settings_load()`, `settings_save()`, `settings_apply()`, `settings_anim_multiplier()`, `settings_ai_think_time()`, `settings_*_name()` |
 | **Does NOT contain** | Settings UI interaction, rendering, game logic |
 
@@ -178,6 +171,14 @@ src/
 | **Owns** | `PlayerPosition`, `LayoutConfig`, `ScoringTableLayout`, `ContractsTableLayout`, `layout_hand_positions()`, `layout_trick_position()`, `layout_score_position()`, `layout_name_position()`, `layout_pass_direction_position()`, `layout_confirm_button()`, `layout_board_rect()`, `layout_board_center()`, `layout_contract_options()`, `layout_left_panel_upper()`, `layout_left_panel_lower()`, `layout_pass_staging_position()`, `layout_pile_position()`, `layout_scoring_table()`, `layout_scoring_row_y()`, `layout_scoring_card_position()`, `layout_contracts_table()`, `layout_contracts_row_y()`, `layout_recalculate()` |
 | **Does NOT contain** | Drawing, animation, game state, RenderState |
 
+#### `src/render/card_dimens.h` (header-only)
+
+| Field | Value |
+|-------|-------|
+| **Responsibility** | Shared card dimension constants at 720p reference resolution |
+| **Owns** | `CARD_WIDTH_REF`, `CARD_HEIGHT_REF`, `CARD_OVERLAP_REF`, `CARD_SELECT_LIFT_REF` |
+| **Does NOT contain** | Logic, types, anything stateful |
+
 #### `src/render/card_render.c/h` (52h + 281c lines)
 
 | Field | Value |
@@ -195,6 +196,14 @@ src/
 | **Does NOT contain** | Cards, layout, game state |
 
 ### `src/game/` — Game Flow (bridges core logic and render)
+
+#### `src/game/ai.c/h` (26h + 72c lines)
+
+| Field | Value |
+|-------|-------|
+| **Responsibility** | AI decision logic for passing and playing cards |
+| **Owns** | `ai_select_pass()`, `ai_play_card()` |
+| **Does NOT contain** | Input handling, game state transitions, human player logic |
 
 #### `src/game/process_input.c/h` (24h + 343c lines)
 
@@ -376,9 +385,10 @@ src/
 |--------|---------------------|---------|
 | `core/card.h` | `Card`, `Suit`, `Rank`, `DECK_SIZE`, `MAX_HAND_SIZE`, `NUM_PLAYERS`, `CARDS_PER_TRICK`, `CARD_NONE` | Nearly every file in the project |
 | `core/game_state.h` | `GamePhase`, `PassDirection`, `PassSubphase`, `GameState`, `PASS_CARD_COUNT`, `GAME_OVER_SCORE` | main.c, all game/ files, render.h, ai.h, phase2 logic files |
-| `render/render.h` | `RenderState`, `DragState`, `UIButton`, `CardVisual` (via anim.h), `ScoringSubphase`, `PassStagedCard` | main.c, all game/ files, ai.c |
-| `render/anim.h` | `CardVisual`, `MAX_CARD_VISUALS`, all `ANIM_*` timing constants | render.c, turn_flow.c, pass_phase.c, phase_transitions.c, main.c, audio.c |
-| `render/layout.h` | `LayoutConfig`, `PlayerPosition`, `ScoringTableLayout` | render.c, layout.c, process_input.c, pass_phase.c, turn_flow.c, phase_transitions.c, settings.c |
+| `render/render.h` | `RenderState`, `DragState`, `UIButton`, `CardVisual` (via anim.h), `ScoringSubphase`, `PassStagedCard` | main.c, all game/ files |
+| `render/anim.h` | `CardVisual`, `MAX_CARD_VISUALS`, all `ANIM_*` timing constants | render.c, turn_flow.c, pass_phase.c, phase_transitions.c, main.c |
+| `render/layout.h` | `LayoutConfig`, `PlayerPosition`, `ScoringTableLayout` | render.c, layout.c, process_input.c, pass_phase.c, turn_flow.c, phase_transitions.c |
+| `render/card_dimens.h` | `CARD_WIDTH_REF`, `CARD_HEIGHT_REF`, `CARD_OVERLAP_REF`, `CARD_SELECT_LIFT_REF` | render.h (transitive), layout.c, card_render.c |
 | `phase2/phase2_state.h` | `Phase2State`, `PlayerPhase2`, `RoundPhase2`, `KingProgress` | All phase2 logic files, all game/ files, ai.h, main.c |
 | `phase2/effect.h` | `EffectType`, `Effect`, `EffectScope`, `ActiveEffect` | contract.h, vendetta.h, phase2_state.h, render.h |
 | `phase2/transmutation.h` | `TransmutationDef`, `TransmuteInventory`, `HandTransmuteState`, `TrickTransmuteInfo` | phase2_state.h, transmutation_logic.h, play_phase.h, json_parse.h |
@@ -388,32 +398,32 @@ src/
 
 | Source File | Includes |
 |-------------|----------|
-| `main.c` | core/{ai,clock,game_state,input,settings}.h, render/{anim,card_render,render}.h, phase2/{phase2_defs,contract_logic,transmutation_logic}.h, audio/audio.h, game/{play_phase,pass_phase,turn_flow,process_input,update,settings_ui,info_sync,phase_transitions}.h |
+| `main.c` | core/{clock,game_state,input,settings}.h, render/{anim,card_render,render}.h, phase2/{phase2_defs,contract_logic,transmutation_logic}.h, audio/audio.h, game/{ai,play_phase,pass_phase,turn_flow,process_input,update,settings_ui,info_sync,phase_transitions}.h |
 | `core/card.c` | card.h |
 | `core/hand.c` | hand.h |
 | `core/deck.c` | deck.h |
 | `core/trick.c` | trick.h |
 | `core/player.c` | player.h |
 | `core/game_state.c` | game_state.h |
-| `core/ai.c` | ai.h, core/hand.h, render/render.h, phase2/transmutation_logic.h |
+| `game/ai.c` | ai.h, core/hand.h, render/render.h, phase2/transmutation_logic.h |
 | `core/input.c` | input.h |
 | `core/clock.c` | clock.h |
-| `core/settings.c` | settings.h, render/layout.h, vendor/cJSON.h |
+| `core/settings.c` | settings.h, vendor/cJSON.h |
 | `render/render.c` | render.h, card_render.h, core/hand.h, phase2/phase2_state.h, phase2/vendetta.h |
 | `render/anim.c` | anim.h |
 | `render/easing.c` | easing.h |
-| `render/layout.c` | layout.h, render.h |
-| `render/card_render.c` | card_render.h, render.h |
+| `render/layout.c` | layout.h, card_dimens.h |
+| `render/card_render.c` | card_render.h, card_dimens.h |
 | `render/particle.c` | particle.h |
 | `game/process_input.c` | process_input.h, core/input.h, render/{render,layout}.h |
 | `game/update.c` | update.h, core/input.h, render/render.h, phase2/{contract_logic,vendetta_logic,transmutation_logic,phase2_defs}.h |
-| `game/turn_flow.c` | turn_flow.h, core/{ai,trick}.h, render/{render,layout}.h, phase2/{contract_logic,vendetta_logic,transmutation_logic,phase2_defs}.h |
+| `game/turn_flow.c` | turn_flow.h, ai.h, core/trick.h, render/{render,layout}.h, phase2/{contract_logic,vendetta_logic,transmutation_logic,phase2_defs}.h |
 | `game/play_phase.c` | play_phase.h, core/{hand,trick}.h, render/render.h, phase2/{transmutation_logic,phase2_defs}.h |
-| `game/pass_phase.c` | pass_phase.h, core/{ai,hand}.h, render/{anim,layout,render}.h, phase2/{contract_logic,vendetta_logic,transmutation_logic,phase2_defs}.h |
+| `game/pass_phase.c` | pass_phase.h, ai.h, core/hand.h, render/{anim,layout,render}.h, phase2/{contract_logic,vendetta_logic,transmutation_logic,phase2_defs}.h |
 | `game/phase_transitions.c` | phase_transitions.h, core/card.h, render/{render,anim,particle}.h, phase2/{contract_logic,vendetta_logic}.h |
 | `game/info_sync.c` | info_sync.h, render/render.h, phase2/{phase2_defs,vendetta_logic,transmutation_logic}.h |
 | `game/settings_ui.c` | settings_ui.h, render/render.h |
-| `audio/audio.c` | audio/audio.h, core/settings.h, render/anim.h |
+| `audio/audio.c` | audio/audio.h, core/settings.h |
 | `phase2/contract_logic.c` | contract_logic.h, phase2_defs.h, transmutation_logic.h, core/card.h |
 | `phase2/transmutation_logic.c` | transmutation_logic.h, phase2_defs.h |
 | `phase2/vendetta_logic.c` | vendetta_logic.h, phase2_defs.h |
@@ -428,7 +438,7 @@ src/
 
 3. **Rendering never goes in logic files.** `core/` and `phase2/` files must not include Raylib headers or render types. Exception: `core/deck.c` uses `GetRandomValue()` and `core/settings.c` uses Raylib window management.
 
-4. **Pure math/utility functions have no side effects.** `easing.c` and `layout.c` (position math) are stateless. They must not access game state, render state, or call Raylib drawing functions. `layout.c` does include `render.h` for `CARD_WIDTH_REF`/`CARD_HEIGHT_REF` constants — this is a read-only constant dependency, not a behavioral one.
+4. **Pure math/utility functions have no side effects.** `easing.c` and `layout.c` (position math) are stateless. They must not access game state, render state, or call Raylib drawing functions. `layout.c` includes `card_dimens.h` for `CARD_WIDTH_REF`/`CARD_HEIGHT_REF` constants — a lightweight, leaf-level header with no further dependencies.
 
 5. **Animation files manage state machines and transitions, but do not draw.** `anim.c` updates `CardVisual` positions; `render.c` calls `card_render.c` to actually draw them.
 
@@ -459,7 +469,10 @@ src/
 |------|-------|
 | `core/deck.c` | Uses `GetRandomValue()` from Raylib — violates the "no Raylib in core/" rule. Should accept an RNG function pointer or use C stdlib `rand()` instead. |
 | `core/settings.c` | Uses Raylib for window management (`ToggleFullscreen`, `SetWindowSize`, etc.) and file I/O. The `settings_apply()` function reaches deeply into Raylib — consider whether this belongs in a `game/` or `render/` file instead. |
-| `render/layout.c` | Includes `render.h` for `CARD_WIDTH_REF`/`CARD_HEIGHT_REF` constants. These should be defined in `layout.h` or a shared constants header to make layout truly independent of render. |
-| `render/card_render.c` | Includes `render.h` for `CARD_WIDTH_REF`/`CARD_HEIGHT_REF`. Same issue as layout.c — shared constants should be in a neutral location. |
 | `game/pass_phase.c` | `finalize_card_pass()` duplicates the transmutation save/restore pattern with `pass_start_receive_anim()`. The duplication is a code smell — `finalize_card_pass` appears to be a legacy function that may be dead code after the toss animation was added. |
-| `audio/audio.c` | Includes `render/anim.h` solely for `anim_get_speed()`. This creates a render→audio dependency. Consider passing the speed multiplier as a parameter instead. |
+
+#### Resolved (2026-03-20)
+
+- `render/layout.c` and `render/card_render.c` no longer include `render.h` — now use `card_dimens.h` for shared constants.
+- `audio/audio.c` no longer includes `render/anim.h` — `audio_update()` receives `anim_speed` as a parameter.
+- `core/ai.c/h` moved to `game/ai.c/h` — AI depends on RenderState and play_phase, which belong in the game layer.

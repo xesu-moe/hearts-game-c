@@ -15,9 +15,13 @@ $(BIN): $(OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+debug:
+	$(MAKE) clean
+	$(MAKE) $(BIN) CFLAGS="$(CFLAGS) -DDEBUG -g -O0"
+
 clean:
 	rm -f $(OBJ) $(DEP) $(BIN)
 
 -include $(DEP)
 
-.PHONY: all clean
+.PHONY: all clean debug

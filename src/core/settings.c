@@ -1,9 +1,8 @@
 /* ============================================================
  * @deps-implements: settings.h
  * @deps-requires: settings.h (GameSettings, WindowMode, AnimSpeed, AISpeed),
- *                 render/layout.h (LayoutConfig, layout_recalculate),
  *                 vendor/cJSON.h, raylib.h, stdio.h, stdlib.h, string.h
- * @deps-last-changed: 2026-03-16 — Initial creation
+ * @deps-last-changed: 2026-03-20 — Removed render/layout.h dependency; callers handle layout_recalculate()
  * ============================================================ */
 
 #include "settings.h"
@@ -14,8 +13,7 @@
 
 #include "raylib.h"
 
-#include "../render/layout.h"
-#include "../vendor/cJSON.h"
+#include "vendor/cJSON.h"
 
 #define SETTINGS_FILE "settings.json"
 
@@ -184,7 +182,7 @@ void settings_save(const GameSettings *s)
     free(json_str);
 }
 
-void settings_apply(const GameSettings *s, struct LayoutConfig *layout)
+void settings_apply(const GameSettings *s)
 {
     /* Window mode */
     bool currently_fullscreen = IsWindowFullscreen();
@@ -217,9 +215,6 @@ void settings_apply(const GameSettings *s, struct LayoutConfig *layout)
     /* FPS */
     int fps = FPS_OPTIONS[s->fps_index];
     SetTargetFPS(fps); /* 0 = uncapped */
-
-    /* Recalculate layout */
-    layout_recalculate(layout, GetScreenWidth(), GetScreenHeight());
 }
 
 float settings_anim_multiplier(AnimSpeed speed)

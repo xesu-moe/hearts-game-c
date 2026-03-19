@@ -10,7 +10,7 @@
  *                audio_start_stagger()
  * @deps-requires: raylib.h (Music, Sound), core/settings.h (GameSettings)
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-19 — Added SFX_SCORE_TICK and audio_start_stagger()
+ * @deps-last-changed: 2026-03-20 — audio_update() takes anim_speed param instead of depending on render/anim.h
  * ============================================================ */
 
 #include <stdbool.h>
@@ -43,7 +43,7 @@ typedef struct SfxStagger {
     int     remaining;       /* sounds left to fire */
     float   interval;        /* base interval between sounds (seconds) */
     float   timer;           /* countdown to next sound */
-    bool    scale_by_anim;   /* multiply interval by anim_get_speed() */
+    bool    scale_by_anim;   /* multiply interval by anim_speed param */
 } SfxStagger;
 
 typedef struct AudioState {
@@ -62,13 +62,13 @@ typedef struct AudioState {
 
 void audio_init(AudioState *a, const GameSettings *s);
 void audio_shutdown(AudioState *a);
-void audio_update(AudioState *a, float dt);
+void audio_update(AudioState *a, float dt, float anim_speed);
 void audio_set_music(AudioState *a, MusicContext ctx);
 void audio_play_sfx(AudioState *a, SfxId id);
 void audio_apply_settings(AudioState *a, const GameSettings *s);
 
 /* Start a stagger sequence: play sfx `count` times at `base_interval` apart.
- * If scale_anim is true, interval is multiplied by anim_get_speed() each tick.
+ * If scale_anim is true, interval is multiplied by the anim_speed param each tick.
  * First sound fires immediately. Reuses first inactive slot, or overwrites slot 0. */
 void audio_start_stagger(AudioState *a, SfxId sfx, int count,
                          float base_interval, bool scale_anim);

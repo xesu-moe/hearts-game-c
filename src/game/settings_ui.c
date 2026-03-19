@@ -125,6 +125,7 @@ void apply_display_settings(SettingsUIState *sui, GameSettings *settings,
     settings->fps_index = sui->pending_display.fps_index;
     settings->dirty = true;
     sui->is_pending = false;
-    settings_apply(settings, &rs->layout);
+    settings_apply(settings);
+    layout_recalculate(&rs->layout, GetScreenWidth(), GetScreenHeight());
     sync_settings_values(sui, settings, rs);
 }

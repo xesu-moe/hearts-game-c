@@ -45,7 +45,8 @@ Players select designed characters to be the figures (Jack, Queen, King) in thei
 ## Build
 
 ```sh
-make
+make          # release build
+make debug    # debug build (-DDEBUG -g -O0, enables debug cheats)
 ```
 
 ## Tech
@@ -135,7 +136,6 @@ hollow-hearts/
 │   │   ├── trick.c/h      # Trick (play card, determine winner)
 │   │   ├── player.c/h     # Player struct
 │   │   ├── game_state.c/h # GameState, phase enum, round/trick state
-│   │   ├── ai.c/h         # AI decision logic
 │   │   ├── input.c/h      # Input abstraction (poll, command queue)
 │   │   ├── clock.c/h      # Game clock / time scaling
 │   │   └── settings.c/h   # Persistent game settings
@@ -144,9 +144,11 @@ hollow-hearts/
 │   │   ├── anim.c/h       # Animation engine (start, update, toss, bezier, timing constants)
 │   │   ├── easing.c/h     # Easing math (ease_apply, lerpf)
 │   │   ├── layout.c/h     # Layout math (positions, rects, scaling — no drawing)
+│   │   ├── card_dimens.h  # Shared card dimension constants (CARD_WIDTH_REF, etc.)
 │   │   ├── card_render.c/h # Card sprite drawing (face, back, procedural fallback)
 │   │   └── particle.c/h   # Particle system (init, spawn, update, draw)
 │   ├── game/              # Game flow — bridges core logic and render
+│   │   ├── ai.c/h         # AI decision logic (pass selection, card play)
 │   │   ├── process_input.c/h # Translates mouse/key events into InputCmds
 │   │   ├── update.c/h     # Per-frame game state updates
 │   │   ├── turn_flow.c/h  # Turn/trick FSM (FlowStep)

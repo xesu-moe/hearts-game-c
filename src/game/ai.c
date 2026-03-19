@@ -1,9 +1,8 @@
 /* ============================================================
  * @deps-implements: ai.h
- * @deps-requires: ai.h, core/game_state.h, core/hand.h, core/card.h,
- *                 render/render.h, phase2/transmutation_logic.h,
- *                 game/play_phase.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ * @deps-requires: ai.h, core/hand.h, render/render.h,
+ *                 phase2/transmutation_logic.h
+ * @deps-last-changed: 2026-03-20 — Moved from core/ to game/
  * ============================================================ */
 
 #include "ai.h"

@@ -4,14 +4,14 @@
 /* ============================================================
  * @deps-exports: ai_select_pass(), ai_play_card()
  * @deps-requires: core/game_state.h, phase2/phase2_state.h,
- *                 game/play_phase.h
- * @deps-used-by: game/turn_flow.c, game/pass_phase.c
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ *                 play_phase.h
+ * @deps-used-by: game/turn_flow.c, game/pass_phase.c, main.c
+ * @deps-last-changed: 2026-03-20 — Moved from core/ to game/
  * ============================================================ */
 
 #include "core/game_state.h"
 #include "phase2/phase2_state.h"
-#include "game/play_phase.h"
+#include "play_phase.h"
 
 /* Forward declarations */
 typedef struct RenderState RenderState;

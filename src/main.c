@@ -13,7 +13,7 @@
 
 #include "raylib.h"
 
-#include "core/ai.h"
+#include "game/ai.h"
 #include "core/clock.h"
 #include "core/game_state.h"
 #include "core/input.h"
@@ -64,14 +64,17 @@ int main(void)
     contract_state_init(&p2);
     p2.enabled = true;
 
+#ifdef DEBUG
     /* DEBUG: give player 0 a Black Joker for testing */
     transmute_inv_add(&p2.players[0].transmute_inv, 1);
+#endif
 
     RenderState rs;
     render_init(&rs);
 
     /* Apply loaded settings (fullscreen, fps, layout) */
-    settings_apply(&g_settings, &rs.layout);
+    settings_apply(&g_settings);
+    layout_recalculate(&rs.layout, GetScreenWidth(), GetScreenHeight());
 
     AudioState audio;
     audio_init(&audio, &g_settings);
@@ -109,6 +112,7 @@ int main(void)
         clock_update(&clk);
         process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
 
+#ifdef DEBUG
         /* DEBUG: F5 = skip to last trick */
         if (IsKeyPressed(KEY_F5) && gs.phase == PHASE_PLAYING) {
             while (gs.phase == PHASE_PLAYING && gs.tricks_played < 12) {
@@ -132,6 +136,7 @@ int main(void)
             rs.pile_card_count = 0;
             flow_init(&flow);
         }
+#endif
 
         GamePhase phase_before_update = gs.phase;
         while (clk.accumulator >= FIXED_DT) {
@@ -140,7 +145,7 @@ int main(void)
             clk.accumulator -= FIXED_DT;
         }
 
-        audio_update(&audio, clk.raw_dt);
+        audio_update(&audio, clk.raw_dt, anim_get_speed());
 
         phase_transition_update(&gs, &rs, &p2, &pps, &pls, &flow,
                                 &prev_phase, &prev_hearts_broken);

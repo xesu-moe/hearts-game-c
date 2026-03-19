@@ -6,7 +6,7 @@
  *                play_card_with_transmute(), p2_player_name()
  * @deps-requires: core/game_state.h (GameState), core/card.h (Card),
  *                 phase2/phase2_state.h (Phase2State), phase2/transmutation.h
- * @deps-used-by: core/ai.c, game/turn_flow.c, game/update.c, main.c
+ * @deps-used-by: game/ai.c, game/turn_flow.c, game/update.c, main.c
  * @deps-last-changed: 2026-03-19 — Added card_played_sfx, transmute_sfx flags
  * ============================================================ */
 

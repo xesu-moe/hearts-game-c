@@ -1,8 +1,7 @@
 /* ============================================================
  * @deps-implements: audio/audio.h
- * @deps-requires: audio/audio.h, core/settings.h, render/anim.h (anim_get_speed),
- *                 raylib.h
- * @deps-last-changed: 2026-03-19 — Added SFX_SCORE_TICK asset and audio_start_stagger()
+ * @deps-requires: audio/audio.h, core/settings.h, raylib.h
+ * @deps-last-changed: 2026-03-20 — Removed render/anim.h dep; anim_speed passed as parameter
  * ============================================================ */
 
 #include "audio/audio.h"
@@ -10,7 +9,6 @@
 #include <stddef.h>
 
 #include "core/settings.h"
-#include "render/anim.h"
 
 #define FADE_DURATION 1.0f
 
@@ -70,7 +68,7 @@ void audio_shutdown(AudioState *a)
     CloseAudioDevice();
 }
 
-static void update_staggers(AudioState *a, float dt)
+static void update_staggers(AudioState *a, float dt, float anim_speed)
 {
     for (int i = 0; i < MAX_SFX_STAGGERS; i++) {
         SfxStagger *s = &a->staggers[i];
@@ -81,14 +79,14 @@ static void update_staggers(AudioState *a, float dt)
             audio_play_sfx(a, s->sfx);
             s->remaining--;
             float eff = s->interval;
-            if (s->scale_by_anim) eff *= anim_get_speed();
+            if (s->scale_by_anim) eff *= anim_speed;
             s->timer += eff;
         }
         if (s->remaining <= 0) s->active = false;
     }
 }
 
-void audio_update(AudioState *a, float dt)
+void audio_update(AudioState *a, float dt, float anim_speed)
 {
     /* Update playing music streams */
     if (a->current != MUSIC_NONE && a->track_loaded[a->current]) {
@@ -131,7 +129,7 @@ void audio_update(AudioState *a, float dt)
     }
 
     /* Tick stagger sequences */
-    update_staggers(a, dt);
+    update_staggers(a, dt, anim_speed);
 }
 
 void audio_set_music(AudioState *a, MusicContext ctx)
