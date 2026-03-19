@@ -3,7 +3,7 @@
 
 /* ============================================================
  * @deps-exports: DragState, RenderState (drag), PassStagedCard, MAX_PASS_STAGED,
- *                MenuItem, UIButton,
+ *                MenuItem, UIButton, SETTINGS_ACTIVE_COUNT (now 8, was 5),
  *                TOSS_CLICK, TOSS_FLICK, TOSS_DROP, TOSS_CANCEL,
  *                render_init(), render_update(), render_draw(),
  *                render_hit_test_card(), render_hit_test_transmute(),
@@ -13,13 +13,13 @@
  *                render_chat_log_push(), render_chat_log_push_color(),
  *                render_effect_label(), CHAT_LOG_MAX, CHAT_MSG_LEN
  * @deps-requires: raylib.h (Rectangle, Vector2, Color), particle.h,
- *                 core/card.h (NUM_PLAYERS), core/game_state.h (GamePhase, PHASE_DEALING),
- *                 anim.h (CardVisual, MAX_CARD_VISUALS, EaseType), layout.h,
+ *                 core/card.h (NUM_PLAYERS), core/game_state.h (GamePhase),
+ *                 anim.h (CardVisual, MAX_CARD_VISUALS), layout.h,
  *                 phase2/effect.h
  * @deps-used-by: render.c, ai.c, play_phase.c, pass_phase.c, turn_flow.c,
  *                process_input.c, update.c, settings_ui.c, info_sync.c,
  *                phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — Added PassStagedCard, staging fields, render_alloc_card_visual for pass animation
+ * @deps-last-changed: 2026-03-19 — SETTINGS_ACTIVE_COUNT increased from 5 to 8
  * ============================================================ */
 
 #include <stdbool.h>
@@ -65,8 +65,8 @@ typedef struct UIButton {
     bool        disabled;  /* grayed out and non-interactive */
 } UIButton;
 
-#define SETTINGS_ROW_COUNT     8  /* 5 active + 3 audio placeholders */
-#define SETTINGS_ACTIVE_COUNT  5
+#define SETTINGS_ROW_COUNT     8  /* 3 display + 2 gameplay + 3 audio */
+#define SETTINGS_ACTIVE_COUNT  8
 
 /* ---- Pass staging ---- */
 

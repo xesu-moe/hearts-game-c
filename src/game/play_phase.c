@@ -1,9 +1,10 @@
 /* ============================================================
  * @deps-implements: play_phase.h
- * @deps-requires: play_phase.h, core/game_state.h, core/hand.h, core/trick.h,
- *                 render/render.h, phase2/phase2_state.h,
- *                 phase2/transmutation_logic.h, phase2/phase2_defs.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ * @deps-requires: play_phase.h, core/game_state.h (game_state_play_card),
+ *                 core/hand.h, core/trick.h, render/render.h,
+ *                 phase2/phase2_state.h, phase2/transmutation_logic.h,
+ *                 phase2/phase2_defs.h (phase2_get_transmutation)
+ * @deps-last-changed: 2026-03-19 — Set SFX flags in play_card_with_transmute()
  * ============================================================ */
 
 #include "play_phase.h"
@@ -28,7 +29,9 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
                               int player_id, Card card)
 {
     if (!p2->enabled) {
-        return game_state_play_card(gs, player_id, card);
+        bool ok = game_state_play_card(gs, player_id, card);
+        if (ok) pps->card_played_sfx = true;
+        return ok;
     }
 
     Hand *hand = &gs->players[player_id].hand;
@@ -72,6 +75,10 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
         ok = game_state_play_card(gs, player_id, card);
         if (!ok) return false;
     }
+
+    /* Set SFX flags */
+    pps->card_played_sfx = true;
+    if (is_transmuted) pps->transmute_sfx = true;
 
     /* Record in trick transmute info */
     if (trick_slot < CARDS_PER_TRICK) {

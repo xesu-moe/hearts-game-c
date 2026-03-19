@@ -1,7 +1,8 @@
 /* ============================================================
  * @deps-implements: settings_ui.h
- * @deps-requires: settings_ui.h, core/settings.h, render/render.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ * @deps-requires: settings_ui.h, core/settings.h (GameSettings),
+ *                 render/render.h (RenderState)
+ * @deps-last-changed: 2026-03-19 — Audio volume setting rows (5,6,7) now functional
  * ============================================================ */
 
 #include "settings_ui.h"
@@ -29,9 +30,12 @@ void sync_settings_values(SettingsUIState *sui, GameSettings *settings,
     COPY_SETTING(2, settings_fps_name(show_fps));
     COPY_SETTING(3, settings_anim_speed_name(settings->anim_speed));
     COPY_SETTING(4, settings_ai_speed_name(settings->ai_speed));
-    COPY_SETTING(5, "(No Audio)");
-    COPY_SETTING(6, "(No Audio)");
-    COPY_SETTING(7, "(No Audio)");
+    snprintf(rs->settings_value_bufs[5], sizeof(rs->settings_value_bufs[5]),
+             "%d%%", (int)(settings->master_volume * 100.0f + 0.5f));
+    snprintf(rs->settings_value_bufs[6], sizeof(rs->settings_value_bufs[6]),
+             "%d%%", (int)(settings->music_volume * 100.0f + 0.5f));
+    snprintf(rs->settings_value_bufs[7], sizeof(rs->settings_value_bufs[7]),
+             "%d%%", (int)(settings->sfx_volume * 100.0f + 0.5f));
     #undef COPY_SETTING
 }
 
@@ -83,8 +87,29 @@ void setting_adjust(SettingsUIState *sui, GameSettings *settings,
         settings->ai_speed = (AISpeed)(((int)settings->ai_speed + delta +
                                         AI_SPEED_COUNT) % AI_SPEED_COUNT);
         break;
+    case 5: { /* master_volume — immediate */
+        float v = settings->master_volume + delta * 0.1f;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        settings->master_volume = v;
+        break;
+    }
+    case 6: { /* music_volume — immediate */
+        float v = settings->music_volume + delta * 0.1f;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        settings->music_volume = v;
+        break;
+    }
+    case 7: { /* sfx_volume — immediate */
+        float v = settings->sfx_volume + delta * 0.1f;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        settings->sfx_volume = v;
+        break;
+    }
     default:
-        return; /* audio rows — skip */
+        return;
     }
 
     settings->dirty = true;

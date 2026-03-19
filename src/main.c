@@ -5,13 +5,14 @@
  *                 core/input.h (InputState, input_*),
  *                 core/settings.h (GameSettings, settings_anim_multiplier),
  *                 render/anim.h (anim_set_speed), render/render.h,
- *                 render/card_render.h, phase2/phase2_defs.h,
+ *                 render/card_render.h, audio/audio.h (AudioState, audio_*,
+ *                 SfxId, MusicContext), phase2/phase2_defs.h,
  *                 phase2/phase2_state.h, phase2/contract_logic.h,
  *                 phase2/transmutation_logic.h, game/play_phase.h,
  *                 game/pass_phase.h, game/turn_flow.h, game/process_input.h,
  *                 game/update.h, game/settings_ui.h, game/info_sync.h,
  *                 game/phase_transitions.h, raylib.h
- * @deps-last-changed: 2026-03-19 — Now calls anim_set_speed() before game_update
+ * @deps-last-changed: 2026-03-19 — Integrated audio subsystem (init, update, SFX)
  * ============================================================ */
 
 #include <stdbool.h>
@@ -29,6 +30,7 @@
 #include "phase2/contract_logic.h"
 #include "phase2/transmutation_logic.h"
 
+#include "audio/audio.h"
 #include "game/play_phase.h"
 #include "game/pass_phase.h"
 #include "game/turn_flow.h"
@@ -76,6 +78,9 @@ int main(void)
     /* Apply loaded settings (fullscreen, fps, layout) */
     settings_apply(&g_settings, &rs.layout);
 
+    AudioState audio;
+    audio_init(&audio, &g_settings);
+
     card_render_init();
 
     TurnFlow flow;
@@ -113,14 +118,41 @@ int main(void)
             clk.accumulator -= FIXED_DT;
         }
 
+        audio_update(&audio, clk.raw_dt);
+
+        GamePhase phase_before = gs.phase;
         phase_transition_update(&gs, &rs, &p2, &pps, &pls, &flow,
                                 &prev_phase, &prev_hearts_broken);
+
+        /* SFX: deal */
+        if (gs.phase == PHASE_DEALING && phase_before != PHASE_DEALING)
+            audio_play_sfx(&audio, SFX_CARD_DEAL);
+
+        /* Music: single background track for all phases */
+        audio_set_music(&audio, MUSIC_BACKGROUND);
+
+        /* SFX: hearts broken */
+        if (gs.hearts_broken && !prev_hearts_broken)
+            audio_play_sfx(&audio, SFX_HEARTS_BROKEN);
 
         /* Sync info panel */
         info_sync_update(&gs, &rs, &p2, &pls);
 
         /* Pass subphase timers (real time, UI deadlines) */
         pass_subphase_update(&pps, &gs, &rs, &p2, clk.raw_dt);
+
+        /* Consume SFX flags from PlayPhaseState */
+        if (pls.card_played_sfx) {
+            audio_play_sfx(&audio, SFX_CARD_PLAY);
+            pls.card_played_sfx = false;
+        }
+        if (pls.transmute_sfx) {
+            audio_play_sfx(&audio, SFX_TRANSMUTE);
+            pls.transmute_sfx = false;
+        }
+
+        /* Apply audio settings each frame (cheap, keeps volumes in sync) */
+        audio_apply_settings(&audio, &g_settings);
 
         /* Flow runs on raw_dt (real time) */
         flow_update(&flow, &gs, &rs, &p2, &g_settings, &pls, clk.raw_dt);
@@ -142,6 +174,7 @@ int main(void)
         render_draw(&gs, &rs);
     }
 
+    audio_shutdown(&audio);
     card_render_shutdown();
     CloseWindow();
     return 0;

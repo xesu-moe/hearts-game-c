@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -Isrc -MMD -MP
 LDFLAGS = -lraylib -lm
 
-SRC = $(wildcard src/*.c) $(wildcard src/core/*.c) $(wildcard src/render/*.c) $(wildcard src/phase2/*.c) $(wildcard src/vendor/*.c) $(wildcard src/game/*.c)
+SRC = $(wildcard src/*.c) $(wildcard src/core/*.c) $(wildcard src/render/*.c) $(wildcard src/phase2/*.c) $(wildcard src/vendor/*.c) $(wildcard src/game/*.c) $(wildcard src/audio/*.c)
 OBJ = $(SRC:.c=.o)
 DEP = $(SRC:.c=.d)
 BIN = hollow-hearts

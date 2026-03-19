@@ -1,10 +1,11 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h, particle.h, anim.h (CardVisual, anim_get_speed),
- *                 layout.h, card_render.h, phase2/vendetta.h,
- *                 phase2/phase2_defs.h, core/game_state.h, core/card.h,
- *                 core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-19 — Uses anim_get_speed() in deal_card init
+ * @deps-requires: render.h (SETTINGS_ACTIVE_COUNT), particle.h,
+ *                 anim.h (CardVisual, anim_get_speed), layout.h,
+ *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
+ *                 core/game_state.h, core/card.h, core/settings.h,
+ *                 raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-03-19 — Uses SETTINGS_ACTIVE_COUNT (now 8) to gate UI
  * ============================================================ */
 
 #include "render.h"
