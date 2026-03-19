@@ -141,7 +141,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 if (!valid) break;
                 game_state_select_pass(gs, 0, pass_cards);
                 render_clear_selection(rs);
-                finalize_card_pass(pps, gs, rs, p2);
+                pass_start_toss_anim(pps, gs, rs, p2);
             }
             break;
 

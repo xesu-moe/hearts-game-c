@@ -1,13 +1,17 @@
 /* ============================================================
  * @deps-implements: (entry point)
- * @deps-requires: core/clock.h, core/game_state.h, core/input.h,
- *                 core/settings.h, render/render.h, render/card_render.h,
- *                 phase2/phase2_defs.h, phase2/phase2_state.h,
- *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
- *                 game/play_phase.h, game/pass_phase.h, game/turn_flow.h,
- *                 game/process_input.h, game/update.h, game/settings_ui.h,
- *                 game/info_sync.h, game/phase_transitions.h, raylib.h
- * @deps-last-changed: 2026-03-19 — Restructured: extracted modules into game/, core/ai, core/clock
+ * @deps-requires: core/clock.h (clock_init, clock_update, FIXED_DT),
+ *                 core/game_state.h (GameState, game_state_*),
+ *                 core/input.h (InputState, input_*),
+ *                 core/settings.h (GameSettings, settings_anim_multiplier),
+ *                 render/anim.h (anim_set_speed), render/render.h,
+ *                 render/card_render.h, phase2/phase2_defs.h,
+ *                 phase2/phase2_state.h, phase2/contract_logic.h,
+ *                 phase2/transmutation_logic.h, game/play_phase.h,
+ *                 game/pass_phase.h, game/turn_flow.h, game/process_input.h,
+ *                 game/update.h, game/settings_ui.h, game/info_sync.h,
+ *                 game/phase_transitions.h, raylib.h
+ * @deps-last-changed: 2026-03-19 — Now calls anim_set_speed() before game_update
  * ============================================================ */
 
 #include <stdbool.h>
@@ -18,6 +22,7 @@
 #include "core/game_state.h"
 #include "core/input.h"
 #include "core/settings.h"
+#include "render/anim.h"
 #include "render/card_render.h"
 #include "render/render.h"
 #include "phase2/phase2_defs.h"
@@ -98,6 +103,7 @@ int main(void)
     bool quit_requested = false;
 
     while (!WindowShouldClose() && !quit_requested) {
+        anim_set_speed(settings_anim_multiplier(g_settings.anim_speed));
         clock_update(&clk);
         process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
 

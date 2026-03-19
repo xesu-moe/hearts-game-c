@@ -15,7 +15,7 @@
  *                pass_phase.h, pass_phase.c, turn_flow.h, turn_flow.c,
  *                process_input.h, process_input.c, update.h, update.c,
  *                info_sync.h, info_sync.c, phase_transitions.h, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — Extended used_by: all game modules and game state impl
+ * @deps-last-changed: 2026-03-19 — Added PASS_SUB_TOSS_ANIM/TOSS_WAIT/RECEIVE to PassSubphase
  * ============================================================ */
 
 #include <stdbool.h>
@@ -44,9 +44,12 @@ typedef enum PassDirection {
 } PassDirection;
 
 typedef enum PassSubphase {
-    PASS_SUB_VENDETTA  = 0,
-    PASS_SUB_CONTRACT  = 1,
-    PASS_SUB_CARD_PASS = 2
+    PASS_SUB_VENDETTA   = 0,
+    PASS_SUB_CONTRACT   = 1,
+    PASS_SUB_CARD_PASS  = 2,
+    PASS_SUB_TOSS_ANIM  = 3,  /* cards flying to staging area */
+    PASS_SUB_TOSS_WAIT  = 4,  /* cards landed, brief hold */
+    PASS_SUB_RECEIVE    = 5,  /* staged cards animate into hands */
 } PassSubphase;
 
 #define PASS_CARD_COUNT  3

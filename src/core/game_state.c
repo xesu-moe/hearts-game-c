@@ -2,7 +2,7 @@
  * @deps-implements: game_state.h
  * @deps-requires: game_state.h (PHASE_DEALING), player.h, deck.h, trick.h,
  *                 hand.h, card.h
- * @deps-last-changed: 2026-03-18 — game_state_new_round() now sets phase to PHASE_DEALING
+ * @deps-last-changed: 2026-03-19 — game_state_execute_pass no longer sets PHASE_PLAYING (caller owns transition)
  * ============================================================ */
 
 #include "game_state.h"
@@ -184,7 +184,7 @@ bool game_state_execute_pass(GameState *gs)
     gs->lead_player = game_state_find_two_of_clubs(gs);
     trick_init(&gs->current_trick, gs->lead_player);
 
-    gs->phase = PHASE_PLAYING;
+    /* Caller owns the phase transition (animation may need to run first) */
     return true;
 }
 

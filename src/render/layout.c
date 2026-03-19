@@ -256,6 +256,37 @@ Rectangle layout_left_panel_lower(const LayoutConfig *cfg)
     };
 }
 
+Vector2 layout_pass_staging_position(PlayerPosition dest_pos, int card_index,
+                                     int card_count, const LayoutConfig *cfg)
+{
+    float s = cfg->scale;
+    float bx = cfg->board_x;
+    float by = cfg->board_y;
+    float bsz = cfg->board_size;
+    float cx = bx + bsz * 0.5f;
+    float cy = by + bsz * 0.5f;
+
+    /* Fan spread: cards arranged side-by-side with small gap */
+    float fan_gap = 30.0f * s;
+    float fan_offset = ((float)card_index - (float)(card_count - 1) * 0.5f) * fan_gap;
+
+    /* Position ~60% from board center toward the destination player's hand edge */
+    float extent = bsz * 0.30f;  /* distance from center */
+
+    switch (dest_pos) {
+    case POS_BOTTOM:
+        return (Vector2){cx + fan_offset, cy + extent};
+    case POS_TOP:
+        return (Vector2){cx + fan_offset, cy - extent};
+    case POS_LEFT:
+        return (Vector2){cx - extent, cy + fan_offset};
+    case POS_RIGHT:
+        return (Vector2){cx + extent, cy + fan_offset};
+    default:
+        return (Vector2){cx, cy};
+    }
+}
+
 void layout_contract_options(const LayoutConfig *cfg, int count,
                              Rectangle out_rects[])
 {

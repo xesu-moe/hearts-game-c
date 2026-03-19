@@ -3,7 +3,7 @@
 	"resolution_index":	3,
 	"fps_index":	3,
 	"anim_speed":	"fast",
-	"ai_speed":	"fast",
+	"ai_speed":	"slow",
 	"master_volume":	1,
 	"music_volume":	1,
 	"sfx_volume":	1

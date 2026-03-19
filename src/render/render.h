@@ -2,15 +2,16 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: DragState, RenderState (drag), MenuItem, UIButton,
+ * @deps-exports: DragState, RenderState (drag), PassStagedCard, MAX_PASS_STAGED,
+ *                MenuItem, UIButton,
  *                TOSS_CLICK, TOSS_FLICK, TOSS_DROP, TOSS_CANCEL,
  *                render_init(), render_update(), render_draw(),
  *                render_hit_test_card(), render_hit_test_transmute(),
  *                render_hit_test_button(), render_toggle_card_selection(),
- *                render_clear_selection(), render_hit_test_contract(),
- *                render_set_contract_options(), render_chat_log_push(),
- *                render_chat_log_push_color(), render_effect_label(),
- *                CHAT_LOG_MAX, CHAT_MSG_LEN
+ *                render_clear_selection(), render_alloc_card_visual(),
+ *                render_hit_test_contract(), render_set_contract_options(),
+ *                render_chat_log_push(), render_chat_log_push_color(),
+ *                render_effect_label(), CHAT_LOG_MAX, CHAT_MSG_LEN
  * @deps-requires: raylib.h (Rectangle, Vector2, Color), particle.h,
  *                 core/card.h (NUM_PLAYERS), core/game_state.h (GamePhase, PHASE_DEALING),
  *                 anim.h (CardVisual, MAX_CARD_VISUALS, EaseType), layout.h,
@@ -18,7 +19,7 @@
  * @deps-used-by: render.c, ai.c, play_phase.c, pass_phase.c, turn_flow.c,
  *                process_input.c, update.c, settings_ui.c, info_sync.c,
  *                phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — Moved CardVisual and MAX_CARD_VISUALS to anim.h, added render_cancel_drag
+ * @deps-last-changed: 2026-03-19 — Added PassStagedCard, staging fields, render_alloc_card_visual for pass animation
  * ============================================================ */
 
 #include <stdbool.h>
@@ -66,6 +67,17 @@ typedef struct UIButton {
 
 #define SETTINGS_ROW_COUNT     8  /* 5 active + 3 audio placeholders */
 #define SETTINGS_ACTIVE_COUNT  5
+
+/* ---- Pass staging ---- */
+
+#define MAX_PASS_STAGED (NUM_PLAYERS * PASS_CARD_COUNT)  /* 12 */
+
+typedef struct PassStagedCard {
+    int  card_visual_idx;  /* index into cards[] */
+    int  from_player;
+    int  to_player;
+    Card card;
+} PassStagedCard;
 
 /* ---- Toss mode classification ---- */
 enum { TOSS_CLICK = 0, TOSS_FLICK = 1, TOSS_DROP = 2, TOSS_CANCEL = 3 };
@@ -207,6 +219,12 @@ typedef struct RenderState {
     UIButton    btn_settings_back;
     UIButton    btn_settings_apply;  /* "Apply" for display settings */
 
+    /* Pass animation staging */
+    PassStagedCard pass_staged[MAX_PASS_STAGED];
+    int            pass_staged_count;
+    bool           pass_anim_in_progress;  /* blocks sync_needed during toss/wait */
+    float          pass_wait_timer;
+
     /* Mutable layout config */
     LayoutConfig layout;
 
@@ -266,6 +284,9 @@ void render_set_contract_options(RenderState *rs, const int ids[], int count,
 /* Hit-test mouse position against transmutation inventory buttons.
  * Returns button index (0..transmute_btn_count-1), or -1 if no hit. */
 int render_hit_test_transmute(const RenderState *rs, Vector2 mouse_pos);
+
+/* Allocate a new card visual from the pool. Returns index, or -1 if full. */
+int render_alloc_card_visual(RenderState *rs);
 
 /* Push a message into the chat log ring buffer. */
 void render_chat_log_push(RenderState *rs, const char *msg);

@@ -1,10 +1,10 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h, particle.h, anim.h (CardVisual, animation constants),
- *                 layout.h, card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
- *                 core/game_state.h, core/card.h, core/settings.h,
- *                 raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-19 — CardVisual moved to anim.h, updated headers
+ * @deps-requires: render.h, particle.h, anim.h (CardVisual, anim_get_speed),
+ *                 layout.h, card_render.h, phase2/vendetta.h,
+ *                 phase2/phase2_defs.h, core/game_state.h, core/card.h,
+ *                 core/settings.h, raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-03-19 — Uses anim_get_speed() in deal_card init
  * ============================================================ */
 
 #include "render.h"
@@ -95,7 +95,7 @@ static float draw_text_wrapped(const char *text, float x, float y,
 
 /* ---- Card visual helpers ---- */
 
-static int alloc_card_visual(RenderState *rs)
+int render_alloc_card_visual(RenderState *rs)
 {
     if (rs->card_count >= MAX_CARD_VISUALS) return -1;
     int idx = rs->card_count++;
@@ -105,6 +105,12 @@ static int alloc_card_visual(RenderState *rs)
     rs->cards[idx].transmute_id = -1;
     rs->cards[idx].hover_t = 0.0f;
     return idx;
+}
+
+/* Internal alias for backward compat within this file */
+static int alloc_card_visual(RenderState *rs)
+{
+    return render_alloc_card_visual(rs);
 }
 
 /* ---- Sync: rebuild visuals from game state ---- */
@@ -249,7 +255,7 @@ static void sync_deal(const GameState *gs, RenderState *rs)
 
             anim_start(cv, final_pos, final_rot,
                             ANIM_DEAL_CARD_DURATION, EASE_OUT_QUAD);
-            cv->anim_delay = (float)d * ANIM_DEAL_CARD_STAGGER;
+            cv->anim_delay = (float)d * ANIM_DEAL_CARD_STAGGER * anim_get_speed();
         }
     }
 
@@ -310,7 +316,9 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
 
     rs->btn_confirm_pass.bounds = btn_rect;
     rs->btn_confirm_pass.label = "Confirm Pass";
-    if (rs->contract_ui_active) {
+    if (rs->pass_anim_in_progress) {
+        rs->btn_confirm_pass.visible = false;
+    } else if (rs->contract_ui_active) {
         rs->btn_confirm_pass.visible =
             (gs->phase == PHASE_PASSING &&
              rs->selected_count == PASS_CARD_COUNT &&
@@ -487,6 +495,10 @@ void render_init(RenderState *rs)
 
     rs->deal_complete = false;
 
+    rs->pass_staged_count = 0;
+    rs->pass_anim_in_progress = false;
+    rs->pass_wait_timer = 0.0f;
+
     particle_init(&rs->particles);
 }
 
@@ -507,8 +519,11 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
     rs->phase_timer += dt;
 
-    /* Sync visuals only when game state has mutated or phase changed */
-    if (rs->phase_just_changed || rs->sync_needed) {
+    /* Sync visuals only when game state has mutated or phase changed.
+     * Block sync during pass toss/wait/receive to preserve staged visuals.
+     * Leave sync_needed set so it fires once pass_anim_in_progress clears. */
+    if ((rs->phase_just_changed || rs->sync_needed) &&
+        !rs->pass_anim_in_progress) {
         /* Cancel any active drag — sync rebuilds visuals */
         if (rs->drag.active || rs->drag.snap_back) {
             rs->drag.active = false;
@@ -612,48 +627,9 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                 if (!anim_toss_enabled()) {
                     /* Animations disabled — card stays at target */
                 } else if (mode == TOSS_FLICK) {
-                    /* Bezier curve flight with spin and scatter */
-                    float vel_time = TOSS_VEL_EXTEND;
-                    Vector2 control = {
-                        start_pos.x + rs->drag.velocity.x * vel_time,
-                        start_pos.y + rs->drag.velocity.y * vel_time,
-                    };
-
-                    float scatter_x = (float)GetRandomValue(-15, 15);
-                    float scatter_y = (float)GetRandomValue(-15, 15);
-                    Vector2 landing = { target.x + scatter_x, target.y + scatter_y };
-
-                    cv->position = start_pos;
-                    cv->start = start_pos;
-                    cv->target = landing;
-                    cv->bezier_control = control;
-                    cv->use_bezier = true;
-
-                    /* Spin from direct velocity + extra spin for sideways throws.
-                     * Cross product of velocity and direction-to-target measures
-                     * how off-axis the throw is — more sideways = more tumble. */
-                    float dx = target.x - start_pos.x;
-                    float dy = target.y - start_pos.y;
-                    float dist = sqrtf(dx * dx + dy * dy);
-                    float cross = 0.0f;
-                    if (dist > 1.0f) {
-                        float inv_d = 1.0f / dist;
-                        cross = rs->drag.velocity.x * (dy * inv_d)
-                              - rs->drag.velocity.y * (dx * inv_d);
-                    }
-                    float spin = rs->drag.velocity.x * TOSS_SPIN_FACTOR
-                               + cross * TOSS_SIDEWAYS_FACTOR;
-                    if (spin > TOSS_MAX_SPIN) spin = TOSS_MAX_SPIN;
-                    if (spin < -TOSS_MAX_SPIN) spin = -TOSS_MAX_SPIN;
-                    cv->spin_speed = spin;
-                    cv->start_rotation = 0.0f;
-                    cv->rotation = 0.0f;
-
-                    cv->anim_elapsed = 0.0f;
-                    cv->anim_duration = ANIM_TOSS_DURATION;
-                    cv->anim_ease = EASE_OUT_QUAD;
-                    cv->anim_delay = 0.0f;
-                    cv->animating = true;
+                    anim_setup_toss(cv, start_pos, 0.0f, target,
+                                    &rs->drag.velocity,
+                                    ANIM_TOSS_DURATION, 0.0f);
                 } else {
                     /* TOSS_CLICK or TOSS_DROP: simple straight-line animation */
                     cv->position = start_pos;
@@ -675,76 +651,13 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                     };
                     start_rot = mid_cv->rotation;
                 }
-                cv->position = start_pos;
-                cv->rotation = start_rot;
 
                 if (anim_toss_enabled()) {
-                    /* Synthetic velocity: direction from hand toward target
-                     * with random lateral offset for a natural feel */
-                    float to_x = target.x - start_pos.x;
-                    float to_y = target.y - start_pos.y;
-                    float d = sqrtf(to_x * to_x + to_y * to_y);
-                    float speed = (d > 1.0f) ? d / ANIM_TOSS_DURATION : 400.0f;
-
-                    /* Random lateral deviation: two random values averaged
-                     * for a bell-curve-like distribution (center-biased) */
-                    float lat_a = (float)GetRandomValue(-150, 150);
-                    float lat_b = (float)GetRandomValue(-150, 150);
-                    float lateral = (lat_a + lat_b) * 0.5f;
-                    float vx, vy;
-                    if (d > 1.0f) {
-                        float nx = to_x / d, ny = to_y / d;
-                        vx = nx * speed + (-ny) * lateral;
-                        vy = ny * speed + nx * lateral;
-                    } else {
-                        vx = speed + lateral;
-                        vy = -speed;
-                    }
-
-                    /* Bezier control point: extend from start along synth velocity */
-                    float vel_time = TOSS_VEL_EXTEND;
-                    Vector2 control = {
-                        start_pos.x + vx * vel_time,
-                        start_pos.y + vy * vel_time,
-                    };
-
-                    /* Landing scatter */
-                    float scatter_x = (float)GetRandomValue(-12, 12);
-                    float scatter_y = (float)GetRandomValue(-12, 12);
-                    Vector2 landing = { target.x + scatter_x, target.y + scatter_y };
-
-                    cv->start = start_pos;
-                    cv->target = landing;
-                    cv->bezier_control = control;
-                    cv->use_bezier = true;
-
-                    /* Spin: sideways cross-product + big random component.
-                     * Two-sample average for bell-curve distribution. */
-                    float cross_ai = 0.0f;
-                    if (d > 1.0f) {
-                        cross_ai = vx * (to_y / d) - vy * (to_x / d);
-                    }
-                    float rnd_a = (float)GetRandomValue(-200, 200);
-                    float rnd_b = (float)GetRandomValue(-200, 200);
-                    float spin = cross_ai * TOSS_SIDEWAYS_FACTOR
-                               + (rnd_a + rnd_b) * 0.5f;
-                    if (spin > TOSS_MAX_SPIN) spin = TOSS_MAX_SPIN;
-                    if (spin < -TOSS_MAX_SPIN) spin = -TOSS_MAX_SPIN;
-                    cv->spin_speed = spin;
-
-                    /* Slight random starting angle offset (±8°) */
-                    float rot_offset = (float)GetRandomValue(-80, 80) * 0.1f;
-                    cv->start_rotation = start_rot + rot_offset;
-
-                    /* Timing variation: ±60ms for more natural feel */
-                    float dur = ANIM_TOSS_DURATION
-                              + (float)GetRandomValue(-60, 60) * 0.001f;
-                    cv->anim_elapsed = 0.0f;
-                    cv->anim_duration = dur;
-                    cv->anim_ease = EASE_OUT_QUAD;
-                    cv->anim_delay = 0.0f;
-                    cv->animating = true;
+                    anim_setup_toss(cv, start_pos, start_rot, target,
+                                    NULL, ANIM_TOSS_DURATION, 0.0f);
                 } else {
+                    cv->position = start_pos;
+                    cv->rotation = start_rot;
                     anim_start(cv, target, 0.0f, ANIM_PLAY_CARD_DURATION,
                                     EASE_OUT_QUAD);
                 }
@@ -1245,6 +1158,12 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
         draw_button(&rs->btn_confirm_pass, s);
         break;
     }
+
+    case PASS_SUB_TOSS_ANIM:
+    case PASS_SUB_TOSS_WAIT:
+    case PASS_SUB_RECEIVE:
+        /* No UI overlay during pass animation — just show cards */
+        break;
     }
 
     /* Draw all hands (all subphases) */

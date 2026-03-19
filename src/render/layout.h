@@ -7,12 +7,12 @@
  *                layout_score_position(), layout_name_position(),
  *                layout_pass_direction_position(), layout_confirm_button(),
  *                layout_board_rect(), layout_board_center(),
- *                layout_contract_options(),
+ *                layout_pass_staging_position(), layout_contract_options(),
  *                layout_left_panel_upper(), layout_left_panel_lower(),
  *                layout_recalculate()
  * @deps-requires: raylib.h (Rectangle, Vector2)
- * @deps-used-by: layout.c, render.h, render.c, settings.c, process_input.c
- * @deps-last-changed: 2026-03-19 — Extended used_by: process_input module
+ * @deps-used-by: layout.c, render.h, render.c, settings.c, process_input.c, pass_phase.c
+ * @deps-last-changed: 2026-03-19 — Added layout_pass_staging_position
  * ============================================================ */
 
 #include "raylib.h"
@@ -83,6 +83,12 @@ Rectangle layout_left_panel_upper(const LayoutConfig *cfg);
 
 /* Lower half of left column (info panel area). */
 Rectangle layout_left_panel_lower(const LayoutConfig *cfg);
+
+/* Staging position for a passed card: between trick area and destination
+ * player's hand (~60% toward hand from board center). Cards fan slightly
+ * apart using card_index. */
+Vector2 layout_pass_staging_position(PlayerPosition dest_pos, int card_index,
+                                     int card_count, const LayoutConfig *cfg);
 
 /* Recalculate layout dimensions for a new screen size.
  * Scales all dimensions proportionally from 720p reference. */
