@@ -2,10 +2,13 @@
 #define HAND_H
 
 /* ============================================================
- * @deps-exports: struct Hand, hand_init(), hand_add_card(), hand_remove_at(), hand_remove_card(), hand_contains(), hand_has_suit(), hand_sort(), hand_count_points()
+ * @deps-exports: struct Hand, hand_init(), hand_add_card(), hand_remove_at(),
+ *                hand_remove_card(), hand_contains(), hand_has_suit(), hand_sort(),
+ *                hand_sort_permutation(), hand_count_points()
  * @deps-requires: card.h (Card, Suit, MAX_HAND_SIZE)
- * @deps-used-by: deck.h, player.h, trick.h
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-used-by: hand.c, deck.h, player.h, trick.h, transmutation_logic.c,
+ *                play_phase.c, pass_phase.c, ai.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: play_phase, pass_phase, ai modules
  * ============================================================ */
 
 #include "card.h"
@@ -37,6 +40,11 @@ bool hand_has_suit(const Hand *hand, Suit suit);
 
 /* Sort the hand by suit then rank. */
 void hand_sort(Hand *hand);
+
+/* Sort the hand and output the permutation used.
+ * perm[i] = old index that is now at position i.
+ * perm must be at least hand->count ints. */
+void hand_sort_permutation(Hand *hand, int *perm);
 
 /* Count total point value of cards in the hand. */
 int hand_count_points(const Hand *hand);

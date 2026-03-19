@@ -2,12 +2,15 @@
 #define PHASE2_STATE_H
 
 /* ============================================================
- * @deps-exports: struct KingProgress, struct GrudgeToken, struct PlayerPhase2,
+ * @deps-exports: struct KingProgress, struct PlayerPhase2,
  *                struct RoundPhase2, struct Phase2State
  * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT),
- *                 effect.h (ActiveEffect), contract.h (ContractInstance, CONTRACT_TIERS)
- * @deps-used-by: phase2_defs.h, contract_logic.c, grudge_logic.h, main.c
- * @deps-last-changed: 2026-03-16 — Added GrudgeToken struct to PlayerPhase2
+ *                 effect.h (ActiveEffect), contract.h (ContractInstance, CONTRACT_TIERS),
+ *                 transmutation.h (TransmuteInventory, HandTransmuteState)
+ * @deps-used-by: phase2_defs.h, contract_logic.c, vendetta_logic.h, ai.h,
+ *                play_phase.h, pass_phase.h, turn_flow.h, update.h,
+ *                info_sync.h, phase_transitions.h, main.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: new game modules
  * ============================================================ */
 
 #include <stdbool.h>
@@ -15,6 +18,7 @@
 #include "core/card.h"
 #include "contract.h"
 #include "effect.h"
+#include "transmutation.h"
 
 /* --- King Progress (per-King contract progression) --- */
 
@@ -22,14 +26,6 @@ typedef struct KingProgress {
     int  current_tier;         /* 0=easy, 1=medium, 2=hard, 3=exhausted */
     bool tier_completed[CONTRACT_TIERS]; /* true=completed, false=burned or unattempted */
 } KingProgress;
-
-/* --- Grudge Token (persistent revenge trigger) --- */
-
-typedef struct GrudgeToken {
-    bool active;          /* true = player holds a token */
-    int  attacker_id;     /* who played QoS against us */
-    bool used_this_round; /* skip re-prompting after decline */
-} GrudgeToken;
 
 /* --- Per-Player Phase 2 State --- */
 
@@ -49,22 +45,28 @@ typedef struct PlayerPhase2 {
     ActiveEffect persistent_effects[MAX_ACTIVE_EFFECTS];
     int          num_persistent;
 
-    /* Grudge token (replaces old revenge fields) */
-    GrudgeToken grudge_token;
+    /* Transmutation system */
+    TransmuteInventory  transmute_inv;      /* Persistent across rounds */
+    HandTransmuteState  hand_transmutes;    /* Reset each round */
 } PlayerPhase2;
 
 /* --- Per-Round Phase 2 State --- */
 
 typedef struct RoundPhase2 {
-    int  host_player_id;      /* -1 = none (round 1 or vanilla) */
-    int  chosen_host_action;  /* Index into g_host_action_defs, -1 = none */
+    /* Vendetta system (merged host action + revenge) */
+    int  vendetta_player_id;   /* -1 = none (round 1 or no vendetta) */
+    int  chosen_vendetta;      /* Index into g_vendetta_defs, -1 = none */
+    bool vendetta_used;        /* true after vendetta action is spent */
+    bool vendetta_chosen;      /* true after player has selected */
 
-    /* Round-scoped effects from Host action + Revenges */
+    /* Snapshot of previous round's scores (saved before new_round zeroes them) */
+    int  prev_round_points[NUM_PLAYERS];
+
+    /* Round-scoped effects from Vendetta + Contracts */
     ActiveEffect round_effects[MAX_ACTIVE_EFFECTS];
     int          num_round_effects;
 
     bool contracts_chosen;
-    bool host_action_chosen;
 } RoundPhase2;
 
 /* --- Top-Level Phase 2 State --- */

@@ -27,14 +27,10 @@
         "count": 4,
         "at_least": true
       },
-      "rewards": [
-        {
-          "type": "EFFECT_FLAT_SCORE_ADJUST",
-          "param": { "points_delta": -2 }
-        }
-      ],
+      "rewards": [],
       "reward_scope": "EFFECT_SCOPE_SELF",
-      "tier": 0
+      "tier": 0,
+      "transmute_rewards": [1]
     },
     {
       "id": 2,

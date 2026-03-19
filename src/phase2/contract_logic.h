@@ -8,8 +8,9 @@
  *                contract_evaluate(), contract_apply_reward(),
  *                contract_ai_select(), MAX_CONTRACT_OPTIONS
  * @deps-requires: phase2_state.h (Phase2State), core/trick.h (Trick)
- * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-15 — Initial creation
+ * @deps-used-by: contract_logic.c, pass_phase.c, turn_flow.c, update.c,
+ *                phase_transitions.c, main.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: game modules, phase transitions
  * ============================================================ */
 
 #include <stdbool.h>

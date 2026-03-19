@@ -4,7 +4,7 @@
 /* ============================================================
  * @deps-exports: enum EffectType, struct Effect, enum EffectScope, struct ActiveEffect
  * @deps-requires: core/card.h (Suit)
- * @deps-used-by: contract.h, host_action.h, revenge.h, phase2_state.h, phase2_defs.h
+ * @deps-used-by: contract.h, vendetta.h, phase2_state.h, phase2_defs.h
  * @deps-last-changed: 2026-03-15 — Initial creation
  * ============================================================ */
 

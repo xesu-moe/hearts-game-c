@@ -2,19 +2,23 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: MenuItem enum, RenderState (chat log, info panel,
- *                particle system), CardVisual, UIButton,
+ * @deps-exports: DragState, RenderState (drag), MenuItem, UIButton,
+ *                TOSS_CLICK, TOSS_FLICK, TOSS_DROP, TOSS_CANCEL,
  *                render_init(), render_update(), render_draw(),
- *                render_hit_test_card(), render_hit_test_button(),
- *                render_toggle_card_selection(), render_clear_selection(),
- *                render_hit_test_contract(), render_set_contract_options(),
- *                render_chat_log_push(), render_effect_label()
- * @deps-requires: raylib.h (Rectangle, Vector2), particle.h
- *                 (ParticleSystem), core/card.h (NUM_PLAYERS),
- *                 core/game_state.h (GamePhase, PassSubphase),
- *                 anim.h (EaseType), layout.h, phase2/effect.h
- * @deps-used-by: main.c, render.c
- * @deps-last-changed: 2026-03-17 — Added ParticleSystem field to RenderState
+ *                render_hit_test_card(), render_hit_test_transmute(),
+ *                render_hit_test_button(), render_toggle_card_selection(),
+ *                render_clear_selection(), render_hit_test_contract(),
+ *                render_set_contract_options(), render_chat_log_push(),
+ *                render_chat_log_push_color(), render_effect_label(),
+ *                CHAT_LOG_MAX, CHAT_MSG_LEN
+ * @deps-requires: raylib.h (Rectangle, Vector2, Color), particle.h,
+ *                 core/card.h (NUM_PLAYERS), core/game_state.h (GamePhase, PHASE_DEALING),
+ *                 anim.h (CardVisual, MAX_CARD_VISUALS, EaseType), layout.h,
+ *                 phase2/effect.h
+ * @deps-used-by: render.c, ai.c, play_phase.c, pass_phase.c, turn_flow.c,
+ *                process_input.c, update.c, settings_ui.c, info_sync.c,
+ *                phase_transitions.c, main.c
+ * @deps-last-changed: 2026-03-19 — Moved CardVisual and MAX_CARD_VISUALS to anim.h, added render_cancel_drag
  * ============================================================ */
 
 #include <stdbool.h>
@@ -35,32 +39,7 @@
 #define CARD_HEIGHT_REF      120
 #define CARD_OVERLAP_REF     30
 #define CARD_SELECT_LIFT_REF 20
-#define MAX_CARD_VISUALS 64
 #define MENU_ITEM_COUNT  6
-
-/* ---- Card Visual ---- */
-
-typedef struct CardVisual {
-    Card     card;
-    Vector2  position;
-    Vector2  target;
-    Vector2  start;
-    Vector2  origin;          /* rotation pivot relative to card (pixels) */
-    float    rotation;
-    float    target_rotation;
-    float    start_rotation;
-    float    scale;
-    float    opacity;
-    bool     face_up;
-    bool     selected;
-    bool     hovered;
-    bool     animating;
-    float    anim_elapsed;
-    float    anim_duration;
-    float    anim_delay;
-    EaseType anim_ease;
-    int      z_order;
-} CardVisual;
 
 /* ---- Menu Items ---- */
 
@@ -88,6 +67,29 @@ typedef struct UIButton {
 #define SETTINGS_ROW_COUNT     8  /* 5 active + 3 audio placeholders */
 #define SETTINGS_ACTIVE_COUNT  5
 
+/* ---- Toss mode classification ---- */
+enum { TOSS_CLICK = 0, TOSS_FLICK = 1, TOSS_DROP = 2, TOSS_CANCEL = 3 };
+
+/* ---- Drag State ---- */
+
+typedef struct DragState {
+    bool    active;          /* currently dragging a card */
+    int     card_visual_idx; /* index into rs->cards[] being dragged, -1 if none */
+    Vector2 grab_offset;     /* mouse pos minus card top-left at grab time */
+    Vector2 current_pos;     /* smoothed card position during drag (pivot coords) */
+    Vector2 release_pos;     /* card position at moment of release */
+    bool    has_release_pos; /* set on release, consumed by anim setup */
+    int     release_mode;    /* TOSS_CLICK/FLICK/DROP/CANCEL */
+    /* Velocity tracking */
+    Vector2 prev_pos;        /* previous frame position for velocity calc */
+    Vector2 velocity;        /* cursor velocity in px/s at release */
+    /* Snap-back state */
+    bool    snap_back;       /* card should animate back to hand */
+    Vector2 original_pos;    /* card position before drag started */
+    float   original_rot;    /* card rotation before drag started */
+    int     original_z;      /* z_order before drag started */
+} DragState;
+
 /* ---- Render State ---- */
 
 typedef struct RenderState {
@@ -99,12 +101,16 @@ typedef struct RenderState {
     int hand_visuals[NUM_PLAYERS][MAX_HAND_SIZE];
     int hand_visual_counts[NUM_PLAYERS];
 
+    /* Human hand playability (precomputed, transmute-aware) */
+    bool card_playable[MAX_HAND_SIZE];
+
     /* Trick visual indices into cards[] */
     int trick_visuals[CARDS_PER_TRICK];
     int trick_visual_count;
 
     /* Interaction state */
     int hover_card_index;  /* -1 = none */
+    DragState drag;
     int selected_indices[PASS_CARD_COUNT]; /* indices into cards[] */
     int selected_count;
 
@@ -143,46 +149,54 @@ typedef struct RenderState {
     bool     contract_result_success[NUM_PLAYERS];
     bool     show_contract_results;
 
-    /* Grudge token display */
-    bool player_has_grudge[NUM_PLAYERS];
-    int  player_grudge_attacker[NUM_PLAYERS];
 
     /* Chat log (ring buffer) */
 #define CHAT_LOG_MAX 32
-#define CHAT_MSG_LEN 64
+#define CHAT_MSG_LEN 192
     char chat_msgs[CHAT_LOG_MAX][CHAT_MSG_LEN];
     int  chat_head;   /* index of oldest message */
     int  chat_count;  /* number of messages stored (0..CHAT_LOG_MAX) */
+    Color chat_colors[CHAT_LOG_MAX]; /* per-message color, parallel to chat_msgs */
 
     /* Info panel: contract (player 0) */
     char info_contract_name[32];
     char info_contract_desc[128];
     bool info_contract_active;
 
-    /* Info panel: host action */
-    char info_host_name[32];
-    char info_host_desc[128];
-    bool info_host_active;
+    /* Info panel: vendetta action */
+    char info_vendetta_name[32];
+    char info_vendetta_desc[128];
+    bool info_vendetta_active;
 
     /* Info panel: obtained bonuses (persistent effects, player 0) */
 #define INFO_BONUS_MAX 8
     char info_bonus_text[INFO_BONUS_MAX][48];
     int  info_bonus_count;
 
-    /* Info panel: grudge/revenge (replaces popup) */
-    bool     info_grudge_available;
-    char     info_grudge_attacker_name[16];
-    UIButton info_revenge_btns[4];
-    int      info_revenge_ids[4];
-    int      info_revenge_count;
-    UIButton info_revenge_skip_btn;
-    bool     info_grudge_interactive;
+    /* Info panel: vendetta options */
+#define MAX_VENDETTA_BTNS 4
+    bool     vendetta_available;
+    UIButton vendetta_btns[MAX_VENDETTA_BTNS];
+    int      vendetta_ids[MAX_VENDETTA_BTNS];
+    int      vendetta_count;
+    UIButton vendetta_skip_btn;
+    bool     vendetta_interactive;
 
-    /* Grudge discard UI */
-    bool     grudge_discard_ui;
-    int      grudge_pending_attacker;  /* new attacker for discard choice */
-    UIButton btn_keep_old_grudge;
-    UIButton btn_keep_new_grudge;
+    /* Transmutation inventory UI */
+#define MAX_TRANSMUTE_BTNS 8  /* matches MAX_TRANSMUTE_INVENTORY */
+    UIButton transmute_btns[MAX_TRANSMUTE_BTNS];
+    int      transmute_btn_ids[MAX_TRANSMUTE_BTNS]; /* TransmutationDef IDs */
+    char     transmute_btn_labels[MAX_TRANSMUTE_BTNS][32];
+    int      transmute_btn_count;
+    int      pending_transmutation_id;  /* -1 = none; mirrors main.c state */
+
+    /* Transmutation descriptions for info panel */
+#define MAX_TRANSMUTE_INFO 8
+    char     transmute_info_text[MAX_TRANSMUTE_INFO][64]; /* "ID: desc" */
+    int      transmute_info_count;
+
+    /* Per-card transmuted flag for player 0 hand */
+    int      hand_transmute_ids[MAX_HAND_SIZE]; /* -1 = not transmuted */
 
     /* Settings UI */
     UIButton settings_rows_prev[SETTINGS_ROW_COUNT];
@@ -202,6 +216,9 @@ typedef struct RenderState {
     /* Flow-driven sync control */
     bool sync_needed;      /* when true, sync_hands() rebuilds visuals */
     int  anim_play_player; /* player whose last card should animate (-1 = none) */
+
+    /* Deal animation */
+    bool deal_complete;    /* set by render_update when all deal animations finish */
 
     /* Particle effects */
     ParticleSystem particles;
@@ -234,6 +251,9 @@ int render_toggle_card_selection(RenderState *rs, int card_visual_index);
 /* Clear all card selections. */
 void render_clear_selection(RenderState *rs);
 
+/* Cancel any active drag state. */
+void render_cancel_drag(RenderState *rs);
+
 /* Hit-test mouse position against contract option buttons.
  * Returns index (0-3) into contract_options[], or -1 if no hit. */
 int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos);
@@ -243,8 +263,15 @@ int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos);
 void render_set_contract_options(RenderState *rs, const int ids[], int count,
                                  const char *names[], const char *descs[]);
 
+/* Hit-test mouse position against transmutation inventory buttons.
+ * Returns button index (0..transmute_btn_count-1), or -1 if no hit. */
+int render_hit_test_transmute(const RenderState *rs, Vector2 mouse_pos);
+
 /* Push a message into the chat log ring buffer. */
 void render_chat_log_push(RenderState *rs, const char *msg);
+
+/* Push a colored message into the chat log ring buffer. */
+void render_chat_log_push_color(RenderState *rs, const char *msg, Color color);
 
 /* Convert an ActiveEffect to a short human-readable label. */
 const char *render_effect_label(const ActiveEffect *ae, char *buf, int buflen);

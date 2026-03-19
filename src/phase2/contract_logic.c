@@ -1,8 +1,8 @@
 /* ============================================================
  * @deps-implements: contract_logic.h
  * @deps-requires: contract_logic.h, phase2_state.h, phase2_defs.h,
- *                 core/trick.h, core/card.h
- * @deps-last-changed: 2026-03-15 — Initial creation
+ *                 transmutation_logic.h, core/trick.h, core/card.h
+ * @deps-last-changed: 2026-03-18 — Added transmutation reward and inventory init
  * ============================================================ */
 
 #include "contract_logic.h"
@@ -12,6 +12,7 @@
 #include <raylib.h>
 
 #include "phase2_defs.h"
+#include "transmutation_logic.h"
 #include "core/card.h"
 
 void contract_state_init(Phase2State *p2)
@@ -29,12 +30,17 @@ void contract_state_init(Phase2State *p2)
             p2->players[i].queen_ids[s] = -1;
             p2->players[i].jack_ids[s] = -1;
         }
+
+        /* Transmutation system */
+        transmute_inv_init(&p2->players[i].transmute_inv);
+        transmute_hand_init(&p2->players[i].hand_transmutes);
     }
 
-    p2->round.host_player_id = -1;
-    p2->round.chosen_host_action = -1;
+    p2->round.vendetta_player_id = -1;
+    p2->round.chosen_vendetta = -1;
+    p2->round.vendetta_used = false;
+    p2->round.vendetta_chosen = false;
     p2->round.contracts_chosen = false;
-    p2->round.host_action_chosen = false;
 }
 
 void contract_round_reset(Phase2State *p2)
@@ -49,6 +55,9 @@ void contract_round_reset(Phase2State *p2)
         ci->tricks_won = 0;
         ci->points_taken = 0;
         ci->has_card = false;
+
+        /* Reset hand transmute state (inventory persists) */
+        transmute_hand_init(&p2->players[i].hand_transmutes);
     }
 
     p2->round.contracts_chosen = false;
@@ -242,6 +251,13 @@ void contract_apply_reward(Phase2State *p2, int player_id)
         ae->target_player = -1;
         ae->rounds_remaining = -1; /* permanent */
         ae->active = true;
+    }
+
+    /* Grant transmutation card rewards */
+    for (int r = 0; r < cd->num_transmute_rewards; r++) {
+        if (cd->transmute_reward_ids[r] >= 0) {
+            transmute_inv_add(&pp->transmute_inv, cd->transmute_reward_ids[r]);
+        }
     }
 
     /* Advance King tier for the suit whose King provided this contract.

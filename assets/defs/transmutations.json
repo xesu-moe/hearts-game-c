@@ -1,0 +1,37 @@
+{
+  "transmutations": [
+    {
+      "id": 0,
+      "name": "Red Joker",
+      "description": "Multi-suit joker (hearts+diamonds) that always wins.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_A",
+      "special": "TRANSMUTE_ALWAYS_WIN",
+      "suit_mask": ["SUIT_HEARTS", "SUIT_DIAMONDS"],
+      "custom_points": 5,
+      "negative": false
+    },
+    {
+      "id": 1,
+      "name": "Black Joker",
+      "description": "Multi-suit joker (spades+clubs) that always loses.",
+      "result_suit": "SUIT_SPADES",
+      "result_rank": "RANK_2",
+      "special": "TRANSMUTE_ALWAYS_LOSE",
+      "suit_mask": ["SUIT_SPADES", "SUIT_CLUBS"],
+      "custom_points": 0,
+      "negative": true
+    },
+    {
+      "id": 2,
+      "name": "Shadow Queen",
+      "description": "Transforms a card into a second Queen of Spades.",
+      "result_suit": "SUIT_SPADES",
+      "result_rank": "RANK_Q",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false
+    }
+  ]
+}

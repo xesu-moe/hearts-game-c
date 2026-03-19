@@ -1,14 +1,10 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (RenderState), particle.h
- *                 (particle_init, particle_update, particle_draw),
- *                 anim.h, layout.h, card_render.h,
- *                 core/game_state.h (GamePhase, PassSubphase),
- *                 core/card.h (NUM_PLAYERS),
- *                 core/settings.h (GameSettings),
- *                 phase2/effect.h (ActiveEffect),
- *                 raylib.h, rlgl.h, math.h (ceilf)
- * @deps-last-changed: 2026-03-17 — Added particle_init, particle_update, particle_draw calls
+ * @deps-requires: render.h, particle.h, anim.h (CardVisual, animation constants),
+ *                 layout.h, card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
+ *                 core/game_state.h, core/card.h, core/settings.h,
+ *                 raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-03-19 — CardVisual moved to anim.h, updated headers
  * ============================================================ */
 
 #include "render.h"
@@ -19,13 +15,11 @@
 #include <string.h>
 
 #include "card_render.h"
+#include "phase2/vendetta.h"
 #include "rlgl.h"
 
 /* ---- Internal constants ---- */
 
-#define ANIM_PLAY_CARD_DURATION  0.25f
-#define ANIM_PASS_CARD_DURATION  0.4f
-#define ANIM_TRICK_COLLECT_DUR   0.3f
 #define TRICK_WINNER_DISPLAY_TIME 1.0f
 
 #define HUMAN_PLAYER 0
@@ -39,6 +33,66 @@ static PlayerPosition player_screen_pos(int player_id)
     return positions[player_id];
 }
 
+/* ---- Text word-wrap helper ---- */
+
+/* Measure or draw word-wrapped text.  Returns total height consumed.
+ * If draw==false, only measures (no DrawText calls). */
+static float text_wrapped(const char *text, float x, float y,
+                          int font_size, float max_w, Color color,
+                          bool draw)
+{
+    float line_h = (float)font_size + 2.0f;
+    float cur_y = y;
+    const char *p = text;
+
+    while (*p) {
+        /* Find how many chars fit on this line, preferring word boundaries */
+        int best = 0;        /* last fitting break point (chars) */
+        int best_word = 0;   /* last fitting break at a space boundary */
+        int len = (int)strlen(p);
+        for (int i = 1; i <= len; i++) {
+            char tmp[CHAT_MSG_LEN];
+            int n = (i < (int)sizeof(tmp)) ? i : (int)sizeof(tmp) - 1;
+            memcpy(tmp, p, n);
+            tmp[n] = '\0';
+            if (MeasureText(tmp, font_size) > (int)max_w) break;
+            best = i;
+            if (p[i] == ' ' || p[i] == '\0') best_word = i;
+        }
+        /* Prefer breaking at a word boundary; fall back to mid-word
+         * only if a single word is wider than the line. */
+        if (best_word > 0) best = best_word;
+        if (best == 0) best = 1; /* force at least 1 char */
+        /* Skip leading space on the next line */
+        int skip = best;
+        while (p[skip] == ' ') skip++;
+
+        if (draw) {
+            char tmp[CHAT_MSG_LEN];
+            int n = (best < (int)sizeof(tmp)) ? best : (int)sizeof(tmp) - 1;
+            memcpy(tmp, p, n);
+            tmp[n] = '\0';
+            DrawText(tmp, (int)x, (int)cur_y, font_size, color);
+        }
+        cur_y += line_h;
+        p += skip;
+    }
+    return cur_y - y;
+}
+
+/* Measure height of word-wrapped text without drawing. */
+static float measure_text_wrapped(const char *text, int font_size, float max_w)
+{
+    return text_wrapped(text, 0, 0, font_size, max_w, WHITE, false);
+}
+
+/* Draw word-wrapped text. Returns total height consumed. */
+static float draw_text_wrapped(const char *text, float x, float y,
+                               int font_size, float max_w, Color color)
+{
+    return text_wrapped(text, x, y, font_size, max_w, color, true);
+}
+
 /* ---- Card visual helpers ---- */
 
 static int alloc_card_visual(RenderState *rs)
@@ -48,51 +102,9 @@ static int alloc_card_visual(RenderState *rs)
     memset(&rs->cards[idx], 0, sizeof(CardVisual));
     rs->cards[idx].scale = 1.0f;
     rs->cards[idx].opacity = 1.0f;
+    rs->cards[idx].transmute_id = -1;
+    rs->cards[idx].hover_t = 0.0f;
     return idx;
-}
-
-static void start_animation(CardVisual *cv, Vector2 target, float target_rot,
-                            float duration, EaseType ease)
-{
-    cv->start = cv->position;
-    cv->start_rotation = cv->rotation;
-    cv->target = target;
-    cv->target_rotation = target_rot;
-    cv->anim_elapsed = 0.0f;
-    cv->anim_duration = duration;
-    cv->anim_ease = ease;
-    cv->animating = true;
-    cv->anim_delay = 0.0f;
-}
-
-static void update_animation(CardVisual *cv, float dt)
-{
-    if (!cv->animating) return;
-
-    if (cv->anim_delay > 0.0f) {
-        cv->anim_delay -= dt;
-        if (cv->anim_delay > 0.0f) return;
-        dt = -cv->anim_delay; /* overflow into elapsed */
-        cv->anim_delay = 0.0f;
-    }
-
-    cv->anim_elapsed += dt;
-    if (cv->anim_duration <= 0.0f) {
-        cv->position = cv->target;
-        cv->rotation = cv->target_rotation;
-        cv->animating = false;
-        return;
-    }
-    float t = cv->anim_elapsed / cv->anim_duration;
-    if (t >= 1.0f) {
-        t = 1.0f;
-        cv->animating = false;
-    }
-
-    float eased = ease_apply(cv->anim_ease, t);
-    cv->position.x = lerpf(cv->start.x, cv->target.x, eased);
-    cv->position.y = lerpf(cv->start.y, cv->target.y, eased);
-    cv->rotation = lerpf(cv->start_rotation, cv->target_rotation, eased);
 }
 
 /* ---- Sync: rebuild visuals from game state ---- */
@@ -157,6 +169,8 @@ static void sync_hands(const GameState *gs, RenderState *rs)
             cv->selected = false;
             cv->hovered = false;
             cv->animating = false;
+            cv->transmute_id = (p == HUMAN_PLAYER)
+                                   ? rs->hand_transmute_ids[i] : -1;
         }
     }
 
@@ -187,6 +201,59 @@ static void sync_hands(const GameState *gs, RenderState *rs)
         cv->z_order = 100 + i;
         cv->animating = false;
     }
+}
+
+static bool deal_animations_done(const RenderState *rs)
+{
+    if (rs->card_count == 0) return false;
+    for (int i = 0; i < rs->card_count; i++) {
+        if (rs->cards[i].animating) return false;
+    }
+    return true;
+}
+
+static void sync_deal(const GameState *gs, RenderState *rs)
+{
+    /* Build visuals at final hand positions first */
+    sync_hands(gs, rs);
+
+    Vector2 center = layout_board_center(&rs->layout);
+
+    /* Overwrite each card to start at board center and animate to final pos.
+     * Cards keep their per-player scale.  Position is adjusted so each card
+     * is visually centred on the board regardless of its origin pivot.
+     * Human (bigger) cards get higher z_order so they draw on top. */
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        for (int slot = 0; slot < rs->hand_visual_counts[p]; slot++) {
+            int d = slot * NUM_PLAYERS + p; /* deal order index */
+            int idx = rs->hand_visuals[p][slot];
+            CardVisual *cv = &rs->cards[idx];
+
+            Vector2 final_pos = cv->position;
+            float final_rot = cv->rotation;
+
+            /* Centre card on board: top-left = position - origin,
+             * visual centre = top-left + (w/2, h/2),
+             * so position = center + origin - (w/2, h/2). */
+            float cw = CARD_WIDTH_REF * cv->scale;
+            float ch = CARD_HEIGHT_REF * cv->scale;
+            cv->position = (Vector2){
+                center.x + cv->origin.x - cw * 0.5f,
+                center.y + cv->origin.y - ch * 0.5f,
+            };
+            cv->rotation = 0.0f;
+            cv->face_up = false;
+
+            int layer = (p == HUMAN_PLAYER) ? 100 : 0;
+            cv->z_order = layer + d;
+
+            anim_start(cv, final_pos, final_rot,
+                            ANIM_DEAL_CARD_DURATION, EASE_OUT_QUAD);
+            cv->anim_delay = (float)d * ANIM_DEAL_CARD_STAGGER;
+        }
+    }
+
+    rs->deal_complete = false;
 }
 
 static void sync_buttons(const GameState *gs, RenderState *rs)
@@ -267,39 +334,48 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         rs->btn_continue.visible = (gs->phase == PHASE_SCORING);
     }
 
-    /* ---- Info panel revenge buttons ---- */
+    /* ---- Info panel vendetta buttons ---- */
     {
         Rectangle lp = layout_left_panel_lower(cfg);
         float btn_w = lp.width - 16.0f * s;
         float btn_h = 32.0f * s;
         float gap2 = 5.0f * s;
-        int cnt = rs->info_revenge_count;
+        int cnt = rs->vendetta_count;
         /* Stack buttons from bottom of info panel upwards */
         float bot = lp.y + lp.height - 8.0f * s;
-        rs->info_revenge_skip_btn.bounds = (Rectangle){
+        rs->vendetta_skip_btn.bounds = (Rectangle){
             lp.x + 8.0f * s, bot - btn_h, btn_w, btn_h};
         bot -= btn_h + gap2;
         for (int i = cnt - 1; i >= 0; i--) {
-            rs->info_revenge_btns[i].bounds = (Rectangle){
+            rs->vendetta_btns[i].bounds = (Rectangle){
                 lp.x + 8.0f * s, bot - btn_h, btn_w, btn_h};
+            bot -= btn_h + gap2;
         }
     }
 
-    /* ---- Grudge discard buttons ---- */
-    if (rs->grudge_discard_ui) {
-        float dbw = 200.0f * s, dbh = 45.0f * s, dgap = 12.0f * s;
-        rs->btn_keep_old_grudge.bounds = (Rectangle){
-            bc.x - dbw - dgap * 0.5f, bc.y, dbw, dbh};
-        rs->btn_keep_old_grudge.label = "Keep Old";
-        rs->btn_keep_old_grudge.visible = true;
+    /* ---- Transmutation inventory buttons ---- */
+    {
+        Rectangle lp = layout_left_panel_lower(cfg);
+        float btn_w = lp.width - 16.0f * s;
+        float btn_h = 28.0f * s;
+        float btn_gap = 4.0f * s;
+        /* Position after Contract + Vendetta + Bonuses sections.
+         * Worst case: ~100px headers + 8 bonus lines * 14px = ~210px at 720p. */
+        float y_start = lp.y + 260.0f * s;
 
-        rs->btn_keep_new_grudge.bounds = (Rectangle){
-            bc.x + dgap * 0.5f, bc.y, dbw, dbh};
-        rs->btn_keep_new_grudge.label = "Keep New";
-        rs->btn_keep_new_grudge.visible = true;
-    } else {
-        rs->btn_keep_old_grudge.visible = false;
-        rs->btn_keep_new_grudge.visible = false;
+        for (int i = 0; i < rs->transmute_btn_count; i++) {
+            rs->transmute_btns[i].bounds = (Rectangle){
+                lp.x + 8.0f * s,
+                y_start + (float)i * (btn_h + btn_gap),
+                btn_w, btn_h
+            };
+            rs->transmute_btns[i].visible = true;
+            rs->transmute_btns[i].disabled = false;
+            rs->transmute_btns[i].subtitle = NULL;
+            rs->transmute_btns[i].pressed =
+                (rs->pending_transmutation_id >= 0 &&
+                 rs->transmute_btn_ids[i] == rs->pending_transmutation_id);
+        }
     }
 
     /* ---- Settings screen buttons ---- */
@@ -381,6 +457,7 @@ void render_init(RenderState *rs)
 {
     memset(rs, 0, sizeof(*rs));
     rs->hover_card_index = -1;
+    rs->drag.card_visual_idx = -1;
     rs->last_trick_winner = -1;
     rs->current_phase = PHASE_MENU;
     rs->layout_dirty = true;
@@ -398,6 +475,17 @@ void render_init(RenderState *rs)
     rs->selected_contract_idx = -1;
     rs->contract_ui_active = false;
     rs->show_contract_results = false;
+
+    rs->transmute_btn_count = 0;
+    rs->pending_transmutation_id = -1;
+    rs->transmute_info_count = 0;
+    for (int i = 0; i < MAX_HAND_SIZE; i++)
+        rs->hand_transmute_ids[i] = -1;
+
+    for (int i = 0; i < CHAT_LOG_MAX; i++)
+        rs->chat_colors[i] = LIGHTGRAY;
+
+    rs->deal_complete = false;
 
     particle_init(&rs->particles);
 }
@@ -421,6 +509,13 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
     /* Sync visuals only when game state has mutated or phase changed */
     if (rs->phase_just_changed || rs->sync_needed) {
+        /* Cancel any active drag — sync rebuilds visuals */
+        if (rs->drag.active || rs->drag.snap_back) {
+            rs->drag.active = false;
+            rs->drag.snap_back = false;
+            rs->drag.card_visual_idx = -1;
+            rs->drag.has_release_pos = false;
+        }
         /* Save selected card identities before resync */
         Card saved_selected[PASS_CARD_COUNT];
         int saved_count = 0;
@@ -434,7 +529,33 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         int anim_player = rs->anim_play_player;
         rs->anim_play_player = -1;
 
-        sync_hands(gs, rs);
+        /* Save trick card visual states before resync */
+        CardVisual saved_tricks[CARDS_PER_TRICK];
+        int        saved_trick_count = 0;
+        for (int i = 0; i < rs->trick_visual_count; i++) {
+            int idx = rs->trick_visuals[i];
+            if (idx >= 0 && idx < rs->card_count) {
+                saved_tricks[saved_trick_count++] = rs->cards[idx];
+            }
+        }
+
+        /* Save hover_t for human hand cards */
+        struct { Card card; float hover_t; } saved_hover[MAX_HAND_SIZE];
+        int saved_hover_count = 0;
+        for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+            int idx = rs->hand_visuals[HUMAN_PLAYER][i];
+            if (idx >= 0 && idx < rs->card_count) {
+                saved_hover[saved_hover_count].card = rs->cards[idx].card;
+                saved_hover[saved_hover_count].hover_t = rs->cards[idx].hover_t;
+                saved_hover_count++;
+            }
+        }
+
+        if (gs->phase == PHASE_DEALING) {
+            sync_deal(gs, rs);
+        } else {
+            sync_hands(gs, rs);
+        }
 
         /* Restore selections by matching card identity */
         rs->selected_count = 0;
@@ -451,30 +572,183 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             }
         }
 
-        /* Animate the last trick card from hand center to trick position */
+        /* Restore trick card states — order is stable across resync */
+        for (int i = 0; i < rs->trick_visual_count && i < saved_trick_count; i++) {
+            int idx = rs->trick_visuals[i];
+            if (idx >= 0 && idx < rs->card_count &&
+                card_equals(rs->cards[idx].card, saved_tricks[i].card)) {
+                CardVisual saved = saved_tricks[i];
+                saved.card = rs->cards[idx].card;
+                saved.scale = rs->cards[idx].scale;
+                rs->cards[idx] = saved;
+            }
+        }
+
+        /* Restore hover_t for human hand cards */
+        for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+            int idx = rs->hand_visuals[HUMAN_PLAYER][i];
+            for (int j = 0; j < saved_hover_count; j++) {
+                if (card_equals(rs->cards[idx].card, saved_hover[j].card)) {
+                    rs->cards[idx].hover_t = saved_hover[j].hover_t;
+                    break;
+                }
+            }
+        }
+
+        /* Animate the last trick card from hand/release position to trick slot */
         if (anim_player >= 0 && rs->trick_visual_count > 0) {
             int trick_idx = rs->trick_visuals[rs->trick_visual_count - 1];
             CardVisual *cv = &rs->cards[trick_idx];
 
-            PlayerPosition spos = player_screen_pos(anim_player);
-            Vector2 hand_center = layout_trick_position(spos, &rs->layout);
+            Vector2 start_pos;
             float start_rot = 0.0f;
-            if (rs->hand_visual_counts[anim_player] > 0) {
-                int mid = rs->hand_visual_counts[anim_player] / 2;
-                int mid_idx = rs->hand_visuals[anim_player][mid];
-                const CardVisual *mid_cv = &rs->cards[mid_idx];
-                hand_center = (Vector2){
-                    mid_cv->position.x - mid_cv->origin.x,
-                    mid_cv->position.y - mid_cv->origin.y
-                };
-                start_rot = mid_cv->rotation;
-            }
-
             Vector2 target = cv->position;
-            cv->position = hand_center;
-            cv->rotation = start_rot;
-            start_animation(cv, target, 0.0f, ANIM_PLAY_CARD_DURATION,
-                            EASE_OUT_QUAD);
+
+            if (anim_player == HUMAN_PLAYER && rs->drag.has_release_pos) {
+                start_pos = rs->drag.release_pos;
+                int mode = rs->drag.release_mode;
+                rs->drag.has_release_pos = false;
+
+                if (!anim_toss_enabled()) {
+                    /* Animations disabled — card stays at target */
+                } else if (mode == TOSS_FLICK) {
+                    /* Bezier curve flight with spin and scatter */
+                    float vel_time = TOSS_VEL_EXTEND;
+                    Vector2 control = {
+                        start_pos.x + rs->drag.velocity.x * vel_time,
+                        start_pos.y + rs->drag.velocity.y * vel_time,
+                    };
+
+                    float scatter_x = (float)GetRandomValue(-15, 15);
+                    float scatter_y = (float)GetRandomValue(-15, 15);
+                    Vector2 landing = { target.x + scatter_x, target.y + scatter_y };
+
+                    cv->position = start_pos;
+                    cv->start = start_pos;
+                    cv->target = landing;
+                    cv->bezier_control = control;
+                    cv->use_bezier = true;
+
+                    /* Spin from direct velocity + extra spin for sideways throws.
+                     * Cross product of velocity and direction-to-target measures
+                     * how off-axis the throw is — more sideways = more tumble. */
+                    float dx = target.x - start_pos.x;
+                    float dy = target.y - start_pos.y;
+                    float dist = sqrtf(dx * dx + dy * dy);
+                    float cross = 0.0f;
+                    if (dist > 1.0f) {
+                        float inv_d = 1.0f / dist;
+                        cross = rs->drag.velocity.x * (dy * inv_d)
+                              - rs->drag.velocity.y * (dx * inv_d);
+                    }
+                    float spin = rs->drag.velocity.x * TOSS_SPIN_FACTOR
+                               + cross * TOSS_SIDEWAYS_FACTOR;
+                    if (spin > TOSS_MAX_SPIN) spin = TOSS_MAX_SPIN;
+                    if (spin < -TOSS_MAX_SPIN) spin = -TOSS_MAX_SPIN;
+                    cv->spin_speed = spin;
+                    cv->start_rotation = 0.0f;
+                    cv->rotation = 0.0f;
+
+                    cv->anim_elapsed = 0.0f;
+                    cv->anim_duration = ANIM_TOSS_DURATION;
+                    cv->anim_ease = EASE_OUT_QUAD;
+                    cv->anim_delay = 0.0f;
+                    cv->animating = true;
+                } else {
+                    /* TOSS_CLICK or TOSS_DROP: simple straight-line animation */
+                    cv->position = start_pos;
+                    cv->rotation = 0.0f;
+                    anim_start(cv, target, 0.0f, ANIM_PLAY_CARD_DURATION,
+                                    EASE_OUT_QUAD);
+                }
+            } else {
+                /* AI players: bezier toss with randomized "personality" */
+                PlayerPosition spos = player_screen_pos(anim_player);
+                start_pos = layout_trick_position(spos, &rs->layout);
+                if (rs->hand_visual_counts[anim_player] > 0) {
+                    int mid = rs->hand_visual_counts[anim_player] / 2;
+                    int mid_idx = rs->hand_visuals[anim_player][mid];
+                    const CardVisual *mid_cv = &rs->cards[mid_idx];
+                    start_pos = (Vector2){
+                        mid_cv->position.x - mid_cv->origin.x,
+                        mid_cv->position.y - mid_cv->origin.y
+                    };
+                    start_rot = mid_cv->rotation;
+                }
+                cv->position = start_pos;
+                cv->rotation = start_rot;
+
+                if (anim_toss_enabled()) {
+                    /* Synthetic velocity: direction from hand toward target
+                     * with random lateral offset for a natural feel */
+                    float to_x = target.x - start_pos.x;
+                    float to_y = target.y - start_pos.y;
+                    float d = sqrtf(to_x * to_x + to_y * to_y);
+                    float speed = (d > 1.0f) ? d / ANIM_TOSS_DURATION : 400.0f;
+
+                    /* Random lateral deviation: two random values averaged
+                     * for a bell-curve-like distribution (center-biased) */
+                    float lat_a = (float)GetRandomValue(-150, 150);
+                    float lat_b = (float)GetRandomValue(-150, 150);
+                    float lateral = (lat_a + lat_b) * 0.5f;
+                    float vx, vy;
+                    if (d > 1.0f) {
+                        float nx = to_x / d, ny = to_y / d;
+                        vx = nx * speed + (-ny) * lateral;
+                        vy = ny * speed + nx * lateral;
+                    } else {
+                        vx = speed + lateral;
+                        vy = -speed;
+                    }
+
+                    /* Bezier control point: extend from start along synth velocity */
+                    float vel_time = TOSS_VEL_EXTEND;
+                    Vector2 control = {
+                        start_pos.x + vx * vel_time,
+                        start_pos.y + vy * vel_time,
+                    };
+
+                    /* Landing scatter */
+                    float scatter_x = (float)GetRandomValue(-12, 12);
+                    float scatter_y = (float)GetRandomValue(-12, 12);
+                    Vector2 landing = { target.x + scatter_x, target.y + scatter_y };
+
+                    cv->start = start_pos;
+                    cv->target = landing;
+                    cv->bezier_control = control;
+                    cv->use_bezier = true;
+
+                    /* Spin: sideways cross-product + big random component.
+                     * Two-sample average for bell-curve distribution. */
+                    float cross_ai = 0.0f;
+                    if (d > 1.0f) {
+                        cross_ai = vx * (to_y / d) - vy * (to_x / d);
+                    }
+                    float rnd_a = (float)GetRandomValue(-200, 200);
+                    float rnd_b = (float)GetRandomValue(-200, 200);
+                    float spin = cross_ai * TOSS_SIDEWAYS_FACTOR
+                               + (rnd_a + rnd_b) * 0.5f;
+                    if (spin > TOSS_MAX_SPIN) spin = TOSS_MAX_SPIN;
+                    if (spin < -TOSS_MAX_SPIN) spin = -TOSS_MAX_SPIN;
+                    cv->spin_speed = spin;
+
+                    /* Slight random starting angle offset (±8°) */
+                    float rot_offset = (float)GetRandomValue(-80, 80) * 0.1f;
+                    cv->start_rotation = start_rot + rot_offset;
+
+                    /* Timing variation: ±60ms for more natural feel */
+                    float dur = ANIM_TOSS_DURATION
+                              + (float)GetRandomValue(-60, 60) * 0.001f;
+                    cv->anim_elapsed = 0.0f;
+                    cv->anim_duration = dur;
+                    cv->anim_ease = EASE_OUT_QUAD;
+                    cv->anim_delay = 0.0f;
+                    cv->animating = true;
+                } else {
+                    anim_start(cv, target, 0.0f, ANIM_PLAY_CARD_DURATION,
+                                    EASE_OUT_QUAD);
+                }
+            }
         }
 
         rs->sync_needed = false;
@@ -494,7 +768,25 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
     /* Update animations */
     for (int i = 0; i < rs->card_count; i++) {
-        update_animation(&rs->cards[i], dt);
+        anim_update(&rs->cards[i], dt);
+    }
+
+    /* Check deal completion */
+    if (gs->phase == PHASE_DEALING && !rs->deal_complete) {
+        if (deal_animations_done(rs)) {
+            rs->deal_complete = true;
+            /* Flip human cards face-up and reset z_order */
+            for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+                int idx = rs->hand_visuals[HUMAN_PLAYER][i];
+                rs->cards[idx].face_up = true;
+            }
+            for (int p = 0; p < NUM_PLAYERS; p++) {
+                for (int i = 0; i < rs->hand_visual_counts[p]; i++) {
+                    int idx = rs->hand_visuals[p][i];
+                    rs->cards[idx].z_order = i;
+                }
+            }
+        }
     }
 
     /* Update hover state */
@@ -512,27 +804,95 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         }
     }
 
-    /* Update grudge/discard/info panel button hover state */
-    if (gs->phase == PHASE_PLAYING) {
+    /* Drag tracking: smooth card follow */
+    if (rs->drag.active && rs->drag.card_visual_idx >= 0 &&
+        rs->drag.card_visual_idx < rs->card_count) {
         Vector2 mouse = GetMousePosition();
-        rs->btn_keep_old_grudge.hovered =
-            rs->btn_keep_old_grudge.visible &&
-            CheckCollisionPointRec(mouse, rs->btn_keep_old_grudge.bounds);
-        rs->btn_keep_new_grudge.hovered =
-            rs->btn_keep_new_grudge.visible &&
-            CheckCollisionPointRec(mouse, rs->btn_keep_new_grudge.bounds);
-        /* Info panel revenge buttons */
-        if (rs->info_grudge_available && rs->info_grudge_interactive) {
-            for (int i = 0; i < rs->info_revenge_count; i++) {
-                rs->info_revenge_btns[i].hovered =
-                    rs->info_revenge_btns[i].visible &&
+        int didx = rs->drag.card_visual_idx;
+        CardVisual *dcv = &rs->cards[didx];
+
+        /* Target: mouse minus grab offset, converted to pivot coords */
+        float target_x = mouse.x - rs->drag.grab_offset.x + dcv->origin.x;
+        float target_y = mouse.y - rs->drag.grab_offset.y + dcv->origin.y;
+
+        /* Exponential smoothing for slight lag */
+        float blend = 1.0f - expf(-20.0f * dt);
+        rs->drag.current_pos.x += (target_x - rs->drag.current_pos.x) * blend;
+        rs->drag.current_pos.y += (target_y - rs->drag.current_pos.y) * blend;
+
+        dcv->position = rs->drag.current_pos;
+        dcv->rotation = 0.0f;        /* straighten card while dragging */
+        dcv->hovered = false;
+        dcv->hover_t = 0.5f;         /* subtle lifted feel (7.5% scale, half lift) */
+
+        /* Velocity tracking from raw (unsmoothed) target for accurate flick detection */
+        if (dt > 0.0f) {
+            rs->drag.velocity.x = (target_x - rs->drag.prev_pos.x) / dt;
+            rs->drag.velocity.y = (target_y - rs->drag.prev_pos.y) / dt;
+        }
+        rs->drag.prev_pos = (Vector2){ target_x, target_y };
+    }
+
+    /* Snap-back: animate card to original hand position */
+    if (rs->drag.snap_back && rs->drag.card_visual_idx >= 0 &&
+        rs->drag.card_visual_idx < rs->card_count) {
+        CardVisual *cv = &rs->cards[rs->drag.card_visual_idx];
+        cv->z_order = rs->drag.original_z;
+        if (anim_toss_enabled()) {
+            anim_start(cv, rs->drag.original_pos, rs->drag.original_rot,
+                            ANIM_SNAP_BACK_DURATION, EASE_OUT_QUAD);
+        } else {
+            cv->position = rs->drag.original_pos;
+            cv->rotation = rs->drag.original_rot;
+        }
+        rs->drag.snap_back = false;
+        rs->drag.card_visual_idx = -1;
+    }
+
+    /* Animate hover_t for human hand cards (frame-rate independent) */
+    for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+        int idx = rs->hand_visuals[HUMAN_PLAYER][i];
+        /* Skip dragged card */
+        if (rs->drag.active && idx == rs->drag.card_visual_idx) continue;
+        CardVisual *cv = &rs->cards[idx];
+        float hover_target = cv->hovered ? 1.0f : 0.0f;
+        float diff = hover_target - cv->hover_t;
+        if (fabsf(diff) > 0.001f) {
+            float blend = 1.0f - expf(-HOVER_ANIM_SPEED * dt);
+            cv->hover_t += diff * blend;
+            if (fabsf(hover_target - cv->hover_t) < 0.001f)
+                cv->hover_t = hover_target;
+        } else {
+            cv->hover_t = hover_target;
+        }
+    }
+
+    /* Update vendetta info panel button hover state */
+    if (gs->phase == PHASE_PLAYING || gs->phase == PHASE_PASSING) {
+        Vector2 mouse = GetMousePosition();
+        if (rs->vendetta_available && rs->vendetta_interactive) {
+            for (int i = 0; i < rs->vendetta_count; i++) {
+                rs->vendetta_btns[i].hovered =
+                    rs->vendetta_btns[i].visible &&
                     CheckCollisionPointRec(mouse,
-                                           rs->info_revenge_btns[i].bounds);
+                                           rs->vendetta_btns[i].bounds);
             }
-            rs->info_revenge_skip_btn.hovered =
-                rs->info_revenge_skip_btn.visible &&
+            rs->vendetta_skip_btn.hovered =
+                rs->vendetta_skip_btn.visible &&
                 CheckCollisionPointRec(mouse,
-                                       rs->info_revenge_skip_btn.bounds);
+                                       rs->vendetta_skip_btn.bounds);
+        }
+    }
+
+    /* Update transmute button hover state */
+    if (rs->transmute_btn_count > 0 &&
+        (gs->phase == PHASE_PLAYING || gs->phase == PHASE_PASSING)) {
+        Vector2 mouse = GetMousePosition();
+        for (int i = 0; i < rs->transmute_btn_count; i++) {
+            rs->transmute_btns[i].hovered =
+                rs->transmute_btns[i].visible &&
+                !rs->transmute_btns[i].disabled &&
+                CheckCollisionPointRec(mouse, rs->transmute_btns[i].bounds);
         }
     }
 
@@ -591,18 +951,60 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale)
 {
     Vector2 pos = cv->position;
 
+    /* Hover pop: scale up and lift */
+    float hover_scale = 1.0f + (HOVER_SCALE_TARGET - 1.0f) * cv->hover_t;
+    float effective_scale = cv->scale * hover_scale;
+    float hover_lift = HOVER_LIFT_REF * ui_scale * cv->hover_t;
+    pos.y -= hover_lift;
+
+    /* Scale origin proportionally */
+    Vector2 origin = {
+        cv->origin.x * hover_scale,
+        cv->origin.y * hover_scale,
+    };
+
     /* Lift selected cards (upward for bottom player) */
     if (cv->selected) {
         pos.y -= CARD_SELECT_LIFT_REF * ui_scale;
     }
 
     if (cv->face_up) {
-        card_render_face(cv->card, pos, cv->scale, cv->opacity,
+        card_render_face(cv->card, pos, effective_scale, cv->opacity,
                          cv->hovered, cv->selected,
-                         cv->rotation, cv->origin);
+                         cv->rotation, origin);
     } else {
-        card_render_back(pos, cv->scale, cv->opacity,
-                         cv->rotation, cv->origin);
+        card_render_back(pos, effective_scale, cv->opacity,
+                         cv->rotation, origin);
+    }
+
+    /* Transmuted card overlay: purple border + ID badge.
+     * Use the same rlgl matrix transforms as card_render_face so the
+     * overlay aligns with the card even when rotated. */
+    if (cv->transmute_id >= 0 && cv->face_up) {
+        float cw = CARD_WIDTH_REF * effective_scale;
+        float ch = CARD_HEIGHT_REF * effective_scale;
+
+        rlPushMatrix();
+        rlTranslatef(pos.x, pos.y, 0.0f);
+        rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
+        rlTranslatef(-origin.x, -origin.y, 0.0f);
+
+        /* (0,0) = card top-left in transformed space */
+        Rectangle card_rect = {0, 0, cw, ch};
+        DrawRectangleLinesEx(card_rect, 3.0f * ui_scale, PURPLE);
+
+        /* ID badge in top-right corner */
+        char id_buf[8];
+        snprintf(id_buf, sizeof(id_buf), "%d", cv->transmute_id);
+        int badge_fs = (int)(12.0f * ui_scale);
+        int tw = MeasureText(id_buf, badge_fs);
+        int bx = (int)(cw - (float)tw - 4.0f * ui_scale);
+        int by = (int)(3.0f * ui_scale);
+        DrawRectangle(bx - 2, by - 1, tw + 4, badge_fs + 2,
+                      (Color){80, 0, 120, 200});
+        DrawText(id_buf, bx, by, badge_fs, WHITE);
+
+        rlPopMatrix();
     }
 }
 
@@ -616,6 +1018,10 @@ static void draw_button(const UIButton *btn, float ui_scale)
         bg = (Color){50, 50, 50, 255};
         text_col = (Color){120, 120, 120, 255};
         border_col = (Color){70, 70, 70, 255};
+    } else if (btn->pressed) {
+        bg = (Color){120, 60, 180, 255};
+        text_col = WHITE;
+        border_col = (Color){160, 80, 220, 255};
     } else if (btn->hovered) {
         bg = (Color){60, 140, 60, 255};
         text_col = WHITE;
@@ -780,7 +1186,7 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
 
     /* Subphase-specific content */
     switch (rs->pass_subphase) {
-    case PASS_SUB_HOST_ACTION:
+    case PASS_SUB_VENDETTA:
         /* Status text centered on board */
         if (rs->pass_status_text) {
             int st_size = (int)(22.0f * s);
@@ -847,20 +1253,6 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
     }
 }
 
-static void draw_grudge_tokens(const RenderState *rs)
-{
-    float s = rs->layout.scale;
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (!rs->player_has_grudge[i]) continue;
-        PlayerPosition spos = player_screen_pos(i);
-        Vector2 pos = layout_grudge_token_position(spos, &rs->layout);
-        DrawCircle((int)(pos.x + 8.0f * s), (int)(pos.y + 8.0f * s),
-                   10.0f * s, MAROON);
-        DrawText("G", (int)(pos.x + 3.0f * s), (int)(pos.y + 1.0f * s),
-                 (int)(16.0f * s), WHITE);
-    }
-}
-
 /* ---- Left panel drawing ---- */
 
 static void draw_left_panel_chat(const RenderState *rs)
@@ -876,30 +1268,35 @@ static void draw_left_panel_chat(const RenderState *rs)
     BeginScissorMode((int)r.x, (int)r.y, (int)r.width, (int)r.height);
 
     int msg_fs = (int)(13.0f * s);
-    float line_h = 18.0f * s;
     float text_x = r.x + 6.0f * s;
     float max_w = r.width - 12.0f * s;
 
-    /* How many messages fit? */
     float content_top = r.y + 4.0f * s;
     float content_bot = r.y + r.height - 4.0f * s;
-    int max_visible = (int)((content_bot - content_top) / line_h);
-    if (max_visible < 1) max_visible = 1;
+    float avail_h = content_bot - content_top;
 
-    /* Draw newest messages at bottom */
+    /* Measure wrapped heights from newest to oldest to find which
+     * messages fit in the visible area. */
     int count = rs->chat_count;
-    int start = (count > max_visible) ? count - max_visible : 0;
-    for (int i = start; i < count; i++) {
+    float total_h = 0.0f;
+    int first_visible = count; /* index into logical order */
+    for (int i = count - 1; i >= 0; i--) {
         int ring_idx = (rs->chat_head + i) % CHAT_LOG_MAX;
-        float y = content_bot - (float)(count - i) * line_h;
-        if (y < content_top) continue;
-        /* Truncate long messages to panel width */
-        char buf[CHAT_MSG_LEN];
-        snprintf(buf, sizeof(buf), "%s", rs->chat_msgs[ring_idx]);
-        while (MeasureText(buf, msg_fs) > (int)max_w && buf[0] != '\0') {
-            buf[strlen(buf) - 1] = '\0';
-        }
-        DrawText(buf, (int)text_x, (int)y, msg_fs, LIGHTGRAY);
+        float h = measure_text_wrapped(rs->chat_msgs[ring_idx],
+                                       msg_fs, max_w);
+        if (total_h + h > avail_h) break;
+        total_h += h;
+        first_visible = i;
+    }
+
+    /* Draw visible messages top-to-bottom */
+    float y = content_bot - total_h;
+    for (int i = first_visible; i < count; i++) {
+        int ring_idx = (rs->chat_head + i) % CHAT_LOG_MAX;
+        float h = draw_text_wrapped(rs->chat_msgs[ring_idx],
+                                    text_x, y, msg_fs, max_w,
+                                    rs->chat_colors[ring_idx]);
+        y += h;
     }
 
     EndScissorMode();
@@ -928,16 +1325,10 @@ static void draw_left_panel_info(const RenderState *rs)
     DrawText("Contract", (int)x, (int)y, header_fs, GOLD);
     y += (float)header_fs + 4.0f * s;
     if (rs->info_contract_active) {
-        DrawText(rs->info_contract_name, (int)x, (int)y, body_fs, WHITE);
-        y += (float)body_fs + 2.0f * s;
-        /* Word-wrap description crudely */
-        char desc[128];
-        snprintf(desc, sizeof(desc), "%s", rs->info_contract_desc);
-        while (MeasureText(desc, body_fs) > (int)max_w && desc[0] != '\0') {
-            desc[strlen(desc) - 1] = '\0';
-        }
-        DrawText(desc, (int)x, (int)y, body_fs, LIGHTGRAY);
-        y += (float)body_fs + 2.0f * s;
+        y += draw_text_wrapped(rs->info_contract_name, x, y,
+                               body_fs, max_w, WHITE);
+        y += draw_text_wrapped(rs->info_contract_desc, x, y,
+                               body_fs, max_w, LIGHTGRAY);
     } else {
         DrawText("None", (int)x, (int)y, body_fs, GRAY);
         y += (float)body_fs + 2.0f * s;
@@ -945,19 +1336,14 @@ static void draw_left_panel_info(const RenderState *rs)
 
     y += 6.0f * s;
 
-    /* Host Action section */
-    DrawText("Host Action", (int)x, (int)y, header_fs, GOLD);
+    /* Vendetta section */
+    DrawText(VENDETTA_DISPLAY_NAME, (int)x, (int)y, header_fs, GOLD);
     y += (float)header_fs + 4.0f * s;
-    if (rs->info_host_active) {
-        DrawText(rs->info_host_name, (int)x, (int)y, body_fs, WHITE);
-        y += (float)body_fs + 2.0f * s;
-        char desc[128];
-        snprintf(desc, sizeof(desc), "%s", rs->info_host_desc);
-        while (MeasureText(desc, body_fs) > (int)max_w && desc[0] != '\0') {
-            desc[strlen(desc) - 1] = '\0';
-        }
-        DrawText(desc, (int)x, (int)y, body_fs, LIGHTGRAY);
-        y += (float)body_fs + 2.0f * s;
+    if (rs->info_vendetta_active) {
+        y += draw_text_wrapped(rs->info_vendetta_name, x, y,
+                               body_fs, max_w, WHITE);
+        y += draw_text_wrapped(rs->info_vendetta_desc, x, y,
+                               body_fs, max_w, LIGHTGRAY);
     } else {
         DrawText("None", (int)x, (int)y, body_fs, GRAY);
         y += (float)body_fs + 2.0f * s;
@@ -970,8 +1356,8 @@ static void draw_left_panel_info(const RenderState *rs)
     y += (float)header_fs + 4.0f * s;
     if (rs->info_bonus_count > 0) {
         for (int i = 0; i < rs->info_bonus_count; i++) {
-            DrawText(rs->info_bonus_text[i], (int)x, (int)y, body_fs, GREEN);
-            y += (float)body_fs + 2.0f * s;
+            y += draw_text_wrapped(rs->info_bonus_text[i], x, y,
+                                   body_fs, max_w, GREEN);
         }
     } else {
         DrawText("None", (int)x, (int)y, body_fs, GRAY);
@@ -980,46 +1366,52 @@ static void draw_left_panel_info(const RenderState *rs)
 
     y += 6.0f * s;
 
-    /* Grudge section */
-    if (rs->info_grudge_available) {
-        char grudge_hdr[32];
-        snprintf(grudge_hdr, sizeof(grudge_hdr), "Grudge vs %s",
-                 rs->info_grudge_attacker_name);
-        DrawText(grudge_hdr, (int)x, (int)y, header_fs, MAROON);
+    /* Transmutation inventory section */
+    if (rs->transmute_btn_count > 0) {
+        DrawText("Transmutations", (int)x, (int)y, header_fs, GOLD);
         y += (float)header_fs + 4.0f * s;
 
-        for (int i = 0; i < rs->info_revenge_count; i++) {
-            draw_button(&rs->info_revenge_btns[i], s);
+        if (rs->pending_transmutation_id >= 0) {
+            DrawText("Click a card to apply", (int)x, (int)y, body_fs, YELLOW);
+            y += (float)body_fs + 4.0f * s;
         }
-        draw_button(&rs->info_revenge_skip_btn, s);
+
+        for (int i = 0; i < rs->transmute_btn_count; i++) {
+            draw_button(&rs->transmute_btns[i], s);
+        }
+        /* Advance y past buttons */
+        const UIButton *last = &rs->transmute_btns[rs->transmute_btn_count - 1];
+        y = last->bounds.y + last->bounds.height + 6.0f * s;
+    }
+
+    /* Transmutation card descriptions */
+    if (rs->transmute_info_count > 0) {
+        y += 2.0f * s;
+        DrawText("Card Effects", (int)x, (int)y, header_fs, GOLD);
+        y += (float)header_fs + 4.0f * s;
+        for (int i = 0; i < rs->transmute_info_count; i++) {
+            y += draw_text_wrapped(rs->transmute_info_text[i], x, y,
+                                   body_fs, max_w,
+                                   (Color){200, 160, 255, 255});
+        }
+    }
+
+    y += 6.0f * s;
+
+    /* Vendetta options section */
+    if (rs->vendetta_available) {
+        DrawText("Use " VENDETTA_DISPLAY_NAME, (int)x, (int)y, header_fs,
+                 MAROON);
+        y += (float)header_fs + 4.0f * s;
+        (void)y;
+
+        for (int i = 0; i < rs->vendetta_count; i++) {
+            draw_button(&rs->vendetta_btns[i], s);
+        }
+        draw_button(&rs->vendetta_skip_btn, s);
     }
 
     EndScissorMode();
-}
-
-static void draw_grudge_discard_ui(const RenderState *rs)
-{
-    float s = rs->layout.scale;
-
-    Rectangle br = layout_board_rect(&rs->layout);
-    DrawRectangleRec(br, (Color){0, 0, 0, 150});
-
-    Vector2 bc = layout_board_center(&rs->layout);
-
-    const char *title = "New Grudge Token!";
-    int title_fs = (int)(28.0f * s);
-    int tw = MeasureText(title, title_fs);
-    DrawText(title, (int)(bc.x - (float)tw * 0.5f),
-             (int)(bc.y - 80.0f * s), title_fs, GOLD);
-
-    const char *sub = "You already hold a grudge. Choose which to keep:";
-    int sub_fs = (int)(18.0f * s);
-    int sw = MeasureText(sub, sub_fs);
-    DrawText(sub, (int)(bc.x - (float)sw * 0.5f),
-             (int)(bc.y - 45.0f * s), sub_fs, LIGHTGRAY);
-
-    draw_button(&rs->btn_keep_old_grudge, s);
-    draw_button(&rs->btn_keep_new_grudge, s);
 }
 
 static void draw_phase_playing(const GameState *gs, const RenderState *rs)
@@ -1035,9 +1427,6 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     for (int i = 0; i < rs->card_count; i++) {
         draw_card_visual(&rs->cards[i], s);
     }
-
-    /* Grudge token icons */
-    draw_grudge_tokens(rs);
 
     /* Turn indicator + timer (top-right of board) */
     int current = game_state_current_player(gs);
@@ -1078,7 +1467,7 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
         for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
             int idx = rs->hand_visuals[HUMAN_PLAYER][i];
             const CardVisual *cv = &rs->cards[idx];
-            if (!game_state_is_valid_play(gs, HUMAN_PLAYER, cv->card)) {
+            if (!rs->card_playable[i]) {
                 Vector2 pos = cv->position;
                 float w = CARD_WIDTH_REF * cv->scale;
                 float h = CARD_HEIGHT_REF * cv->scale;
@@ -1326,8 +1715,68 @@ void render_draw(const GameState *gs, const RenderState *rs)
         draw_phase_menu(gs, rs);
         break;
 
-    case PHASE_DEALING:
+    case PHASE_DEALING: {
+        float s = rs->layout.scale;
+        Vector2 bc = layout_board_center(&rs->layout);
+
+        /* Deck stack at board center (diminishing as cards fly out) */
+        int cards_in_flight = 0;
+        for (int i = 0; i < rs->card_count; i++) {
+            if (rs->cards[i].animating || rs->cards[i].anim_delay > 0.0f)
+                cards_in_flight++;
+        }
+        /* Show remaining deck cards as stacked backs */
+        int deck_remaining = 52 - (rs->card_count - cards_in_flight);
+        if (deck_remaining < 0) deck_remaining = 0;
+        int deck_layers = (deck_remaining + 6) / 7; /* ~1 layer per 7 cards */
+        if (deck_layers > 7) deck_layers = 7;
+        Vector2 deck_origin = {rs->layout.card_width * 0.5f, rs->layout.card_height * 0.5f};
+        for (int i = 0; i < deck_layers; i++) {
+            Vector2 pos = {bc.x - (float)i * 0.5f, bc.y - (float)i * 0.5f};
+            card_render_back(pos, s, 1.0f, 0.0f, deck_origin);
+        }
+
+        /* Draw card visuals sorted by z_order (smaller AI cards underneath,
+         * bigger human cards on top).  Build a sorted index array. */
+        {
+            int sorted[MAX_CARD_VISUALS];
+            int n = rs->card_count;
+            for (int i = 0; i < n; i++) sorted[i] = i;
+            /* Simple insertion sort — only 52 cards */
+            for (int i = 1; i < n; i++) {
+                int key = sorted[i];
+                int kz = rs->cards[key].z_order;
+                int j = i - 1;
+                while (j >= 0 && rs->cards[sorted[j]].z_order > kz) {
+                    sorted[j + 1] = sorted[j];
+                    j--;
+                }
+                sorted[j + 1] = key;
+            }
+            for (int i = 0; i < n; i++) {
+                draw_card_visual(&rs->cards[sorted[i]], s);
+            }
+        }
+
+        /* "Dealing..." text below deck */
+        if (!rs->deal_complete) {
+            const char *deal_text = "Dealing...";
+            int deal_size = (int)(22.0f * s);
+            int dw = MeasureText(deal_text, deal_size);
+            DrawText(deal_text, (int)(bc.x - (float)dw * 0.5f),
+                     (int)(bc.y + rs->layout.card_height * 0.5f + 20.0f * s),
+                     deal_size, LIGHTGRAY);
+        }
+
+        /* Round number banner */
+        char round_text[32];
+        snprintf(round_text, sizeof(round_text), "Round %d", gs->round_number);
+        int round_size = (int)(30.0f * s);
+        int rw = MeasureText(round_text, round_size);
+        DrawText(round_text, (int)(bc.x - (float)rw * 0.5f),
+                 (int)(rs->layout.board_y + 20.0f * s), round_size, GOLD);
         break;
+    }
 
     case PHASE_PASSING:
         draw_left_panel_chat(rs);
@@ -1337,9 +1786,6 @@ void render_draw(const GameState *gs, const RenderState *rs)
 
     case PHASE_PLAYING:
         draw_phase_playing(gs, rs);
-        if (rs->grudge_discard_ui) {
-            draw_grudge_discard_ui(rs);
-        }
         particle_draw(&rs->particles);
         break;
 
@@ -1433,11 +1879,31 @@ void render_clear_selection(RenderState *rs)
     rs->selected_count = 0;
 }
 
+void render_cancel_drag(RenderState *rs)
+{
+    rs->drag.active = false;
+    rs->drag.snap_back = false;
+    rs->drag.card_visual_idx = -1;
+    rs->drag.has_release_pos = false;
+}
+
 int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos)
 {
     if (!rs->contract_ui_active) return -1;
     for (int i = 0; i < rs->contract_option_count; i++) {
         if (render_hit_test_button(&rs->contract_options[i], mouse_pos)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int render_hit_test_transmute(const RenderState *rs, Vector2 mouse_pos)
+{
+    for (int i = 0; i < rs->transmute_btn_count; i++) {
+        if (rs->transmute_btns[i].visible &&
+            !rs->transmute_btns[i].disabled &&
+            CheckCollisionPointRec(mouse_pos, rs->transmute_btns[i].bounds)) {
             return i;
         }
     }
@@ -1467,7 +1933,7 @@ void render_set_contract_options(RenderState *rs, const int ids[], int count,
     }
 }
 
-void render_chat_log_push(RenderState *rs, const char *msg)
+void render_chat_log_push_color(RenderState *rs, const char *msg, Color color)
 {
     int slot;
     if (rs->chat_count < CHAT_LOG_MAX) {
@@ -1478,6 +1944,12 @@ void render_chat_log_push(RenderState *rs, const char *msg)
         rs->chat_head = (rs->chat_head + 1) % CHAT_LOG_MAX;
     }
     snprintf(rs->chat_msgs[slot], CHAT_MSG_LEN, "%s", msg);
+    rs->chat_colors[slot] = color;
+}
+
+void render_chat_log_push(RenderState *rs, const char *msg)
+{
+    render_chat_log_push_color(rs, msg, LIGHTGRAY);
 }
 
 const char *render_effect_label(const ActiveEffect *ae, char *buf, int buflen)

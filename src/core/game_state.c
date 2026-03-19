@@ -1,7 +1,8 @@
 /* ============================================================
  * @deps-implements: game_state.h
- * @deps-requires: game_state.h, player.h, deck.h, trick.h, hand.h, card.h
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-requires: game_state.h (PHASE_DEALING), player.h, deck.h, trick.h,
+ *                 hand.h, card.h
+ * @deps-last-changed: 2026-03-18 — game_state_new_round() now sets phase to PHASE_DEALING
  * ============================================================ */
 
 #include "game_state.h"
@@ -92,7 +93,7 @@ void game_state_new_round(GameState *gs)
         gs->pass_ready[i] = false;
     }
 
-    gs->phase = (gs->pass_direction == PASS_NONE) ? PHASE_PLAYING : PHASE_PASSING;
+    gs->phase = PHASE_DEALING;
     gs->round_number++;
 }
 

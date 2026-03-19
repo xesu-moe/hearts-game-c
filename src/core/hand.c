@@ -1,7 +1,7 @@
 /* ============================================================
  * @deps-implements: hand.h
- * @deps-requires: hand.h (Hand, Card, card_equals, card_to_index, card_points, CARD_NONE)
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-requires: hand.h, card.h (Card, card_equals, card_to_index, card_points, CARD_NONE, MAX_HAND_SIZE)
+ * @deps-last-changed: 2026-03-18 — Added hand_sort_permutation() implementation
  * ============================================================ */
 
 #include "hand.h"
@@ -78,6 +78,29 @@ void hand_sort(Hand *hand)
             j--;
         }
         hand->cards[j + 1] = key;
+    }
+}
+
+void hand_sort_permutation(Hand *hand, int *perm)
+{
+    /* Initialize permutation as identity */
+    for (int i = 0; i < hand->count; i++) {
+        perm[i] = i;
+    }
+
+    /* Insertion sort — same as hand_sort, but also track perm */
+    for (int i = 1; i < hand->count; i++) {
+        Card key = hand->cards[i];
+        int key_val = card_to_index(key);
+        int key_perm = perm[i];
+        int j = i - 1;
+        while (j >= 0 && card_to_index(hand->cards[j]) > key_val) {
+            hand->cards[j + 1] = hand->cards[j];
+            perm[j + 1] = perm[j];
+            j--;
+        }
+        hand->cards[j + 1] = key;
+        perm[j + 1] = key_perm;
     }
 }
 

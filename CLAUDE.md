@@ -1,6 +1,6 @@
 # Hollow Hearts
 
-A deck-building Hearts modification, built in C with Raylib. Players select designed characters as the figures in their deck, unlocking unique Contracts, Host actions, and Revenges.
+A deck-building Hearts modification, built in C with Raylib. Players select designed characters as the figures in their deck, unlocking unique Contracts, Vendettas, and Transmutation Cards.
 
 ## Game Vision & Roadmap
 
@@ -14,30 +14,33 @@ Once vanilla Hearts is done, integrate the following systems:
 
 #### Characters (Deck Building)
 
-Players select designed characters to be the figures (Jack, Queen, King) in their deck. Each character has unique art and determines which Contracts, Host actions, and Revenges are available to the player. Character selection happens before the game starts.
+Players select designed characters to be the figures (Jack, Queen, King) in their deck. Each character has unique art and determines which Contracts and Vendettas are available to the player. Character selection happens before the game starts.
 
 #### Contracts (Per-Round Secret Missions)
 
 - Each round, players secretly choose a Contract (e.g., "Don't score any heart", "Obtain 4 club cards")
 - Contracts are hidden from other players unless revealed
-- Completing a Contract grants a persistent benefit (e.g., "Score -1 heart every round")
+- Completing a Contract grants a persistent benefit (e.g., "Score -1 heart every round") and/or Transmutation Cards
 - Available Contracts depend on the player's chosen character
 
-#### Host (Losing Player's Round Modifier)
+#### Transmutation Cards
 
-- The player who is losing when a round starts becomes the Host
-- The Host chooses a global modifier that affects the entire round for all players
-- Available Host actions depend on the Host's chosen character
+- Earned as rewards from completed Contracts (stored in a persistent per-player inventory)
+- During the card pass phase, a player can transmute a hand card into a special card (e.g., an always-win joker, a duplicate Queen of Spades)
+- Transmuted cards can be kept for personal use or passed to opponents as poison (negative transmutations)
+- Special properties: ALWAYS_WIN (beats everything), ALWAYS_LOSE (loses to everything), multi-suit masks (can follow multiple suits)
+- Custom point values override normal card scoring
+- Definitions loaded from `assets/defs/transmutations.json`
 
-#### Revenges (Counter to Queen of Spades)
+#### Vendetta
 
-- When a player is hit by the Queen of Spades played by another player, the victim can activate a Revenge against that specific player
-- Examples: "Reveal the attacker's Contract", "Lead the next hand"
-- Available Revenges depend on the victim's chosen character
+- The player who scored the most points in the previous round gets a special action during the current round
+- Actions include switching passing directions, revealing a player's contract, etc.
+- Vendetta options come from the player's Queen characters and can trigger during passing or playing phase
 
 ### Engine Design Principle
 
-**Build vanilla, architect for mods.** Every system (input, game state, scoring, phases) must have clear extension points for Phase 2 mechanics. Use the Command Pattern for actions, keep game rules data-driven where possible, and ensure the phase FSM can accommodate new phases (character select, contract pick, host action, revenge trigger) without rewriting the core loop.
+**Build vanilla, architect for mods.** Every system (input, game state, scoring, phases) must have clear extension points for Phase 2 mechanics. Use the Command Pattern for actions, keep game rules data-driven where possible, and ensure the phase FSM can accommodate new phases (character select, contract pick, vendetta, transmutation) without rewriting the core loop.
 
 ## Build
 

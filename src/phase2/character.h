@@ -3,19 +3,18 @@
 
 /* ============================================================
  * @deps-exports: enum FigureType, struct CharacterDef, MAX_CHARACTER_DEFS,
- *                MAX_CHAR_HOST_ACTIONS, MAX_CHAR_REVENGES
+ *                MAX_CHAR_VENDETTAS
  * @deps-requires: contract.h (CONTRACT_TIERS)
  * @deps-used-by: phase2_defs.h, phase2_defs.c
- * @deps-last-changed: 2026-03-15 — MAX_CHARACTER_DEFS increased from 36 to 256
+ * @deps-last-changed: 2026-03-18 — Replaced host_action/revenge with vendetta in Queen/Jack
  * ============================================================ */
 
 #include "contract.h"
 
 /* --- Constants --- */
 
-#define MAX_CHARACTER_DEFS    256
-#define MAX_CHAR_HOST_ACTIONS  4
-#define MAX_CHAR_REVENGES      4
+#define MAX_CHARACTER_DEFS  256
+#define MAX_CHAR_VENDETTAS    4
 
 /* --- Figure Type --- */
 
@@ -38,12 +37,11 @@ typedef struct CharacterDef {
             int contract_ids[CONTRACT_TIERS]; /* [0]=easy, [1]=med, [2]=hard */
         } king;
         struct {
-            int revenge_ids[MAX_CHAR_REVENGES];
-            int num_revenges;
+            int vendetta_ids[MAX_CHAR_VENDETTAS];
+            int num_vendettas;
         } queen;
         struct {
-            int host_action_ids[MAX_CHAR_HOST_ACTIONS];
-            int num_host_actions;
+            int _reserved; /* placeholder for future Jack mechanics */
         } jack;
     } mechanics;
     char portrait_asset[32]; /* Character portrait key */

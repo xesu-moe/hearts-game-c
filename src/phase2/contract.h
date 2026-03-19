@@ -3,10 +3,12 @@
 
 /* ============================================================
  * @deps-exports: enum ConditionType, struct ConditionParam, struct ContractDef,
- *                struct ContractInstance, MAX_CONTRACT_DEFS, MAX_CONTRACT_REWARD, CONTRACT_TIERS
- * @deps-requires: core/card.h (Card, Suit), effect.h (Effect, EffectScope)
+ *                struct ContractInstance, MAX_CONTRACT_DEFS, MAX_CONTRACT_REWARD,
+ *                MAX_CONTRACT_TRANSMUTE_REWARD, CONTRACT_TIERS
+ * @deps-requires: core/card.h (Card, Suit), effect.h (Effect, EffectScope),
+ *                 transmutation.h (MAX_TRANSMUTE_INVENTORY)
  * @deps-used-by: character.h, phase2_state.h, phase2_defs.h, phase2_defs.c
- * @deps-last-changed: 2026-03-15 — MAX_CONTRACT_DEFS increased from 48 to 256
+ * @deps-last-changed: 2026-03-18 — Added transmutation reward fields to ContractDef
  * ============================================================ */
 
 #include <stdbool.h>
@@ -16,9 +18,10 @@
 
 /* --- Constants --- */
 
-#define MAX_CONTRACT_DEFS   256
-#define MAX_CONTRACT_REWARD  2
-#define CONTRACT_TIERS       3
+#define MAX_CONTRACT_DEFS            256
+#define MAX_CONTRACT_REWARD           2
+#define MAX_CONTRACT_TRANSMUTE_REWARD 2
+#define CONTRACT_TIERS                3
 
 /* --- Condition Type --- */
 
@@ -56,6 +59,10 @@ typedef struct ContractDef {
     Effect         rewards[MAX_CONTRACT_REWARD];
     EffectScope    reward_scope;
     int            tier; /* 0=easy, 1=medium, 2=hard */
+
+    /* Transmutation card rewards (granted on completion) */
+    int            transmute_reward_ids[MAX_CONTRACT_TRANSMUTE_REWARD]; /* -1 = none */
+    int            num_transmute_rewards;
 } ContractDef;
 
 /* --- Contract Instance (per-player, per-round mutable tracker) --- */

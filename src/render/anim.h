@@ -2,25 +2,87 @@
 #define ANIM_H
 
 /* ============================================================
- * @deps-exports: EaseType, ease_apply(), lerpf()
- * @deps-requires: (none — leaf module)
- * @deps-used-by: render.h
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-exports: CardVisual, MAX_CARD_VISUALS, anim_start(), anim_update(),
+ *                anim_toss_enabled(), ANIM_PLAY_CARD_DURATION,
+ *                ANIM_PASS_CARD_DURATION, ANIM_TRICK_COLLECT_DUR,
+ *                ANIM_DEAL_CARD_DURATION, ANIM_DEAL_CARD_STAGGER,
+ *                ANIM_TOSS_DURATION, ANIM_SNAP_BACK_DURATION,
+ *                TOSS_VEL_EXTEND, TOSS_SPIN_FACTOR, TOSS_SIDEWAYS_FACTOR,
+ *                TOSS_MAX_SPIN, HOVER_SCALE_TARGET, HOVER_LIFT_REF,
+ *                HOVER_ANIM_SPEED
+ * @deps-requires: easing.h (EaseType), raylib.h (Vector2), core/card.h (Card)
+ * @deps-used-by: render.h, render.c
+ * @deps-last-changed: 2026-03-19 — Extracted from render.h/render.c
  * ============================================================ */
 
-typedef enum EaseType {
-    EASE_LINEAR,
-    EASE_IN_QUAD,
-    EASE_OUT_QUAD,
-    EASE_IN_OUT_QUAD,
-    EASE_OUT_BACK,
-    EASE_COUNT
-} EaseType;
+#include <stdbool.h>
 
-/* Apply easing function. t in [0,1] -> eased value in [0,1]. */
-float ease_apply(EaseType type, float t);
+#include "raylib.h"
 
-/* Linear interpolation between a and b by t. */
-float lerpf(float a, float b, float t);
+#include "easing.h"
+#include "core/card.h"
+
+/* ---- Constants ---- */
+
+#define MAX_CARD_VISUALS 64
+
+#define ANIM_PLAY_CARD_DURATION  0.25f
+#define ANIM_PASS_CARD_DURATION  0.4f
+#define ANIM_TRICK_COLLECT_DUR   0.3f
+#define ANIM_DEAL_CARD_DURATION  0.15f
+#define ANIM_DEAL_CARD_STAGGER   0.04f
+
+#define ANIM_TOSS_DURATION      0.35f
+#define ANIM_SNAP_BACK_DURATION 0.2f
+#define TOSS_VEL_EXTEND         0.2f
+#define TOSS_SPIN_FACTOR        0.03f
+#define TOSS_SIDEWAYS_FACTOR    0.12f
+#define TOSS_MAX_SPIN           720.0f
+
+#define HOVER_SCALE_TARGET   1.15f
+#define HOVER_LIFT_REF       10.0f
+#define HOVER_ANIM_SPEED     8.0f
+
+/* ---- Card Visual ---- */
+
+typedef struct CardVisual {
+    Card     card;
+    Vector2  position;
+    Vector2  target;
+    Vector2  start;
+    Vector2  origin;          /* rotation pivot relative to card (pixels) */
+    float    rotation;
+    float    target_rotation;
+    float    start_rotation;
+    float    scale;
+    float    opacity;
+    bool     face_up;
+    bool     selected;
+    bool     hovered;
+    bool     animating;
+    float    anim_elapsed;
+    float    anim_duration;
+    float    anim_delay;
+    EaseType anim_ease;
+    int      z_order;
+    int      transmute_id;     /* transmutation def ID, -1 = not transmuted */
+    float    hover_t;          /* 0.0 = not hovered, 1.0 = fully hovered */
+    /* Toss flight (bezier curve animation) */
+    bool     use_bezier;
+    Vector2  bezier_control;
+    float    spin_speed;
+} CardVisual;
+
+/* ---- Animation API ---- */
+
+/* Start a linear animation from current position to target. */
+void anim_start(CardVisual *cv, Vector2 target, float target_rot,
+                float duration, EaseType ease);
+
+/* Advance animation by dt seconds. */
+void anim_update(CardVisual *cv, float dt);
+
+/* Whether toss animations are enabled. */
+bool anim_toss_enabled(void);
 
 #endif /* ANIM_H */

@@ -11,8 +11,11 @@
  *                game_state_is_game_over(), game_state_advance_scoring(),
  *                game_state_get_winners()
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: render.h, main.c
- * @deps-last-changed: 2026-03-17 — Added PassSubphase enum
+ * @deps-used-by: game_state.c, render.h, render.c, ai.h, play_phase.h, play_phase.c,
+ *                pass_phase.h, pass_phase.c, turn_flow.h, turn_flow.c,
+ *                process_input.h, process_input.c, update.h, update.c,
+ *                info_sync.h, info_sync.c, phase_transitions.h, phase_transitions.c, main.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: all game modules and game state impl
  * ============================================================ */
 
 #include <stdbool.h>
@@ -41,9 +44,9 @@ typedef enum PassDirection {
 } PassDirection;
 
 typedef enum PassSubphase {
-    PASS_SUB_HOST_ACTION = 0,
-    PASS_SUB_CONTRACT    = 1,
-    PASS_SUB_CARD_PASS   = 2
+    PASS_SUB_VENDETTA  = 0,
+    PASS_SUB_CONTRACT  = 1,
+    PASS_SUB_CARD_PASS = 2
 } PassSubphase;
 
 #define PASS_CARD_COUNT  3

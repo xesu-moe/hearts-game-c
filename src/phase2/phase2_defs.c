@@ -7,59 +7,59 @@
 
 /* ============================================================
  * @deps-implements: phase2_defs.h
- * @deps-requires: phase2_defs.h, json_parse.h, raylib.h
- * @deps-last-changed: 2026-03-15 — Replaced hardcoded defs with JSON loading
+ * @deps-requires: phase2_defs.h, transmutation.h, json_parse.h, raylib.h
+ * @deps-last-changed: 2026-03-18 — Added transmutation table and loader
  * ============================================================ */
 
 /* --- Global Definition Tables --- */
 
-ContractDef   g_contract_defs[MAX_CONTRACT_DEFS];
-int           g_contract_def_count = 0;
+ContractDef  g_contract_defs[MAX_CONTRACT_DEFS];
+int          g_contract_def_count = 0;
 
-HostActionDef g_host_action_defs[MAX_HOST_ACTION_DEFS];
-int           g_host_action_def_count = 0;
+VendettaDef  g_vendetta_defs[MAX_VENDETTA_DEFS];
+int          g_vendetta_def_count = 0;
 
-RevengeDef    g_revenge_defs[MAX_REVENGE_DEFS];
-int           g_revenge_def_count = 0;
+TransmutationDef g_transmutation_defs[MAX_TRANSMUTATION_DEFS];
+int              g_transmutation_def_count = 0;
 
-CharacterDef  g_character_defs[MAX_CHARACTER_DEFS];
-int           g_character_def_count = 0;
+CharacterDef g_character_defs[MAX_CHARACTER_DEFS];
+int          g_character_def_count = 0;
 
 /* --- Initialization --- */
 
 void phase2_defs_init(void)
 {
     /* Zero all tables and counts */
-    memset(g_contract_defs,    0, sizeof(g_contract_defs));
-    memset(g_host_action_defs, 0, sizeof(g_host_action_defs));
-    memset(g_revenge_defs,     0, sizeof(g_revenge_defs));
-    memset(g_character_defs,   0, sizeof(g_character_defs));
-    g_contract_def_count    = 0;
-    g_host_action_def_count = 0;
-    g_revenge_def_count     = 0;
-    g_character_def_count   = 0;
+    memset(g_contract_defs,  0, sizeof(g_contract_defs));
+    memset(g_vendetta_defs,  0, sizeof(g_vendetta_defs));
+    memset(g_transmutation_defs, 0, sizeof(g_transmutation_defs));
+    memset(g_character_defs, 0, sizeof(g_character_defs));
+    g_contract_def_count      = 0;
+    g_vendetta_def_count      = 0;
+    g_transmutation_def_count = 0;
+    g_character_def_count     = 0;
 
     /* Load from JSON data files */
     json_load_contracts("assets/defs/contracts.json",
                         g_contract_defs, MAX_CONTRACT_DEFS,
                         &g_contract_def_count);
 
-    json_load_host_actions("assets/defs/host_actions.json",
-                           g_host_action_defs, MAX_HOST_ACTION_DEFS,
-                           &g_host_action_def_count);
+    json_load_vendettas("assets/defs/vendettas.json",
+                        g_vendetta_defs, MAX_VENDETTA_DEFS,
+                        &g_vendetta_def_count);
 
-    json_load_revenges("assets/defs/revenges.json",
-                       g_revenge_defs, MAX_REVENGE_DEFS,
-                       &g_revenge_def_count);
+    json_load_transmutations("assets/defs/transmutations.json",
+                             g_transmutation_defs, MAX_TRANSMUTATION_DEFS,
+                             &g_transmutation_def_count);
 
     json_load_characters("assets/defs/characters.json",
                          g_character_defs, MAX_CHARACTER_DEFS,
                          &g_character_def_count);
 
-    TraceLog(LOG_INFO, "PHASE2: Loaded %d contracts, %d host actions, "
-             "%d revenges, %d characters",
-             g_contract_def_count, g_host_action_def_count,
-             g_revenge_def_count, g_character_def_count);
+    TraceLog(LOG_INFO, "PHASE2: Loaded %d contracts, %d vendettas, "
+             "%d transmutations, %d characters",
+             g_contract_def_count, g_vendetta_def_count,
+             g_transmutation_def_count, g_character_def_count);
 }
 
 /* --- Lookup Functions --- */
@@ -74,21 +74,21 @@ const ContractDef *phase2_get_contract(int id)
     return NULL;
 }
 
-const HostActionDef *phase2_get_host_action(int id)
+const VendettaDef *phase2_get_vendetta(int id)
 {
-    for (int i = 0; i < g_host_action_def_count; i++) {
-        if (g_host_action_defs[i].id == id) {
-            return &g_host_action_defs[i];
+    for (int i = 0; i < g_vendetta_def_count; i++) {
+        if (g_vendetta_defs[i].id == id) {
+            return &g_vendetta_defs[i];
         }
     }
     return NULL;
 }
 
-const RevengeDef *phase2_get_revenge(int id)
+const TransmutationDef *phase2_get_transmutation(int id)
 {
-    for (int i = 0; i < g_revenge_def_count; i++) {
-        if (g_revenge_defs[i].id == id) {
-            return &g_revenge_defs[i];
+    for (int i = 0; i < g_transmutation_def_count; i++) {
+        if (g_transmutation_defs[i].id == id) {
+            return &g_transmutation_defs[i];
         }
     }
     return NULL;

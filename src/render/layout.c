@@ -2,7 +2,7 @@
  * @deps-implements: layout.h
  * @deps-requires: layout.h (LayoutConfig, PlayerPosition), render.h (REF constants),
  *                 raylib.h, math.h
- * @deps-last-changed: 2026-03-17 — Added layout_left_panel_upper/lower implementations
+ * @deps-last-changed: 2026-03-18 — Removed layout_grudge_token_position
  * ============================================================ */
 
 #include "layout.h"
@@ -228,20 +228,6 @@ Vector2 layout_board_center(const LayoutConfig *cfg)
         cfg->board_x + cfg->board_size * 0.5f,
         cfg->board_y + cfg->board_size * 0.5f
     };
-}
-
-Vector2 layout_grudge_token_position(PlayerPosition pos,
-                                     const LayoutConfig *cfg)
-{
-    float s = cfg->scale;
-    Vector2 name = layout_name_position(pos, cfg);
-    switch (pos) {
-    case POS_BOTTOM: return (Vector2){name.x + 70.0f * s, name.y + 2.0f * s};
-    case POS_TOP:    return (Vector2){name.x + 70.0f * s, name.y + 2.0f * s};
-    case POS_LEFT:   return (Vector2){name.x + 70.0f * s, name.y + 2.0f * s};
-    case POS_RIGHT:  return (Vector2){name.x - 24.0f * s, name.y + 2.0f * s};
-    default:         return (Vector2){0, 0};
-    }
 }
 
 Rectangle layout_left_panel_upper(const LayoutConfig *cfg)

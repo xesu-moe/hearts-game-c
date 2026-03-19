@@ -1,14 +1,15 @@
 /* ============================================================
- * @deps-exports: InputCmdType (SELECT_CONTRACT, SELECT_GRUDGE_REVENGE,
- *                GRUDGE_DISCARD_CHOICE, SKIP_GRUDGE, OPEN_SETTINGS, etc),
- *                InputCmd (contract, grudge_revenge, grudge_discard, setting),
+ * @deps-exports: InputCmdType (SELECT_CONTRACT, SELECT_VENDETTA,
+ *                ACTIVATE_VENDETTA, SKIP_VENDETTA, SELECT_TRANSMUTATION,
+ *                APPLY_TRANSMUTATION, OPEN_SETTINGS, etc),
+ *                InputCmd (contract, vendetta, transmute_select, transmute_apply, setting),
  *                InputCmdQueue, InputAction, InputState, input_init(),
  *                input_poll(), input_cmd_push(), input_cmd_pop(),
  *                input_cmd_queue_empty(), input_cmd_queue_clear(),
  *                input_get_state(), INPUT_CMD_QUEUE_CAPACITY
  * @deps-requires: raylib.h, card.h (Card, Vector2)
- * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-17 — Removed INPUT_CMD_ACTIVATE_GRUDGE (modal UI replaced)
+ * @deps-used-by: input.c, process_input.c, update.c, main.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: process_input, update modules
  * ============================================================ */
 
 #ifndef INPUT_H
@@ -22,9 +23,7 @@
 
 /* ---- Command types ---- */
 
-/* Phase 1 (vanilla Hearts) command types only.
- * Phase 2 will add: SELECT_CONTRACT, SELECT_HOST_ACTION, ACTIVATE_REVENGE,
- * SELECT_CHARACTER. The enum and union are designed to extend cleanly. */
+/* Command types for vanilla Hearts + Phase 2 mechanics. */
 typedef enum InputCmdType {
     INPUT_CMD_NONE = 0,
 
@@ -46,10 +45,14 @@ typedef enum InputCmdType {
     /* Phase 2: Contract selection */
     INPUT_CMD_SELECT_CONTRACT, /* select a contract during passing phase */
 
-    /* Phase 2: Grudge token */
-    INPUT_CMD_SELECT_GRUDGE_REVENGE, /* select which revenge to apply */
-    INPUT_CMD_GRUDGE_DISCARD_CHOICE, /* choose old vs new token when conflict */
-    INPUT_CMD_SKIP_GRUDGE,           /* decline to use grudge this turn */
+    /* Phase 2: Vendetta */
+    INPUT_CMD_SELECT_VENDETTA,   /* select which vendetta action to use */
+    INPUT_CMD_ACTIVATE_VENDETTA, /* confirm vendetta activation */
+    INPUT_CMD_SKIP_VENDETTA,     /* decline to use vendetta this timing */
+
+    /* Phase 2: Transmutation */
+    INPUT_CMD_SELECT_TRANSMUTATION,  /* Player clicked a transmutation inventory button */
+    INPUT_CMD_APPLY_TRANSMUTATION,   /* Player clicked a hand card to apply selected transmutation */
 
     /* Settings */
     INPUT_CMD_OPEN_SETTINGS,
@@ -61,10 +64,7 @@ typedef enum InputCmdType {
 } InputCmdType;
 
 /* Command payload -- tagged union. Each command type documents which
- * union field it uses. Fields not listed are unused/zero.
- *
- * Phase 2 additions will add new union members (contract_id, host_action_id,
- * revenge struct) without changing existing fields. */
+ * union field it uses. Fields not listed are unused/zero. */
 typedef struct InputCmd {
     InputCmdType type;
     int          source_player; /* who issued this command (0 = human, 1-3 = AI) */
@@ -82,11 +82,14 @@ typedef struct InputCmd {
         /* INPUT_CMD_SELECT_CONTRACT: */
         struct { int contract_id; } contract;
 
-        /* INPUT_CMD_SELECT_GRUDGE_REVENGE: */
-        struct { int revenge_id; } grudge_revenge;
+        /* INPUT_CMD_SELECT_VENDETTA, INPUT_CMD_ACTIVATE_VENDETTA: */
+        struct { int vendetta_id; } vendetta;
 
-        /* INPUT_CMD_GRUDGE_DISCARD_CHOICE: */
-        struct { int keep_new; } grudge_discard; /* 0=keep old, 1=keep new */
+        /* INPUT_CMD_SELECT_TRANSMUTATION: */
+        struct { int inv_slot; } transmute_select;
+
+        /* INPUT_CMD_APPLY_TRANSMUTATION: */
+        struct { int hand_index; } transmute_apply;
 
         /* INPUT_CMD_SETTING_PREV, INPUT_CMD_SETTING_NEXT: */
         struct { int setting_id; } setting; /* which setting row (0-based) */

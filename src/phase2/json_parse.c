@@ -8,8 +8,8 @@
 
 /* ============================================================
  * @deps-implements: json_parse.h
- * @deps-requires: json_parse.h, vendor/cJSON.h, raylib.h
- * @deps-last-changed: 2026-03-15 — Initial creation
+ * @deps-requires: json_parse.h, transmutation.h, vendor/cJSON.h, raylib.h
+ * @deps-last-changed: 2026-03-18 — Added json_load_transmutations(), transmute_reward parsing
  * ============================================================ */
 
 /* ----------------------------------------------------------------
@@ -63,10 +63,21 @@ static const EnumMapping RANK_MAP[] = {
     {"RANK_A",  RANK_A},
 };
 
+static const EnumMapping TRANSMUTE_SPECIAL_MAP[] = {
+    {"TRANSMUTE_NORMAL",      TRANSMUTE_NORMAL},
+    {"TRANSMUTE_ALWAYS_WIN",  TRANSMUTE_ALWAYS_WIN},
+    {"TRANSMUTE_ALWAYS_LOSE", TRANSMUTE_ALWAYS_LOSE},
+};
+
 static const EnumMapping FIGURE_TYPE_MAP[] = {
     {"FIGURE_JACK",  FIGURE_JACK},
     {"FIGURE_QUEEN", FIGURE_QUEEN},
     {"FIGURE_KING",  FIGURE_KING},
+};
+
+static const EnumMapping VENDETTA_TIMING_MAP[] = {
+    {"VENDETTA_TIMING_PASSING", VENDETTA_TIMING_PASSING},
+    {"VENDETTA_TIMING_PLAYING", VENDETTA_TIMING_PLAYING},
 };
 
 /* ----------------------------------------------------------------
@@ -266,6 +277,24 @@ bool json_load_contracts(const char *path, ContractDef *defs,
             d->num_rewards = ri;
         }
 
+        /* Parse transmutation reward IDs (optional) */
+        for (int tr = 0; tr < MAX_CONTRACT_TRANSMUTE_REWARD; tr++)
+            d->transmute_reward_ids[tr] = -1;
+        d->num_transmute_rewards = 0;
+        const cJSON *trewards = cJSON_GetObjectItemCaseSensitive(item, "transmute_rewards");
+        if (cJSON_IsArray(trewards)) {
+            int ti = 0;
+            int tarr_size = cJSON_GetArraySize(trewards);
+            for (int tr = 0; tr < tarr_size && ti < MAX_CONTRACT_TRANSMUTE_REWARD; tr++) {
+                const cJSON *tv = cJSON_GetArrayItem(trewards, tr);
+                if (cJSON_IsNumber(tv)) {
+                    d->transmute_reward_ids[ti] = tv->valueint;
+                    ti++;
+                }
+            }
+            d->num_transmute_rewards = ti;
+        }
+
         count++;
     }
 
@@ -276,20 +305,20 @@ bool json_load_contracts(const char *path, ContractDef *defs,
 }
 
 /* ----------------------------------------------------------------
- * Host action loader
+ * Vendetta loader
  * ---------------------------------------------------------------- */
 
-bool json_load_host_actions(const char *path, HostActionDef *defs,
-                            int max_defs, int *out_count)
+bool json_load_vendettas(const char *path, VendettaDef *defs,
+                         int max_defs, int *out_count)
 {
     *out_count = 0;
     char *file_text = NULL;
     cJSON *root = load_json_file(path, &file_text);
     if (!root) return false;
 
-    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "host_actions");
+    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "vendettas");
     if (!cJSON_IsArray(arr)) {
-        TraceLog(LOG_ERROR, "JSON: \"host_actions\" array not found in %s", path);
+        TraceLog(LOG_ERROR, "JSON: \"vendettas\" array not found in %s", path);
         cJSON_Delete(root);
         UnloadFileText(file_text);
         return false;
@@ -300,11 +329,11 @@ bool json_load_host_actions(const char *path, HostActionDef *defs,
     cJSON_ArrayForEach(item, arr)
     {
         if (count >= max_defs) {
-            TraceLog(LOG_WARNING, "JSON: Host action limit %d reached", max_defs);
+            TraceLog(LOG_WARNING, "JSON: Vendetta limit %d reached", max_defs);
             break;
         }
 
-        HostActionDef *d = &defs[count];
+        VendettaDef *d = &defs[count];
         memset(d, 0, sizeof(*d));
 
         d->id = json_get_int(item, "id", count);
@@ -317,13 +346,17 @@ bool json_load_host_actions(const char *path, HostActionDef *defs,
             EFFECT_SCOPE_MAP, ARRAY_LEN(EFFECT_SCOPE_MAP),
             json_get_str(item, "scope"), EFFECT_SCOPE_ALL);
 
+        d->timing = (VendettaTiming)enum_from_string(
+            VENDETTA_TIMING_MAP, ARRAY_LEN(VENDETTA_TIMING_MAP),
+            json_get_str(item, "timing"), VENDETTA_TIMING_PASSING);
+
         const cJSON *effects = cJSON_GetObjectItemCaseSensitive(item, "effects");
         if (cJSON_IsArray(effects)) {
             int ei = 0;
             const cJSON *eitem = NULL;
             cJSON_ArrayForEach(eitem, effects)
             {
-                if (ei >= MAX_HOST_EFFECTS) break;
+                if (ei >= MAX_VENDETTA_EFFECTS) break;
                 d->effects[ei] = parse_effect(eitem);
                 ei++;
             }
@@ -340,20 +373,20 @@ bool json_load_host_actions(const char *path, HostActionDef *defs,
 }
 
 /* ----------------------------------------------------------------
- * Revenge loader
+ * Transmutation loader
  * ---------------------------------------------------------------- */
 
-bool json_load_revenges(const char *path, RevengeDef *defs,
-                        int max_defs, int *out_count)
+bool json_load_transmutations(const char *path, TransmutationDef *defs,
+                              int max_defs, int *out_count)
 {
     *out_count = 0;
     char *file_text = NULL;
     cJSON *root = load_json_file(path, &file_text);
     if (!root) return false;
 
-    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "revenges");
+    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "transmutations");
     if (!cJSON_IsArray(arr)) {
-        TraceLog(LOG_ERROR, "JSON: \"revenges\" array not found in %s", path);
+        TraceLog(LOG_ERROR, "JSON: \"transmutations\" array not found in %s", path);
         cJSON_Delete(root);
         UnloadFileText(file_text);
         return false;
@@ -364,11 +397,11 @@ bool json_load_revenges(const char *path, RevengeDef *defs,
     cJSON_ArrayForEach(item, arr)
     {
         if (count >= max_defs) {
-            TraceLog(LOG_WARNING, "JSON: Revenge limit %d reached", max_defs);
+            TraceLog(LOG_WARNING, "JSON: Transmutation limit %d reached", max_defs);
             break;
         }
 
-        RevengeDef *d = &defs[count];
+        TransmutationDef *d = &defs[count];
         memset(d, 0, sizeof(*d));
 
         d->id = json_get_int(item, "id", count);
@@ -377,22 +410,40 @@ bool json_load_revenges(const char *path, RevengeDef *defs,
         json_strcpy(d->description, sizeof(d->description),
                     cJSON_GetObjectItemCaseSensitive(item, "description"));
 
-        d->scope = (EffectScope)enum_from_string(
-            EFFECT_SCOPE_MAP, ARRAY_LEN(EFFECT_SCOPE_MAP),
-            json_get_str(item, "scope"), EFFECT_SCOPE_TARGET);
+        d->result_suit = (Suit)enum_from_string(
+            SUIT_MAP, ARRAY_LEN(SUIT_MAP),
+            json_get_str(item, "result_suit"), SUIT_CLUBS);
 
-        const cJSON *effects = cJSON_GetObjectItemCaseSensitive(item, "effects");
-        if (cJSON_IsArray(effects)) {
-            int ei = 0;
-            const cJSON *eitem = NULL;
-            cJSON_ArrayForEach(eitem, effects)
+        d->result_rank = (Rank)enum_from_string(
+            RANK_MAP, ARRAY_LEN(RANK_MAP),
+            json_get_str(item, "result_rank"), RANK_2);
+
+        d->special = (TransmuteSpecial)enum_from_string(
+            TRANSMUTE_SPECIAL_MAP, ARRAY_LEN(TRANSMUTE_SPECIAL_MAP),
+            json_get_str(item, "special"), TRANSMUTE_NORMAL);
+
+        /* Parse suit_mask as array of suit strings, OR'd into bitmask */
+        d->suit_mask = SUIT_MASK_NONE;
+        const cJSON *mask_arr = cJSON_GetObjectItemCaseSensitive(item, "suit_mask");
+        if (cJSON_IsArray(mask_arr)) {
+            const cJSON *ms = NULL;
+            cJSON_ArrayForEach(ms, mask_arr)
             {
-                if (ei >= MAX_REVENGE_EFFECTS) break;
-                d->effects[ei] = parse_effect(eitem);
-                ei++;
+                if (cJSON_IsString(ms)) {
+                    int sv = enum_from_string(SUIT_MAP, ARRAY_LEN(SUIT_MAP),
+                                             ms->valuestring, -1);
+                    if (sv >= 0) {
+                        d->suit_mask |= (1 << sv);
+                    }
+                }
             }
-            d->num_effects = ei;
         }
+
+        d->custom_points = json_get_int(item, "custom_points", -1);
+        d->negative = cJSON_IsTrue(
+            cJSON_GetObjectItemCaseSensitive(item, "negative"));
+        json_strcpy(d->art_asset, sizeof(d->art_asset),
+                    cJSON_GetObjectItemCaseSensitive(item, "art_asset"));
 
         count++;
     }
@@ -473,43 +524,27 @@ bool json_load_characters(const char *path, CharacterDef *defs,
             case FIGURE_QUEEN: {
                 const cJSON *queen = cJSON_GetObjectItemCaseSensitive(mech, "queen");
                 if (cJSON_IsObject(queen)) {
-                    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(queen, "revenge_ids");
+                    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(queen, "vendetta_ids");
                     if (cJSON_IsArray(ids)) {
                         int n = 0;
                         int arr_size = cJSON_GetArraySize(ids);
-                        for (int i = 0; i < arr_size && i < MAX_CHAR_REVENGES; i++) {
+                        for (int i = 0; i < arr_size && i < MAX_CHAR_VENDETTAS; i++) {
                             const cJSON *v = cJSON_GetArrayItem(ids, i);
                             int val = cJSON_IsNumber(v) ? v->valueint : -1;
                             if (val >= 0) {
-                                d->mechanics.queen.revenge_ids[n] = val;
+                                d->mechanics.queen.vendetta_ids[n] = val;
                                 n++;
                             }
                         }
-                        d->mechanics.queen.num_revenges = n;
+                        d->mechanics.queen.num_vendettas = n;
                     }
                 }
                 break;
             }
-            case FIGURE_JACK: {
-                const cJSON *jack = cJSON_GetObjectItemCaseSensitive(mech, "jack");
-                if (cJSON_IsObject(jack)) {
-                    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(jack, "host_action_ids");
-                    if (cJSON_IsArray(ids)) {
-                        int n = 0;
-                        int arr_size = cJSON_GetArraySize(ids);
-                        for (int i = 0; i < arr_size && i < MAX_CHAR_HOST_ACTIONS; i++) {
-                            const cJSON *v = cJSON_GetArrayItem(ids, i);
-                            int val = cJSON_IsNumber(v) ? v->valueint : -1;
-                            if (val >= 0) {
-                                d->mechanics.jack.host_action_ids[n] = val;
-                                n++;
-                            }
-                        }
-                        d->mechanics.jack.num_host_actions = n;
-                    }
-                }
+            case FIGURE_JACK:
+                /* Jack mechanics reserved for future use */
+                d->mechanics.jack._reserved = 0;
                 break;
-            }
             default:
                 break;
             }

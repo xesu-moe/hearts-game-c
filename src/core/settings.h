@@ -10,8 +10,9 @@
  *                settings_resolution_name(), settings_fps_name(),
  *                settings_anim_speed_name(), settings_ai_speed_name()
  * @deps-requires: layout.h (LayoutConfig)
- * @deps-used-by: main.c, render.c
- * @deps-last-changed: 2026-03-16 — Initial creation
+ * @deps-used-by: settings.c, render.c, turn_flow.h, turn_flow.c, update.h, update.c,
+ *                settings_ui.h, settings_ui.c, main.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: turn_flow, update, settings_ui modules
  * ============================================================ */
 
 #include <stdbool.h>

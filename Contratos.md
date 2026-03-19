@@ -1,35 +1,86 @@
 
 ## Por implementar
 
-Mejorar layout
-	When choosing a contract, don't show any other text. Right now, passing cards text is showing and overlapping. Let's divide the passing phase in three subphases: 1. Host choose host action, 2. players pick contract, 3. cards passing.
-	One phase after the other. Not simultaneous. When host is choosing the host actions, for other players show "Host is choosing the round modifier..." and this phase should have a time limit. If the host doesn't choose anything in 3 or 5 seconds the host action is skipped. Choosing a contract phase also have a time limit of 8 seconds. Passing phase also have a time limit of 8 seconds. Time limits should be coded in a way that it is easy to modify later or include it in game creation configuration (when we implement that in the future).
+Phase 0: Prerequisite Refactoring (hardest, highest risk)
+                                                                                                                                      
+  Extract game logic from the monolithic main.c into a callable API driven by serializable GameAction commands. Without this,
+  networking can't be cleanly layered on. This is the Command Pattern that CLAUDE.md already calls for.                               
+                                                            
+  Phase 1: Network Transport Layer                                                                                                    
+                                                            
+  Low-level TCP client/server, non-blocking sockets with poll(), length-prefixed binary message framing, connection lifecycle. Pure   
+  infrastructure, no game semantics. No Raylib networking — raw POSIX sockets.
+                                                                                                                                      
+  Phase 2: Authentication & Player Identity                                                                                           
+  
+  SQLite for accounts, password hashing, login/register flow, session tokens. Needed before rooms or matchmaking because ranked play  
+  requires persistent identity.                             
+                                                                                                                                      
+  Phase 3: Room System (Friend Rooms)                       
 
-	When choosing contracts, host actions or revenge actions. Buttons should also include a description of the element in a smaller font size. For example, Heartless should display just below in smaller font: Don't collect any hearts this round.
+  Create/join rooms via 6-char codes, lobby UI, seat assignment, AI backfill for empty seats. First user-visible networking feature.  
+  
+  Phase 4: Online Game Sessions (most complex)                                                                                        
+                                                            
+  Server-authoritative game execution — state sync, turn management, hidden information filtering (never send other players' hands),  
+  pass phase, Phase 2 mods over network. The server is event-driven (not 60fps), and only processes actions when messages arrive.
+                                                                                                                                      
+  Phase 5: Reconnection Handling                            
 
-	FPS counter is overlaping with the text "log" in the corner. Remove the "log" text.
+  Disconnect detection, AI takeover for absent players, 2-minute seat reservation, full state resync on reconnect.                    
+  
+  Phase 6: Matchmaking & Ladder                                                                                                       
+                                                            
+  ELO rating (multi-player variant), matchmaking queue with widening search window, leaderboard queries, leave penalties.             
+  
+  ---                                                                                                                                 
+  Dependency chain:                                         
+                                                                                                                                      
+  Phase 0 → 1 → 2 → 3 → 4 → 5
+                   └──→ 6 (also requires 4)                                                                                           
+                                                                                                                                      
+  Key architectural decisions:                                                                                                        
+                                                                                                                                      
+  - Single-threaded server using poll() — a Hearts game generates ~1 msg/sec, hundreds of games in one process trivially              
+  - TCP (not UDP/WebSocket) — turn-based, order-critical, low bandwidth
+  - Server is a separate binary sharing game logic code but not rendering                                                             
+  - Hidden information filtering is the critical security boundary — the server must never send cards a client shouldn't see          
+  - Estimated ~4000–6000 lines of new/modified code total                                                                             
+                                                                                                                                      
+  Phase 0 (refactoring) and Phase 4 (game sessions) are the heaviest. Phase 6 (matchmaking) is relatively self-contained.  
 
-	Card positioning for opponents is wrong. North looks like they are rotated in the wrong direction. Fix it. Then you could just pick north's card shape and rotate the full set 90º clockwise and counterclockwise to recreate east and west card positions.
+
+
+
+
+
+  
 
 bugs:
 	Efectos no funcionan
 	When choosing a host action it displays "choose a contract:" instead "Choose a host action:"
 musica
 
-collection
+
+Cartas especiales:
+
+  Gana cualquier trick
+  Pierde cualquier trick
+  Duplica los puntos obtenidos al final de la ronda.
+  Se convierte en una reina de picas
+
+
 
 settings
 	antialiasing?
 statistics
-
+collection
 animaciones
 
+
 networking (docker container per game room)
-
 sprites
-
 reorganización de archivos.
-
 fuente de letra
 
 

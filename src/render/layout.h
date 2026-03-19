@@ -7,12 +7,12 @@
  *                layout_score_position(), layout_name_position(),
  *                layout_pass_direction_position(), layout_confirm_button(),
  *                layout_board_rect(), layout_board_center(),
- *                layout_contract_options(), layout_grudge_token_position(),
+ *                layout_contract_options(),
  *                layout_left_panel_upper(), layout_left_panel_lower(),
  *                layout_recalculate()
  * @deps-requires: raylib.h (Rectangle, Vector2)
- * @deps-used-by: render.h, render.c, settings.c
- * @deps-last-changed: 2026-03-17 — Added layout_left_panel_upper/lower for chat/info UI
+ * @deps-used-by: layout.c, render.h, render.c, settings.c, process_input.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: process_input module
  * ============================================================ */
 
 #include "raylib.h"
@@ -77,10 +77,6 @@ Vector2 layout_board_center(const LayoutConfig *cfg);
  * count must be <= 4. */
 void layout_contract_options(const LayoutConfig *cfg, int count,
                              Rectangle out_rects[]);
-
-/* Position for grudge token icon relative to a player's name area. */
-Vector2 layout_grudge_token_position(PlayerPosition pos,
-                                     const LayoutConfig *cfg);
 
 /* Upper half of left column (chat log area). */
 Rectangle layout_left_panel_upper(const LayoutConfig *cfg);

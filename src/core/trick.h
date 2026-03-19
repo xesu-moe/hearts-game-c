@@ -4,8 +4,8 @@
 /* ============================================================
  * @deps-exports: struct Trick, trick_init(), trick_play_card(), trick_is_complete(), trick_get_winner(), trick_count_points(), trick_is_valid_play()
  * @deps-requires: card.h (Card, Suit, CARDS_PER_TRICK), hand.h (Hand)
- * @deps-used-by: game_state.h
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-used-by: trick.c, game_state.h, contract_logic.h, play_phase.c, turn_flow.c, ai.c
+ * @deps-last-changed: 2026-03-19 — Extended used_by: play_phase, turn_flow, ai modules
  * ============================================================ */
 
 #include "card.h"
