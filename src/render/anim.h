@@ -6,10 +6,10 @@
  *                anim_start/update/toss_enabled(), anim_setup_toss(),
  *                anim_set_speed(), anim_get_speed(),
  *                ANIM_*_DURATION, ANIM_*_STAGGER, ANIM_CONTRACT_REVEAL_STAGGER,
- *                TOSS_*, HOVER_* animation constants
+ *                ANIM_REARRANGE_BLEND_RATE, TOSS_*, HOVER_* animation constants
  * @deps-requires: easing.h (EaseType), raylib.h (Vector2), core/card.h (Card)
  * @deps-used-by: render.c, update.c, turn_flow.c, pass_phase.c, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — Added ANIM_CONTRACT_REVEAL_STAGGER macro (0.4s)
+ * @deps-last-changed: 2026-03-19 — Added ANIM_REARRANGE_BLEND_RATE macro (12.0f) for hand rearrange blending
  * ============================================================ */
 
 #include <stdbool.h>
@@ -55,6 +55,8 @@
 #define ANIM_SCORING_MENU_DURATION   0.35f
 #define ANIM_SCORING_COUNTUP_RATE    0.08f
 #define ANIM_CONTRACT_REVEAL_STAGGER 0.4f
+
+#define ANIM_REARRANGE_BLEND_RATE  12.0f
 
 #define HOVER_SCALE_TARGET   1.15f
 #define HOVER_LIFT_REF       10.0f

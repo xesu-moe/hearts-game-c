@@ -1,9 +1,11 @@
 /* ============================================================
  * @deps-implements: process_input.h
  * @deps-requires: process_input.h, core/input.h, core/game_state.h,
- *                 render/render.h, render/layout.h,
+ *                 render/render.h (render_start_card_drag, render_commit_hand_reorder,
+ *                                  render_update_snap_target, render_cancel_drag),
+ *                 render/layout.h (layout_trick_position),
  *                 game/pass_phase.h, game/play_phase.h, game/turn_flow.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ * @deps-last-changed: 2026-03-19 — Moved drag helpers to render.c; process_input now calls render API
  * ============================================================ */
 
 #include "process_input.h"
@@ -18,6 +20,7 @@
 #define TOSS_CLICK_DIST   10.0f
 #define TOSS_MIN_SPEED    400.0f
 #define TOSS_DROP_RADIUS  150.0f
+#define TOSS_MIN_UPWARD   0.3f  /* minimum -vy/speed ratio to count as a flick (roughly 17 degrees from horizontal) */
 
 void process_input(GameState *gs, RenderState *rs,
                    PassPhaseState *pps, PlayPhaseState *pls,
@@ -30,45 +33,74 @@ void process_input(GameState *gs, RenderState *rs,
     /* Handle drag release — must come before new press detection */
     if (is->released[INPUT_ACTION_LEFT_CLICK] && rs->drag.active) {
         int dvi = rs->drag.card_visual_idx;
-        if (gs->phase != PHASE_PLAYING || dvi < 0 || dvi >= rs->card_count) {
+        if (dvi < 0 || dvi >= rs->card_count) {
             render_cancel_drag(rs);
         } else {
             float dx = rs->drag.current_pos.x - rs->drag.original_pos.x;
             float dy = rs->drag.current_pos.y - rs->drag.original_pos.y;
             float drag_dist = sqrtf(dx*dx + dy*dy);
 
-            float speed = sqrtf(rs->drag.velocity.x * rs->drag.velocity.x +
-                                rs->drag.velocity.y * rs->drag.velocity.y);
+            if (rs->drag.is_play_drag) {
+                /* Play-drag: toss classification as before */
+                float speed = sqrtf(rs->drag.velocity.x * rs->drag.velocity.x +
+                                    rs->drag.velocity.y * rs->drag.velocity.y);
 
-            Vector2 board_center = layout_trick_position(POS_BOTTOM, &rs->layout);
-            float bx = rs->drag.current_pos.x - board_center.x;
-            float by = rs->drag.current_pos.y - board_center.y;
-            float board_dist = sqrtf(bx*bx + by*by);
+                Vector2 board_center = layout_trick_position(POS_BOTTOM, &rs->layout);
+                float bx = rs->drag.current_pos.x - board_center.x;
+                float by = rs->drag.current_pos.y - board_center.y;
+                float board_dist = sqrtf(bx*bx + by*by);
 
-            int mode;
-            if (drag_dist < TOSS_CLICK_DIST)       mode = TOSS_CLICK;
-            else if (speed >= TOSS_MIN_SPEED)       mode = TOSS_FLICK;
-            else if (board_dist < TOSS_DROP_RADIUS) mode = TOSS_DROP;
-            else                                    mode = TOSS_CANCEL;
+                int mode;
+                /* Flick requires upward component: -vy/speed >= threshold */
+                float upward_ratio = (speed > 0.0f) ? (-rs->drag.velocity.y / speed) : 0.0f;
 
-            if (mode != TOSS_CANCEL) {
-                rs->drag.release_pos = rs->drag.current_pos;
-                rs->drag.has_release_pos = true;
-                rs->drag.release_mode = mode;
-                rs->drag.active = false;
+                if (drag_dist < TOSS_CLICK_DIST)       mode = TOSS_CLICK;
+                else if (speed >= TOSS_MIN_SPEED && upward_ratio >= TOSS_MIN_UPWARD)
+                                                        mode = TOSS_FLICK;
+                else if (board_dist < TOSS_DROP_RADIUS) mode = TOSS_DROP;
+                else                                    mode = TOSS_CANCEL;
 
-                input_cmd_push((InputCmd){
-                    .type = INPUT_CMD_PLAY_CARD,
-                    .source_player = 0,
-                    .card = {
-                        .card_index = -1,
-                        .card = rs->cards[dvi].card,
-                    },
-                });
-                rs->drag.card_visual_idx = -1;
+                if (mode != TOSS_CANCEL) {
+                    /* Commit reorder before playing */
+                    render_commit_hand_reorder(gs, rs, p2);
+
+                    rs->drag.release_pos = rs->drag.current_pos;
+                    rs->drag.has_release_pos = true;
+                    rs->drag.release_mode = mode;
+                    rs->drag.active = false;
+
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_PLAY_CARD,
+                        .source_player = 0,
+                        .card = {
+                            .card_index = -1,
+                            .card = rs->cards[dvi].card,
+                        },
+                    });
+                    rs->drag.card_visual_idx = -1;
+                } else {
+                    /* Cancel toss: commit reorder and snap to new slot */
+                    render_commit_hand_reorder(gs, rs, p2);
+                    render_update_snap_target(rs);
+                    rs->drag.snap_back = true;
+                    rs->drag.active = false;
+                }
             } else {
-                rs->drag.snap_back = true;
-                rs->drag.active = false;
+                /* Non-play drag (rearrange only) */
+                if (drag_dist < TOSS_CLICK_DIST && gs->phase == PHASE_PASSING) {
+                    /* Short click in passing phase: commit any reorder, then toggle */
+                    render_commit_hand_reorder(gs, rs, p2);
+                    render_update_snap_target(rs);
+                    rs->drag.active = false;
+                    rs->drag.snap_back = true;
+                    render_toggle_card_selection(rs, dvi);
+                } else {
+                    /* Commit reorder and snap back */
+                    render_commit_hand_reorder(gs, rs, p2);
+                    render_update_snap_target(rs);
+                    rs->drag.snap_back = true;
+                    rs->drag.active = false;
+                }
             }
         }
     }
@@ -148,7 +180,7 @@ void process_input(GameState *gs, RenderState *rs,
                         break;
                     }
                 }
-                /* Card click: apply transmutation or toggle pass selection */
+                /* Card click: apply transmutation or start drag for rearrange/selection */
                 int hit = render_hit_test_card(rs, mouse);
                 if (hit >= 0) {
                     if (pls->pending_transmutation >= 0) {
@@ -168,7 +200,17 @@ void process_input(GameState *gs, RenderState *rs,
                             });
                         }
                     } else {
-                        render_toggle_card_selection(rs, hit);
+                        /* Start drag (short click will toggle selection on release) */
+                        int hand_slot = -1;
+                        for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                            if (rs->hand_visuals[0][ci] == hit) {
+                                hand_slot = ci;
+                                break;
+                            }
+                        }
+                        if (hand_slot >= 0) {
+                            render_start_card_drag(rs, hit, hand_slot, mouse, false);
+                        }
                     }
                 }
             }
@@ -216,51 +258,31 @@ void process_input(GameState *gs, RenderState *rs,
                     break;
                 }
             }
-            /* Normal card play */
-            int current = game_state_current_player(gs);
-            if (current == 0 && flow_step == FLOW_WAITING_FOR_HUMAN) {
+            /* Card interaction: transmutation or drag */
+            {
                 int hit = render_hit_test_card(rs, mouse);
                 if (hit >= 0) {
-                    if (pls->pending_transmutation >= 0) {
-                        int hand_idx = -1;
-                        for (int ci = 0;
-                             ci < rs->hand_visual_counts[0]; ci++) {
-                            if (rs->hand_visuals[0][ci] == hit) {
-                                hand_idx = ci;
-                                break;
-                            }
+                    int hand_slot = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                        if (rs->hand_visuals[0][ci] == hit) {
+                            hand_slot = ci;
+                            break;
                         }
-                        if (hand_idx >= 0) {
+                    }
+                    if (hand_slot >= 0) {
+                        int current = game_state_current_player(gs);
+                        bool is_human_turn = (current == 0 && flow_step == FLOW_WAITING_FOR_HUMAN);
+
+                        if (is_human_turn && pls->pending_transmutation >= 0) {
                             input_cmd_push((InputCmd){
                                 .type = INPUT_CMD_APPLY_TRANSMUTATION,
                                 .source_player = 0,
-                                .transmute_apply = { .hand_index = hand_idx },
+                                .transmute_apply = { .hand_index = hand_slot },
                             });
-                        }
-                    } else {
-                        int hand_idx = -1;
-                        for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
-                            if (rs->hand_visuals[0][ci] == hit) {
-                                hand_idx = ci;
-                                break;
-                            }
-                        }
-                        if (hand_idx >= 0 && rs->card_playable[hand_idx]) {
-                            CardVisual *cv = &rs->cards[hit];
-                            rs->drag.active = true;
-                            rs->drag.card_visual_idx = hit;
-                            rs->drag.grab_offset = (Vector2){
-                                mouse.x - (cv->position.x - cv->origin.x),
-                                mouse.y - (cv->position.y - cv->origin.y),
-                            };
-                            rs->drag.current_pos = cv->position;
-                            rs->drag.has_release_pos = false;
-                            rs->drag.original_pos = cv->position;
-                            rs->drag.original_rot = cv->rotation;
-                            rs->drag.original_z = cv->z_order;
-                            rs->drag.prev_pos = cv->position;
-                            rs->drag.velocity = (Vector2){0, 0};
-                            cv->z_order = 200;
+                        } else {
+                            /* Drag any card; only play-drag if it's our turn and card is playable */
+                            bool play_drag = is_human_turn && rs->card_playable[hand_slot];
+                            render_start_card_drag(rs, hit, hand_slot, mouse, play_drag);
                         }
                     }
                 }

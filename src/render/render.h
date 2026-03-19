@@ -2,18 +2,18 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: DragState, RenderState, ScoringSubphase enum,
- *                PassStagedCard, MenuItem, UIButton, render_init/update/draw(),
- *                render_hit_test_*(), render_toggle_card_selection(),
- *                render_clear_selection(), render_alloc_card_visual(),
- *                render_set_contract_options(), render_clear_piles(),
- *                render_chat_log_push*(), render_effect_label()
+ * @deps-exports: DragState (hand_slot_origin, hand_slot_current, is_play_drag, rearrange_map, rearrange_count),
+ *                RenderState, ScoringSubphase enum, PassStagedCard, MenuItem, UIButton,
+ *                render_init/update/draw(), render_hit_test_*(), render_cancel_drag(),
+ *                render_toggle_card_selection(), render_clear_selection(), render_alloc_card_visual(),
+ *                render_set_contract_options(), render_clear_piles(), render_chat_log_push*(),
+ *                render_effect_label()
  * @deps-requires: raylib.h (Rectangle, Vector2, Color, RenderTexture2D),
  *                 particle.h, anim.h (CardVisual, MAX_CARD_VISUALS, ANIM_CONTRACT_REVEAL_STAGGER),
  *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS),
  *                 core/game_state.h (GamePhase), phase2/effect.h
  * @deps-used-by: render.c, update.c, main.c, game modules, core/ai.c, phase2 modules
- * @deps-last-changed: 2026-03-19 — Added contract_reveal_count and contract_reveal_timer fields for staggered reveal animation
+ * @deps-last-changed: 2026-03-19 — Extended DragState with rearranging fields for hand reordering feature
  * ============================================================ */
 
 #include <stdbool.h>
@@ -26,6 +26,9 @@
 #include "layout.h"
 #include "particle.h"
 #include "phase2/effect.h"
+
+/* Forward declaration — full definition in phase2/phase2_state.h */
+struct Phase2State;
 
 /* ---- Constants ---- */
 
@@ -105,6 +108,12 @@ typedef struct DragState {
     Vector2 original_pos;    /* card position before drag started */
     float   original_rot;    /* card rotation before drag started */
     int     original_z;      /* z_order before drag started */
+    /* Rearranging state */
+    int     hand_slot_origin;   /* hand index where drag started */
+    int     hand_slot_current;  /* current target slot (for rearranging) */
+    bool    is_play_drag;       /* true = can toss to play (player's turn + playable) */
+    int     rearrange_map[MAX_HAND_SIZE]; /* maps display slot -> original hand index (excluding dragged card) */
+    int     rearrange_count;    /* entries in rearrange_map */
 } DragState;
 
 /* ---- Render State ---- */
@@ -295,6 +304,21 @@ void render_clear_selection(RenderState *rs);
 
 /* Cancel any active drag state. */
 void render_cancel_drag(RenderState *rs);
+
+/* Start dragging a card from the human hand.
+ * cv_idx: index into rs->cards[]. hand_slot: index in hand.
+ * is_play_drag: true if this drag can toss-to-play. */
+void render_start_card_drag(RenderState *rs, int cv_idx, int hand_slot,
+                             Vector2 mouse, bool is_play_drag);
+
+/* Commit the rearranged hand order to game state.
+ * Moves the card in gs->players[0].hand and shifts transmute IDs.
+ * p2 may be NULL if phase2 is disabled. */
+void render_commit_hand_reorder(GameState *gs, RenderState *rs,
+                                 struct Phase2State *p2);
+
+/* Recompute snap-back target position for the current target slot. */
+void render_update_snap_target(RenderState *rs);
 
 /* Hit-test mouse position against contract option buttons.
  * Returns index (0-3) into contract_options[], or -1 if no hit. */

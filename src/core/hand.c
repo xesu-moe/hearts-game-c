@@ -1,7 +1,7 @@
 /* ============================================================
  * @deps-implements: hand.h
- * @deps-requires: hand.h, card.h (Card, card_equals, card_to_index, card_points, CARD_NONE, MAX_HAND_SIZE)
- * @deps-last-changed: 2026-03-18 — Added hand_sort_permutation() implementation
+ * @deps-requires: hand.h (hand_move_card), card.h (Card, card_equals, card_to_index, card_points, CARD_NONE, MAX_HAND_SIZE)
+ * @deps-last-changed: 2026-03-19 — Added hand_move_card() implementation
  * ============================================================ */
 
 #include "hand.h"
@@ -111,4 +111,21 @@ int hand_count_points(const Hand *hand)
         points += card_points(hand->cards[i]);
     }
     return points;
+}
+
+void hand_move_card(Hand *hand, int src_index, int dst_index)
+{
+    if (src_index < 0 || src_index >= hand->count) return;
+    if (dst_index < 0 || dst_index >= hand->count) return;
+    if (src_index == dst_index) return;
+
+    Card card = hand->cards[src_index];
+    if (src_index < dst_index) {
+        for (int i = src_index; i < dst_index; i++)
+            hand->cards[i] = hand->cards[i + 1];
+    } else {
+        for (int i = src_index; i > dst_index; i--)
+            hand->cards[i] = hand->cards[i - 1];
+    }
+    hand->cards[dst_index] = card;
 }

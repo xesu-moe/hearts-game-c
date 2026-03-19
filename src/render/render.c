@@ -17,6 +17,8 @@
 #include <string.h>
 
 #include "card_render.h"
+#include "core/hand.h"
+#include "phase2/phase2_state.h"
 #include "phase2/vendetta.h"
 #include "rlgl.h"
 
@@ -480,6 +482,10 @@ void render_init(RenderState *rs)
     memset(rs, 0, sizeof(*rs));
     rs->hover_card_index = -1;
     rs->drag.card_visual_idx = -1;
+    rs->drag.hand_slot_origin = -1;
+    rs->drag.hand_slot_current = -1;
+    rs->drag.is_play_drag = false;
+    rs->drag.rearrange_count = 0;
     rs->last_trick_winner = -1;
     rs->current_phase = PHASE_MENU;
     rs->layout_dirty = true;
@@ -539,11 +545,16 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
     /* Sync visuals only when game state has mutated or phase changed.
      * Block sync during pass toss/wait/receive to preserve staged visuals.
      * Leave sync_needed set so it fires once pass_anim_in_progress clears. */
+    /* Force-cancel drag on phase change */
+    if (rs->phase_just_changed && rs->drag.active) {
+        render_cancel_drag(rs);
+    }
+
     if ((rs->phase_just_changed || rs->sync_needed) &&
-        !rs->pass_anim_in_progress && !rs->pile_anim_in_progress) {
-        /* Cancel any active drag — sync rebuilds visuals */
-        if (rs->drag.active || rs->drag.snap_back) {
-            rs->drag.active = false;
+        !rs->pass_anim_in_progress && !rs->pile_anim_in_progress &&
+        !rs->drag.active) {
+        /* Clear any pending snap-back — sync rebuilds visuals */
+        if (rs->drag.snap_back) {
             rs->drag.snap_back = false;
             rs->drag.card_visual_idx = -1;
             rs->drag.has_release_pos = false;
@@ -858,6 +869,76 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             rs->drag.velocity.y = (target_y - rs->drag.prev_pos.y) / dt;
         }
         rs->drag.prev_pos = (Vector2){ target_x, target_y };
+
+        /* Slot detection: find which hand slot the dragged card is over */
+        int hand_count = rs->hand_visual_counts[HUMAN_PLAYER];
+        if (hand_count > 1) {
+            Vector2 slot_positions[MAX_HAND_SIZE];
+            float slot_rotations[MAX_HAND_SIZE];
+            int slot_count = 0;
+            layout_hand_positions(POS_BOTTOM, hand_count, &rs->layout,
+                                  slot_positions, slot_rotations, &slot_count);
+
+            /* Find nearest slot by X distance */
+            float drag_x = rs->drag.current_pos.x;
+            int best_slot = rs->drag.hand_slot_current;
+            float best_dist = 1e9f;
+            for (int i = 0; i < slot_count; i++) {
+                float d = fabsf(drag_x - slot_positions[i].x);
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_slot = i;
+                }
+            }
+
+            if (best_slot != rs->drag.hand_slot_current) {
+                rs->drag.hand_slot_current = best_slot;
+                /* Rebuild rearrange_map based on new target slot */
+                /* Map: insert dragged card's logical slot into the sequence */
+                rs->drag.rearrange_count = 0;
+                int src = rs->drag.hand_slot_origin;
+                /* Build list of non-dragged hand indices in original order */
+                int others[MAX_HAND_SIZE];
+                int other_count = 0;
+                for (int i = 0; i < hand_count; i++) {
+                    if (i == src) continue;
+                    others[other_count++] = i;
+                }
+                /* Build map — gap is created implicitly by the visual
+                 * slide loop skipping target_slot when positioning. */
+                for (int i = 0; i < other_count; i++) {
+                    rs->drag.rearrange_map[rs->drag.rearrange_count++] = others[i];
+                }
+            }
+        }
+    }
+
+    /* Visual rearranging: slide non-dragged cards to rearranged positions */
+    if (rs->drag.active && rs->drag.rearrange_count > 0) {
+        int hand_count = rs->hand_visual_counts[HUMAN_PLAYER];
+        Vector2 slot_positions[MAX_HAND_SIZE];
+        float slot_rotations[MAX_HAND_SIZE];
+        int slot_count = 0;
+        layout_hand_positions(POS_BOTTOM, hand_count, &rs->layout,
+                              slot_positions, slot_rotations, &slot_count);
+
+        float blend = 1.0f - expf(-ANIM_REARRANGE_BLEND_RATE * dt);
+        int target_slot = rs->drag.hand_slot_current;
+        int map_i = 0;
+
+        for (int display = 0; display < hand_count && map_i < rs->drag.rearrange_count; display++) {
+            if (display == target_slot) continue; /* skip the dragged card's slot */
+            int orig_idx = rs->drag.rearrange_map[map_i++];
+            int cv_idx = rs->hand_visuals[HUMAN_PLAYER][orig_idx];
+            CardVisual *cv = &rs->cards[cv_idx];
+
+            Vector2 target_pos = slot_positions[display];
+            float target_rot = slot_rotations[display];
+
+            cv->position.x += (target_pos.x - cv->position.x) * blend;
+            cv->position.y += (target_pos.y - cv->position.y) * blend;
+            cv->rotation += (target_rot - cv->rotation) * blend;
+        }
     }
 
     /* Snap-back: animate card to original hand position */
@@ -2021,6 +2102,93 @@ void render_cancel_drag(RenderState *rs)
     rs->drag.snap_back = false;
     rs->drag.card_visual_idx = -1;
     rs->drag.has_release_pos = false;
+    rs->drag.hand_slot_origin = -1;
+    rs->drag.hand_slot_current = -1;
+    rs->drag.is_play_drag = false;
+    rs->drag.rearrange_count = 0;
+}
+
+void render_start_card_drag(RenderState *rs, int cv_idx, int hand_slot,
+                             Vector2 mouse, bool is_play_drag)
+{
+    CardVisual *cv = &rs->cards[cv_idx];
+    rs->drag.active = true;
+    rs->drag.card_visual_idx = cv_idx;
+    rs->drag.grab_offset = (Vector2){
+        mouse.x - (cv->position.x - cv->origin.x),
+        mouse.y - (cv->position.y - cv->origin.y),
+    };
+    rs->drag.current_pos = cv->position;
+    rs->drag.has_release_pos = false;
+    rs->drag.original_pos = cv->position;
+    rs->drag.original_rot = cv->rotation;
+    rs->drag.original_z = cv->z_order;
+    rs->drag.prev_pos = cv->position;
+    rs->drag.velocity = (Vector2){0, 0};
+    rs->drag.hand_slot_origin = hand_slot;
+    rs->drag.hand_slot_current = hand_slot;
+    rs->drag.is_play_drag = is_play_drag;
+    cv->z_order = 200;
+
+    /* Build initial rearrange_map */
+    rs->drag.rearrange_count = 0;
+    for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+        if (i == hand_slot) continue;
+        rs->drag.rearrange_map[rs->drag.rearrange_count++] = i;
+    }
+}
+
+void render_commit_hand_reorder(GameState *gs, RenderState *rs,
+                                 Phase2State *p2)
+{
+    int src = rs->drag.hand_slot_origin;
+    int dst = rs->drag.hand_slot_current;
+    int count = gs->players[0].hand.count;
+    if (src != dst && src >= 0 && dst >= 0 && src < count && dst < count) {
+        hand_move_card(&gs->players[0].hand, src, dst);
+
+        /* Shift render transmute IDs */
+        int saved_id = rs->hand_transmute_ids[src];
+        if (src < dst) {
+            for (int i = src; i < dst; i++)
+                rs->hand_transmute_ids[i] = rs->hand_transmute_ids[i + 1];
+        } else {
+            for (int i = src; i > dst; i--)
+                rs->hand_transmute_ids[i] = rs->hand_transmute_ids[i - 1];
+        }
+        rs->hand_transmute_ids[dst] = saved_id;
+
+        /* Shift authoritative phase2 hand transmute slots to stay in sync */
+        if (p2 && p2->enabled) {
+            TransmuteSlot *slots = p2->players[0].hand_transmutes.slots;
+            TransmuteSlot saved_slot = slots[src];
+            if (src < dst) {
+                for (int i = src; i < dst; i++)
+                    slots[i] = slots[i + 1];
+            } else {
+                for (int i = src; i > dst; i--)
+                    slots[i] = slots[i - 1];
+            }
+            slots[dst] = saved_slot;
+        }
+
+        rs->sync_needed = true;
+    }
+}
+
+void render_update_snap_target(RenderState *rs)
+{
+    int slot = rs->drag.hand_slot_current;
+    int count = rs->hand_visual_counts[HUMAN_PLAYER];
+    Vector2 positions[MAX_HAND_SIZE];
+    float rotations[MAX_HAND_SIZE];
+    int out_count = 0;
+    layout_hand_positions(POS_BOTTOM, count, &rs->layout,
+                          positions, rotations, &out_count);
+    if (slot >= 0 && slot < out_count) {
+        rs->drag.original_pos = positions[slot];
+        rs->drag.original_rot = rotations[slot];
+    }
 }
 
 int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos)

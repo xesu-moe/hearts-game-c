@@ -126,7 +126,46 @@ Main Agent       →  Implementation + `make`
 hollow-hearts/
 ├── CLAUDE.md              # This file
 ├── Makefile               # Build system
-├── src/                   # Source code
+├── src/
+│   ├── main.c             # Entry point, top-level loop wiring
+│   ├── core/              # Pure game logic — no Raylib, no rendering
+│   │   ├── card.c/h       # Card type, suit/rank helpers, point values
+│   │   ├── hand.c/h       # Hand container (add, remove, sort, move, query)
+│   │   ├── deck.c/h       # Deck (shuffle, deal)
+│   │   ├── trick.c/h      # Trick (play card, determine winner)
+│   │   ├── player.c/h     # Player struct
+│   │   ├── game_state.c/h # GameState, phase enum, round/trick state
+│   │   ├── ai.c/h         # AI decision logic
+│   │   ├── input.c/h      # Input abstraction (poll, command queue)
+│   │   ├── clock.c/h      # Game clock / time scaling
+│   │   └── settings.c/h   # Persistent game settings
+│   ├── render/            # Everything visual — owns Raylib calls
+│   │   ├── render.c/h     # RenderState, sync, update, draw, hit-testing, drag API
+│   │   ├── anim.c/h       # Animation engine (start, update, toss, bezier, timing constants)
+│   │   ├── easing.c/h     # Easing math (ease_apply, lerpf)
+│   │   ├── layout.c/h     # Layout math (positions, rects, scaling — no drawing)
+│   │   ├── card_render.c/h # Card sprite drawing (face, back, procedural fallback)
+│   │   └── particle.c/h   # Particle system (init, spawn, update, draw)
+│   ├── game/              # Game flow — bridges core logic and render
+│   │   ├── process_input.c/h # Translates mouse/key events into InputCmds
+│   │   ├── update.c/h     # Per-frame game state updates
+│   │   ├── turn_flow.c/h  # Turn/trick FSM (FlowStep)
+│   │   ├── play_phase.c/h # Playing phase rules
+│   │   ├── pass_phase.c/h # Passing phase rules
+│   │   ├── phase_transitions.c/h # Phase change orchestration
+│   │   ├── info_sync.c/h  # Syncs info panel / playability to RenderState
+│   │   └── settings_ui.c/h # Settings screen logic
+│   ├── audio/
+│   │   └── audio.c/h      # Sound effects and music
+│   ├── phase2/            # Hollow Hearts modification systems
+│   │   ├── contract.h / contract_logic.c/h
+│   │   ├── transmutation.h / transmutation_logic.c/h
+│   │   ├── vendetta.h / vendetta_logic.c/h
+│   │   ├── character.h, effect.h, phase2_state.h
+│   │   ├── phase2_defs.c/h # Definition loading
+│   │   └── json_parse.c/h  # JSON parser wrapper
+│   └── vendor/
+│       └── cJSON.c/h      # Third-party JSON library
 ├── .claude/
 │   ├── agents/            # Subagent definitions
 │   │   ├── game-developer.md
@@ -137,6 +176,38 @@ hollow-hearts/
 │   │   └── 01-14_*.md
 │   └── deps.json          # Dependency map (managed by dependency-mapper)
 ```
+
+## File Boundaries (strict)
+
+Each file has a single responsibility. Do not leak logic across boundaries.
+
+### `render/` rules
+
+| File | Owns | Does NOT contain |
+|------|------|------------------|
+| **render.c** | RenderState, sync_hands, render_update/draw, hit-testing, drag state management (start/commit/cancel/snap) | Animation math, easing curves, layout position calculations, card sprite drawing |
+| **anim.c** | Animation engine: anim_start, anim_update, anim_setup_toss, speed control, all animation timing constants | Drawing, layout, hit-testing, game state |
+| **easing.c** | Pure math: easing curves (ease_apply), lerpf | Anything Raylib, anything stateful |
+| **layout.c** | Pure position/rect math: where things go on screen, scaling | Drawing, animation, game state, RenderState |
+| **card_render.c** | Drawing a single card (face/back, sprite or procedural) | Layout, animation, game logic |
+| **particle.c** | Particle lifecycle (spawn, update, draw) | Cards, layout, game state |
+
+**Key principle:** `render.c` orchestrates but delegates. It calls `layout_*()` for positions, `anim_*()` for animation, `card_render_*()` for drawing. If you need a new position calculation, add it to `layout.c`. If you need a new animation or timing constant, add it to `anim.c/h`. If you need new easing math, add it to `easing.c`.
+
+### `game/` rules
+
+| File | Owns | Does NOT contain |
+|------|------|------------------|
+| **process_input.c** | Translating raw input into InputCmds and calling render drag API | Animation, layout math, direct CardVisual manipulation |
+| **update.c** | Per-frame game state mutation, phase-specific logic dispatch | Rendering, drawing, input polling |
+| **turn_flow.c** | Turn/trick state machine (whose turn, AI dispatch, trick resolution) | Rendering, input |
+| **info_sync.c** | Copying game state into RenderState display fields (info panel, playability flags) | Game logic decisions, drawing |
+
+**Key principle:** `game/` files read/write GameState and call into `render/` public API. They never manipulate CardVisual fields directly or compute layout positions (except `process_input.c` using `layout_trick_position` for toss classification, which is a geometry query).
+
+### `core/` rules
+
+`core/` is pure game logic. No Raylib includes, no render types, no visual concepts. If a function needs screen positions or card visuals, it does not belong in `core/`.
 
 ## Reference Resources
 
