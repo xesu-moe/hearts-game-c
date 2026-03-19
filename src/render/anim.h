@@ -2,20 +2,14 @@
 #define ANIM_H
 
 /* ============================================================
- * @deps-exports: CardVisual, MAX_CARD_VISUALS, anim_start(), anim_update(),
- *                anim_toss_enabled(), anim_setup_toss(), anim_set_speed(),
- *                anim_get_speed(), ANIM_PLAY_CARD_DURATION,
- *                ANIM_PASS_CARD_DURATION, ANIM_TRICK_COLLECT_DUR,
- *                ANIM_DEAL_CARD_DURATION, ANIM_DEAL_CARD_STAGGER,
- *                ANIM_TOSS_DURATION, ANIM_SNAP_BACK_DURATION,
- *                ANIM_PASS_TOSS_DURATION, ANIM_PASS_WAIT_DURATION,
- *                ANIM_PASS_RECEIVE_DURATION, PASS_TOSS_STAGGER,
- *                PASS_PLAYER_STAGGER, TOSS_VEL_EXTEND, TOSS_SPIN_FACTOR,
- *                TOSS_SIDEWAYS_FACTOR, TOSS_MAX_SPIN, HOVER_SCALE_TARGET,
- *                HOVER_LIFT_REF, HOVER_ANIM_SPEED
+ * @deps-exports: CardVisual (pile_owner field), MAX_CARD_VISUALS,
+ *                anim_start/update/toss_enabled(), anim_setup_toss(),
+ *                anim_set_speed(), anim_get_speed(),
+ *                ANIM_*_DURATION, ANIM_*_STAGGER, ANIM_CONTRACT_REVEAL_STAGGER,
+ *                TOSS_*, HOVER_* animation constants
  * @deps-requires: easing.h (EaseType), raylib.h (Vector2), core/card.h (Card)
- * @deps-used-by: render.c, game/pass_phase.c, main.c
- * @deps-last-changed: 2026-03-19 — Added anim_set_speed(), anim_get_speed()
+ * @deps-used-by: render.c, update.c, turn_flow.c, pass_phase.c, phase_transitions.c, main.c
+ * @deps-last-changed: 2026-03-19 — Added ANIM_CONTRACT_REVEAL_STAGGER macro (0.4s)
  * ============================================================ */
 
 #include <stdbool.h>
@@ -42,12 +36,25 @@
 #define TOSS_SIDEWAYS_FACTOR    0.12f
 #define TOSS_MAX_SPIN           720.0f
 
+/* Pile collect animation */
+#define ANIM_PILE_COLLECT_DURATION 0.35f
+#define ANIM_PILE_STAGGER          0.06f  /* delay between each of the 4 cards */
+
 /* Pass animation timing */
 #define ANIM_PASS_TOSS_DURATION    0.45f
 #define ANIM_PASS_WAIT_DURATION    0.6f
 #define ANIM_PASS_RECEIVE_DURATION 0.35f
 #define PASS_TOSS_STAGGER          0.06f  /* delay between cards per player */
 #define PASS_PLAYER_STAGGER        0.08f  /* delay between players */
+
+/* Scoring phase animation */
+#define ANIM_SCORING_FLY_DURATION    0.5f
+#define ANIM_SCORING_PLAYER_STAGGER  0.2f
+#define ANIM_SCORING_CARD_STAGGER    0.06f
+#define ANIM_SCORING_MENU_DELAY      0.2f
+#define ANIM_SCORING_MENU_DURATION   0.35f
+#define ANIM_SCORING_COUNTUP_RATE    0.08f
+#define ANIM_CONTRACT_REVEAL_STAGGER 0.4f
 
 #define HOVER_SCALE_TARGET   1.15f
 #define HOVER_LIFT_REF       10.0f
@@ -81,6 +88,7 @@ typedef struct CardVisual {
     bool     use_bezier;
     Vector2  bezier_control;
     float    spin_speed;
+    int      pile_owner;       /* player who won this pile card, -1 = unset */
 } CardVisual;
 
 /* ---- Animation Speed ---- */

@@ -1,11 +1,12 @@
 /* ============================================================
  * @deps-implements: update.h
  * @deps-requires: update.h, core/input.h, core/game_state.h, core/settings.h,
- *                 render/render.h, game/pass_phase.h, game/play_phase.h,
- *                 game/settings_ui.h, phase2/contract_logic.h,
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
- *                 phase2/phase2_defs.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ *                 render/render.h (ScoringSubphase, contract_reveal_count/timer),
+ *                 render/anim.h (ANIM_CONTRACT_REVEAL_STAGGER, anim_get_speed),
+ *                 game/pass_phase.h, game/play_phase.h, game/settings_ui.h,
+ *                 phase2/contract_logic.h, phase2/vendetta_logic.h,
+ *                 phase2/transmutation_logic.h, phase2/phase2_defs.h, stdbool.h
+ * @deps-last-changed: 2026-03-19 — SCORE_SUB_DONE handler initializes contract_reveal_count/timer for staggered animation
  * ============================================================ */
 
 #include "update.h"
@@ -190,33 +191,67 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
 
         case PHASE_SCORING:
             if (cmd.type == INPUT_CMD_CONFIRM) {
-                if (p2->enabled && !rs->show_contract_results) {
-                    for (int i = 0; i < NUM_PLAYERS; i++) {
-                        contract_evaluate(p2, i);
-                        contract_apply_reward(p2, i);
+                if (rs->score_subphase == SCORE_SUB_DISPLAY) {
+                    /* Start count-up animation */
+                    rs->score_subphase = SCORE_SUB_COUNT_UP;
+                    rs->btn_continue.visible = false;
+                    rs->score_countup_timer = 0.0f;
+                } else if (rs->score_subphase == SCORE_SUB_DONE) {
+                    /* Advance to next round (show contracts if Phase 2) */
+                    if (p2->enabled) {
+                        /* Evaluate contracts and populate result fields */
+                        for (int i = 0; i < NUM_PLAYERS; i++) {
+                            contract_evaluate(p2, i);
+                            contract_apply_reward(p2, i);
 
-                        const ContractInstance *ci = &p2->players[i].contract;
-                        if (ci->contract_id >= 0) {
-                            const ContractDef *cd = phase2_get_contract(ci->contract_id);
-                            const char *name = cd ? cd->name : "Unknown";
-                            const char *status = ci->completed ? "Completed!" : "Failed";
-                            snprintf(rs->contract_result_text[i],
-                                     sizeof(rs->contract_result_text[i]),
-                                     "%s: %s - %s",
-                                     p2_player_name(i), name, status);
-                            rs->contract_result_success[i] = ci->completed;
-                        } else {
-                            rs->contract_result_text[i][0] = '\0';
+                            const ContractInstance *ci = &p2->players[i].contract;
+                            if (ci->contract_id >= 0) {
+                                const ContractDef *cd = phase2_get_contract(ci->contract_id);
+                                const char *name = cd ? cd->name : "Unknown";
+                                const char *desc = cd ? cd->description : "";
+                                const char *status = ci->completed ? "Completed!" : "Failed";
+                                snprintf(rs->contract_result_text[i],
+                                         sizeof(rs->contract_result_text[i]),
+                                         "%s: %s - %s",
+                                         p2_player_name(i), name, status);
+                                snprintf(rs->contract_result_name[i],
+                                         sizeof(rs->contract_result_name[i]),
+                                         "%s", name);
+                                snprintf(rs->contract_result_desc[i],
+                                         sizeof(rs->contract_result_desc[i]),
+                                         "%s", desc);
+                                rs->contract_result_success[i] = ci->completed;
+                            } else {
+                                rs->contract_result_text[i][0] = '\0';
+                                rs->contract_result_name[i][0] = '\0';
+                                rs->contract_result_desc[i][0] = '\0';
+                            }
                         }
-                    }
-                    rs->show_contract_results = true;
-                    for (int j = 0; j < NUM_PLAYERS; j++) {
-                        if (rs->contract_result_text[j][0] != '\0') {
-                            render_chat_log_push(rs,
-                                                 rs->contract_result_text[j]);
+                        rs->show_contract_results = true;
+
+                        /* Push to chat log */
+                        for (int j = 0; j < NUM_PLAYERS; j++) {
+                            if (rs->contract_result_text[j][0] != '\0') {
+                                render_chat_log_push(rs,
+                                                     rs->contract_result_text[j]);
+                            }
                         }
+
+                        /* Switch to contracts panel with staggered reveal */
+                        rs->score_subphase = SCORE_SUB_CONTRACTS;
+                        rs->contract_reveal_count = 0;
+                        rs->contract_reveal_timer =
+                            ANIM_CONTRACT_REVEAL_STAGGER * anim_get_speed();
+                        rs->btn_continue.visible = false;
+                        rs->btn_continue.label = "Next Round";
+                    } else {
+                        game_state_advance_scoring(gs);
+                        rs->sync_needed = true;
                     }
-                } else {
+                } else if (rs->score_subphase == SCORE_SUB_CONTRACTS) {
+                    /* Block confirm until all rows revealed */
+                    if (rs->contract_reveal_count < NUM_PLAYERS) break;
+                    /* Advance to next round */
                     rs->show_contract_results = false;
                     if (p2->enabled) {
                         for (int i = 0; i < NUM_PLAYERS; i++) {

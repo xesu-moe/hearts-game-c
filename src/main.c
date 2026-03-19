@@ -1,24 +1,19 @@
 /* ============================================================
  * @deps-implements: (entry point)
- * @deps-requires: core/clock.h (clock_init, clock_update, FIXED_DT),
- *                 core/game_state.h (GameState, game_state_*),
- *                 core/input.h (InputState, input_*),
- *                 core/settings.h (GameSettings, settings_anim_multiplier),
- *                 render/anim.h (anim_set_speed), render/render.h,
- *                 render/card_render.h, audio/audio.h (AudioState, audio_*,
- *                 SfxId, MusicContext), phase2/phase2_defs.h,
- *                 phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/transmutation_logic.h, game/play_phase.h,
- *                 game/pass_phase.h, game/turn_flow.h, game/process_input.h,
- *                 game/update.h, game/settings_ui.h, game/info_sync.h,
- *                 game/phase_transitions.h, raylib.h
- * @deps-last-changed: 2026-03-19 — Integrated audio subsystem (init, update, SFX)
+ * @deps-requires: core/clock.h, core/game_state.h (game_state_advance_scoring),
+ *                 core/input.h, core/settings.h,
+ *                 render/anim.h (anim_set_speed, ANIM_DEAL_CARD_STAGGER),
+ *                 render/render.h (RenderState.score_advance_pending/tick_pending),
+ *                 render/card_render.h, audio/audio.h (SFX_SCORE_TICK),
+ *                 phase2/phase2_defs.h, game modules, raylib.h
+ * @deps-last-changed: 2026-03-19 — Consume score_advance_pending flag; manage RT lifecycle (load/unload score_contracts_rt); call game_state_advance_scoring()
  * ============================================================ */
 
 #include <stdbool.h>
 
 #include "raylib.h"
 
+#include "core/ai.h"
 #include "core/clock.h"
 #include "core/game_state.h"
 #include "core/input.h"
@@ -107,11 +102,38 @@ int main(void)
     bool prev_hearts_broken = false;
     bool quit_requested = false;
 
+    PassSubphase prev_subphase = pps.subphase;
+
     while (!WindowShouldClose() && !quit_requested) {
         anim_set_speed(settings_anim_multiplier(g_settings.anim_speed));
         clock_update(&clk);
         process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
 
+        /* DEBUG: F5 = skip to last trick */
+        if (IsKeyPressed(KEY_F5) && gs.phase == PHASE_PLAYING) {
+            while (gs.phase == PHASE_PLAYING && gs.tricks_played < 12) {
+                if (gs.current_trick.num_played >= CARDS_PER_TRICK) {
+                    game_state_complete_trick(&gs);
+                    if (gs.phase != PHASE_PLAYING) break;
+                }
+                int current = game_state_current_player(&gs);
+                if (current < 0) {
+                    game_state_complete_trick(&gs);
+                    if (gs.phase != PHASE_PLAYING) break;
+                    continue;
+                }
+                ai_play_card(&gs, &rs, &p2, &pls, current);
+            }
+            if (gs.phase == PHASE_PLAYING &&
+                gs.current_trick.num_played >= CARDS_PER_TRICK) {
+                game_state_complete_trick(&gs);
+            }
+            rs.sync_needed = true;
+            rs.pile_card_count = 0;
+            flow_init(&flow);
+        }
+
+        GamePhase phase_before_update = gs.phase;
         while (clk.accumulator >= FIXED_DT) {
             game_update(&gs, &rs, &p2, &pps, &pls, &sui, &g_settings,
                         FIXED_DT, &quit_requested);
@@ -120,13 +142,13 @@ int main(void)
 
         audio_update(&audio, clk.raw_dt);
 
-        GamePhase phase_before = gs.phase;
         phase_transition_update(&gs, &rs, &p2, &pps, &pls, &flow,
                                 &prev_phase, &prev_hearts_broken);
 
-        /* SFX: deal */
-        if (gs.phase == PHASE_DEALING && phase_before != PHASE_DEALING)
-            audio_play_sfx(&audio, SFX_CARD_DEAL);
+        /* SFX: deal — one sound per card at stagger rate */
+        if (gs.phase == PHASE_DEALING && phase_before_update != PHASE_DEALING)
+            audio_start_stagger(&audio, SFX_CARD_DEAL, DECK_SIZE,
+                                ANIM_DEAL_CARD_STAGGER, true);
 
         /* Music: single background track for all phases */
         audio_set_music(&audio, MUSIC_BACKGROUND);
@@ -140,6 +162,13 @@ int main(void)
 
         /* Pass subphase timers (real time, UI deadlines) */
         pass_subphase_update(&pps, &gs, &rs, &p2, clk.raw_dt);
+
+        /* SFX: pass toss — one sound per card at stagger rate */
+        if (pps.subphase == PASS_SUB_TOSS_ANIM &&
+            prev_subphase != PASS_SUB_TOSS_ANIM)
+            audio_start_stagger(&audio, SFX_CARD_PLAY, rs.pass_staged_count,
+                                PASS_TOSS_STAGGER, true);
+        prev_subphase = pps.subphase;
 
         /* Consume SFX flags from PlayPhaseState */
         if (pls.card_played_sfx) {
@@ -164,6 +193,12 @@ int main(void)
         rs.vendetta_interactive = (flow.step == FLOW_WAITING_FOR_HUMAN);
 
         render_update(&gs, &rs, clk.raw_dt);
+
+        /* SFX: score tick */
+        if (rs.score_tick_pending) {
+            audio_play_sfx(&audio, SFX_SCORE_TICK);
+            rs.score_tick_pending = false;
+        }
 
         /* Compute playability for human hand (transmute-aware) */
         info_sync_playability(&gs, &rs, &p2);

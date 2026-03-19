@@ -2,24 +2,18 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: DragState, RenderState (drag), PassStagedCard, MAX_PASS_STAGED,
- *                MenuItem, UIButton, SETTINGS_ACTIVE_COUNT (now 8, was 5),
- *                TOSS_CLICK, TOSS_FLICK, TOSS_DROP, TOSS_CANCEL,
- *                render_init(), render_update(), render_draw(),
- *                render_hit_test_card(), render_hit_test_transmute(),
- *                render_hit_test_button(), render_toggle_card_selection(),
+ * @deps-exports: DragState, RenderState, ScoringSubphase enum,
+ *                PassStagedCard, MenuItem, UIButton, render_init/update/draw(),
+ *                render_hit_test_*(), render_toggle_card_selection(),
  *                render_clear_selection(), render_alloc_card_visual(),
- *                render_hit_test_contract(), render_set_contract_options(),
- *                render_chat_log_push(), render_chat_log_push_color(),
- *                render_effect_label(), CHAT_LOG_MAX, CHAT_MSG_LEN
- * @deps-requires: raylib.h (Rectangle, Vector2, Color), particle.h,
- *                 core/card.h (NUM_PLAYERS), core/game_state.h (GamePhase),
- *                 anim.h (CardVisual, MAX_CARD_VISUALS), layout.h,
- *                 phase2/effect.h
- * @deps-used-by: render.c, ai.c, play_phase.c, pass_phase.c, turn_flow.c,
- *                process_input.c, update.c, settings_ui.c, info_sync.c,
- *                phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — SETTINGS_ACTIVE_COUNT increased from 5 to 8
+ *                render_set_contract_options(), render_clear_piles(),
+ *                render_chat_log_push*(), render_effect_label()
+ * @deps-requires: raylib.h (Rectangle, Vector2, Color, RenderTexture2D),
+ *                 particle.h, anim.h (CardVisual, MAX_CARD_VISUALS, ANIM_CONTRACT_REVEAL_STAGGER),
+ *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS),
+ *                 core/game_state.h (GamePhase), phase2/effect.h
+ * @deps-used-by: render.c, update.c, main.c, game modules, core/ai.c, phase2 modules
+ * @deps-last-changed: 2026-03-19 — Added contract_reveal_count and contract_reveal_timer fields for staggered reveal animation
  * ============================================================ */
 
 #include <stdbool.h>
@@ -41,6 +35,7 @@
 #define CARD_OVERLAP_REF     30
 #define CARD_SELECT_LIFT_REF 20
 #define MENU_ITEM_COUNT  6
+#define MAX_PILE_CARDS   52  /* 13 tricks x 4 cards */
 
 /* ---- Menu Items ---- */
 
@@ -67,6 +62,16 @@ typedef struct UIButton {
 
 #define SETTINGS_ROW_COUNT     8  /* 3 display + 2 gameplay + 3 audio */
 #define SETTINGS_ACTIVE_COUNT  8
+
+/* ---- Scoring subphase ---- */
+
+typedef enum ScoringSubphase {
+    SCORE_SUB_CARDS_FLY,            /* cards flying + menu sliding */
+    SCORE_SUB_DISPLAY,              /* waiting for Continue */
+    SCORE_SUB_COUNT_UP,             /* score ticking */
+    SCORE_SUB_DONE,                 /* waiting for Next Round */
+    SCORE_SUB_CONTRACTS,            /* showing contracts panel, waiting for Next Round */
+} ScoringSubphase;
 
 /* ---- Pass staging ---- */
 
@@ -158,6 +163,8 @@ typedef struct RenderState {
 
     /* Contract scoring display */
     char     contract_result_text[NUM_PLAYERS][64];
+    char     contract_result_name[NUM_PLAYERS][32];
+    char     contract_result_desc[NUM_PLAYERS][128];
     bool     contract_result_success[NUM_PLAYERS];
     bool     show_contract_results;
 
@@ -218,6 +225,23 @@ typedef struct RenderState {
     bool        settings_disabled[SETTINGS_ROW_COUNT];
     UIButton    btn_settings_back;
     UIButton    btn_settings_apply;  /* "Apply" for display settings */
+
+    /* Scoring animation state */
+    ScoringSubphase score_subphase;
+    float           score_anim_timer;
+    float           score_menu_slide_y;     /* current Y offset (starts negative = off screen) */
+    bool            score_cards_landed;
+    bool            score_menu_arrived;
+    int             score_countup_round[NUM_PLAYERS];  /* remaining round pts to add */
+    float           score_countup_timer;
+    bool            score_tick_pending;     /* flag for main.c to play SFX */
+    int             contract_reveal_count;  /* how many rows revealed (0..NUM_PLAYERS) */
+    float           contract_reveal_timer;  /* countdown to next reveal */
+
+    /* Trick pile visuals — separate from cards[], survives sync_hands() */
+    CardVisual pile_cards[MAX_PILE_CARDS];
+    int        pile_card_count;
+    bool       pile_anim_in_progress;  /* blocks sync_needed during pile collect */
 
     /* Pass animation staging */
     PassStagedCard pass_staged[MAX_PASS_STAGED];
@@ -284,6 +308,9 @@ void render_set_contract_options(RenderState *rs, const int ids[], int count,
 /* Hit-test mouse position against transmutation inventory buttons.
  * Returns button index (0..transmute_btn_count-1), or -1 if no hit. */
 int render_hit_test_transmute(const RenderState *rs, Vector2 mouse_pos);
+
+/* Clear trick pile visuals (call at round start). */
+void render_clear_piles(RenderState *rs);
 
 /* Allocate a new card visual from the pool. Returns index, or -1 if full. */
 int render_alloc_card_visual(RenderState *rs);

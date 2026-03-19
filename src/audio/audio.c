@@ -1,7 +1,8 @@
 /* ============================================================
  * @deps-implements: audio/audio.h
- * @deps-requires: audio/audio.h, core/settings.h, raylib.h
- * @deps-last-changed: 2026-03-19 — Created
+ * @deps-requires: audio/audio.h, core/settings.h, render/anim.h (anim_get_speed),
+ *                 raylib.h
+ * @deps-last-changed: 2026-03-19 — Added SFX_SCORE_TICK asset and audio_start_stagger()
  * ============================================================ */
 
 #include "audio/audio.h"
@@ -9,6 +10,7 @@
 #include <stddef.h>
 
 #include "core/settings.h"
+#include "render/anim.h"
 
 #define FADE_DURATION 1.0f
 
@@ -21,6 +23,7 @@ static const char *sfx_paths[SFX_COUNT] = {
     "assets/sounds/card-deal.ogg",
     NULL,  /* SFX_HEARTS_BROKEN — no asset yet */
     NULL,  /* SFX_TRANSMUTE — no asset yet */
+    "assets/sounds/score-tick.ogg",
 };
 
 void audio_init(AudioState *a, const GameSettings *s)
@@ -50,6 +53,9 @@ void audio_init(AudioState *a, const GameSettings *s)
     a->previous = MUSIC_NONE;
     a->fade_timer = 0.0f;
 
+    for (int i = 0; i < MAX_SFX_STAGGERS; i++)
+        a->staggers[i].active = false;
+
     audio_apply_settings(a, s);
 }
 
@@ -62,6 +68,24 @@ void audio_shutdown(AudioState *a)
         if (a->sfx_loaded[i]) UnloadSound(a->sfx[i]);
     }
     CloseAudioDevice();
+}
+
+static void update_staggers(AudioState *a, float dt)
+{
+    for (int i = 0; i < MAX_SFX_STAGGERS; i++) {
+        SfxStagger *s = &a->staggers[i];
+        if (!s->active) continue;
+
+        s->timer -= dt;
+        while (s->timer <= 0.0f && s->remaining > 0) {
+            audio_play_sfx(a, s->sfx);
+            s->remaining--;
+            float eff = s->interval;
+            if (s->scale_by_anim) eff *= anim_get_speed();
+            s->timer += eff;
+        }
+        if (s->remaining <= 0) s->active = false;
+    }
 }
 
 void audio_update(AudioState *a, float dt)
@@ -105,6 +129,9 @@ void audio_update(AudioState *a, float dt)
             }
         }
     }
+
+    /* Tick stagger sequences */
+    update_staggers(a, dt);
 }
 
 void audio_set_music(AudioState *a, MusicContext ctx)
@@ -138,6 +165,26 @@ void audio_play_sfx(AudioState *a, SfxId id)
 
     SetSoundVolume(a->sfx[id], a->sfx_vol * a->master_vol);
     PlaySound(a->sfx[id]);
+}
+
+void audio_start_stagger(AudioState *a, SfxId sfx, int count,
+                         float base_interval, bool scale_anim)
+{
+    if (count <= 0) return;
+
+    /* Find first inactive slot, fall back to slot 0 */
+    int slot = 0;
+    for (int i = 0; i < MAX_SFX_STAGGERS; i++) {
+        if (!a->staggers[i].active) { slot = i; break; }
+    }
+
+    SfxStagger *s = &a->staggers[slot];
+    s->active = true;
+    s->sfx = sfx;
+    s->remaining = count;
+    s->interval = base_interval;
+    s->scale_by_anim = scale_anim;
+    s->timer = 0.0f;  /* fire first sound immediately on next update */
 }
 
 void audio_apply_settings(AudioState *a, const GameSettings *s)

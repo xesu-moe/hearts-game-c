@@ -36,6 +36,10 @@ void card_render_face(Card card, Vector2 pos, float scale,
 void card_render_back(Vector2 pos, float scale, float opacity,
                       float rotation_deg, Vector2 origin);
 
+/* Set texture filter for card textures (e.g., TEXTURE_FILTER_BILINEAR for
+ * downscaled cards, TEXTURE_FILTER_POINT for full-size crisp rendering). */
+void card_render_set_filter(int filter);
+
 /* Get the display color for a suit (red for hearts/diamonds, dark gray for others). */
 Color card_suit_color(Suit suit);
 

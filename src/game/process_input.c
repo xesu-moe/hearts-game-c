@@ -317,4 +317,5 @@ void process_input(GameState *gs, RenderState *rs,
             break;
         }
     }
+
 }

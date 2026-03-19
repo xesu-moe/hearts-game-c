@@ -111,6 +111,13 @@ void card_render_shutdown(void)
     }
 }
 
+void card_render_set_filter(int filter)
+{
+    if (!s_textures_loaded) return;
+    SetTextureFilter(s_spritesheet, filter);
+    SetTextureFilter(s_card_back, filter);
+}
+
 /* ---- Procedural fallbacks ---- */
 
 static void card_render_face_procedural(Card card, Vector2 pos, float scale,

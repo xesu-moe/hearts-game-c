@@ -1,19 +1,25 @@
 /* ============================================================
  * @deps-implements: turn_flow.h
  * @deps-requires: turn_flow.h, core/game_state.h, core/settings.h,
- *                 core/ai.h, render/render.h, game/play_phase.h,
+ *                 core/ai.h, core/trick.h, render/render.h (CardVisual pool),
+ *                 render/layout.h (layout_pile_position), render/anim.h
+ *                 (CardVisual.pile_owner, ANIM_PILE_*), game/play_phase.h,
  *                 phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/phase2_defs.h, stdio.h, stdlib.h
+ * @deps-last-changed: 2026-03-19 — Sets pile_owner on CardVisual in pile collection
  * ============================================================ */
 
 #include "turn_flow.h"
 
 #include <stdio.h>
 
+#include <stdlib.h>
+
 #include "core/ai.h"
 #include "core/trick.h"
 #include "render/render.h"
+#include "render/layout.h"
 #include "phase2/contract_logic.h"
 #include "phase2/vendetta_logic.h"
 #include "phase2/transmutation_logic.h"
@@ -113,6 +119,90 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
     case FLOW_TRICK_DISPLAY: {
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
         if (flow->timer <= 0.0f) {
+            /* Determine winner before transitioning (trick data still valid) */
+            int winner;
+            if (p2->enabled && trick_is_complete(&gs->current_trick)) {
+                winner = transmute_trick_get_winner(&gs->current_trick,
+                                                    &pps->current_tti);
+            } else {
+                winner = trick_get_winner(&gs->current_trick);
+            }
+
+            /* Copy trick card visuals into pile_cards[] */
+            if (winner >= 0 && rs->trick_visual_count > 0) {
+                const LayoutConfig *cfg = &rs->layout;
+                /* Must match player_screen_pos() in render.c */
+                static const PlayerPosition pos_map[NUM_PLAYERS] = {
+                    POS_BOTTOM, POS_LEFT, POS_TOP, POS_RIGHT
+                };
+                PlayerPosition winner_spos = pos_map[winner];
+                Vector2 pile_pos = layout_pile_position(winner_spos, cfg);
+
+                for (int i = 0; i < rs->trick_visual_count; i++) {
+                    int src_idx = rs->trick_visuals[i];
+                    if (src_idx < 0 || src_idx >= rs->card_count) continue;
+                    if (rs->pile_card_count >= MAX_PILE_CARDS) break;
+
+                    int pi = rs->pile_card_count;
+                    CardVisual *pv = &rs->pile_cards[pi];
+
+                    /* Copy card identity and current position from trick visual */
+                    *pv = rs->cards[src_idx];
+                    pv->pile_owner = winner;
+                    pv->face_up = false;  /* instant flip */
+                    pv->selected = false;
+                    pv->hovered = false;
+                    pv->hover_t = 0.0f;
+                    pv->use_bezier = false;
+
+                    /* Start from current trick position */
+                    pv->start = pv->position;
+                    pv->start_rotation = pv->rotation;
+
+                    /* Target: pile position with small random scatter */
+                    float scatter_x = ((float)(rand() % 7) - 3.0f) * cfg->scale;
+                    float scatter_y = ((float)(rand() % 7) - 3.0f) * cfg->scale;
+                    pv->target = (Vector2){
+                        pile_pos.x + scatter_x,
+                        pile_pos.y + scatter_y
+                    };
+                    float base_rot = (winner_spos == POS_LEFT || winner_spos == POS_RIGHT)
+                                     ? 0.0f : 90.0f;
+                    pv->target_rotation = base_rot + (float)(rand() % 11 - 5);
+                    pv->scale = 0.7f * cfg->scale;
+                    pv->origin = (Vector2){
+                        CARD_WIDTH_REF * pv->scale * 0.5f,
+                        CARD_HEIGHT_REF * pv->scale * 0.5f
+                    };
+                    pv->z_order = 50 + pi;
+                    pv->opacity = 1.0f;
+
+                    anim_start(pv, pv->target, pv->target_rotation,
+                               ANIM_PILE_COLLECT_DURATION, EASE_OUT_QUAD);
+                    pv->anim_delay = (float)i * ANIM_PILE_STAGGER * anim_mult;
+
+                    rs->pile_card_count++;
+                }
+
+                /* Hide trick visuals so they don't double-render */
+                for (int i = 0; i < rs->trick_visual_count; i++) {
+                    int idx = rs->trick_visuals[i];
+                    if (idx >= 0 && idx < rs->card_count)
+                        rs->cards[idx].opacity = 0.0f;
+                }
+            }
+
+            rs->pile_anim_in_progress = true;
+            flow->step = FLOW_TRICK_PILE_ANIM;
+            flow->timer = FLOW_PILE_ANIM_TIME * anim_mult;
+        }
+        break;
+    }
+
+    case FLOW_TRICK_PILE_ANIM: {
+        float anim_mult = settings_anim_multiplier(settings->anim_speed);
+        if (flow->timer <= 0.0f) {
+            rs->pile_anim_in_progress = false;
             flow->step = FLOW_TRICK_COLLECTING;
             flow->timer = FLOW_TRICK_COLLECT_TIME * anim_mult;
         }

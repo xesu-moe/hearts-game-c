@@ -1,11 +1,12 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (SETTINGS_ACTIVE_COUNT), particle.h,
- *                 anim.h (CardVisual, anim_get_speed), layout.h,
+ * @deps-requires: render.h (ScoringSubphase, score_* fields, contract_reveal_* fields, pile_* fields),
+ *                 particle.h, anim.h (anim_get_speed, ANIM_SCORING_* macros, ANIM_CONTRACT_REVEAL_STAGGER),
+ *                 layout.h (layout_scoring_*, layout_wipe_boundary_x()),
  *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
- *                 core/game_state.h, core/card.h, core/settings.h,
- *                 raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-19 — Uses SETTINGS_ACTIVE_COUNT (now 8) to gate UI
+ *                 core/game_state.h (PHASE_SCORING), core/card.h,
+ *                 core/settings.h, raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-03-19 — Added contract_reveal_timer countdown logic in SCORE_SUB_CONTRACTS case; uses ANIM_CONTRACT_REVEAL_STAGGER for staggered row reveal
  * ============================================================ */
 
 #include "render.h"
@@ -24,6 +25,11 @@
 #define TRICK_WINNER_DISPLAY_TIME 1.0f
 
 #define HUMAN_PLAYER 0
+
+/* Forward declarations */
+static void draw_contracts_panel(const RenderState *rs, float s,
+                                  const LayoutConfig *cfg);
+static const char *player_name(int player_id);
 
 /* Map player_id to screen position: 0=bottom, 1=left, 2=top, 3=right */
 static PlayerPosition player_screen_pos(int player_id)
@@ -105,6 +111,7 @@ int render_alloc_card_visual(RenderState *rs)
     rs->cards[idx].opacity = 1.0f;
     rs->cards[idx].transmute_id = -1;
     rs->cards[idx].hover_t = 0.0f;
+    rs->cards[idx].pile_owner = -1;
     return idx;
 }
 
@@ -337,10 +344,16 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         };
         rs->btn_continue.label = "Return to Menu";
         rs->btn_continue.visible = true;
+    } else if (gs->phase == PHASE_SCORING) {
+        /* Bounds always set; visibility controlled by scoring subphase logic */
+        rs->btn_continue.bounds = (Rectangle){
+            bc.x - 100.0f * s,
+            cfg->board_y + cfg->board_size - 100.0f * s,
+            200.0f * s, 50.0f * s
+        };
+        /* Don't overwrite label/visible — scoring animation controls those */
     } else {
-        rs->btn_continue.bounds = btn_rect;
-        rs->btn_continue.label = "Continue";
-        rs->btn_continue.visible = (gs->phase == PHASE_SCORING);
+        rs->btn_continue.visible = false;
     }
 
     /* ---- Info panel vendetta buttons ---- */
@@ -496,6 +509,9 @@ void render_init(RenderState *rs)
 
     rs->deal_complete = false;
 
+    rs->pile_card_count = 0;
+    rs->pile_anim_in_progress = false;
+
     rs->pass_staged_count = 0;
     rs->pass_anim_in_progress = false;
     rs->pass_wait_timer = 0.0f;
@@ -524,7 +540,7 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
      * Block sync during pass toss/wait/receive to preserve staged visuals.
      * Leave sync_needed set so it fires once pass_anim_in_progress clears. */
     if ((rs->phase_just_changed || rs->sync_needed) &&
-        !rs->pass_anim_in_progress) {
+        !rs->pass_anim_in_progress && !rs->pile_anim_in_progress) {
         /* Cancel any active drag — sync rebuilds visuals */
         if (rs->drag.active || rs->drag.snap_back) {
             rs->drag.active = false;
@@ -668,10 +684,12 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         rs->sync_needed = false;
     }
 
-    /* Update cached display values */
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        rs->displayed_round_points[i] = gs->players[i].round_points;
-        rs->displayed_total_scores[i] = gs->players[i].total_score;
+    /* Update cached display values (skip during SCORING — animation controls them) */
+    if (gs->phase != PHASE_SCORING) {
+        for (int i = 0; i < NUM_PLAYERS; i++) {
+            rs->displayed_round_points[i] = gs->players[i].round_points;
+            rs->displayed_total_scores[i] = gs->players[i].total_score;
+        }
     }
     rs->displayed_pass_dir = gs->pass_direction;
 
@@ -683,6 +701,101 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
     /* Update animations */
     for (int i = 0; i < rs->card_count; i++) {
         anim_update(&rs->cards[i], dt);
+    }
+    for (int i = 0; i < rs->pile_card_count; i++) {
+        anim_update(&rs->pile_cards[i], dt);
+    }
+
+    /* Scoring phase animation update */
+    if (gs->phase == PHASE_SCORING) {
+        float anim_mult = anim_get_speed();
+
+        switch (rs->score_subphase) {
+        case SCORE_SUB_CARDS_FLY: {
+            rs->score_anim_timer += dt;
+            /* Slide menu down after delay */
+            float menu_elapsed = rs->score_anim_timer -
+                                 ANIM_SCORING_MENU_DELAY * anim_mult;
+            if (menu_elapsed > 0.0f) {
+                float menu_dur = ANIM_SCORING_MENU_DURATION * anim_mult;
+                float t = menu_elapsed / menu_dur;
+                if (t > 1.0f) t = 1.0f;
+                /* Ease out cubic */
+                float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+                rs->score_menu_slide_y =
+                    -rs->layout.board_size * (1.0f - et);
+                if (t >= 1.0f) rs->score_menu_arrived = true;
+            }
+
+            /* Check if all scoring pile cards are done animating */
+            bool all_done = true;
+            for (int i = 0; i < rs->pile_card_count; i++) {
+                if (rs->pile_cards[i].opacity > 0.0f &&
+                    (rs->pile_cards[i].animating ||
+                     rs->pile_cards[i].anim_delay > 0.0f)) {
+                    all_done = false;
+                    break;
+                }
+            }
+            if (all_done) rs->score_cards_landed = true;
+
+            /* Transition when both cards landed and menu arrived */
+            if (rs->score_cards_landed && rs->score_menu_arrived) {
+                rs->score_subphase = SCORE_SUB_DISPLAY;
+                rs->btn_continue.visible = true;
+                rs->btn_continue.label = "Continue";
+            }
+            break;
+        }
+
+        case SCORE_SUB_DISPLAY:
+        case SCORE_SUB_DONE:
+            /* Idle, waiting for input (handled in update.c) */
+            break;
+
+        case SCORE_SUB_CONTRACTS:
+            /* Staggered reveal of contract rows */
+            if (rs->contract_reveal_count < NUM_PLAYERS) {
+                rs->contract_reveal_timer -= dt;
+                if (rs->contract_reveal_timer <= 0.0f) {
+                    rs->contract_reveal_count++;
+                    if (rs->contract_reveal_count < NUM_PLAYERS) {
+                        rs->contract_reveal_timer =
+                            ANIM_CONTRACT_REVEAL_STAGGER * anim_mult;
+                    } else {
+                        /* All revealed — show button */
+                        rs->btn_continue.visible = true;
+                    }
+                }
+            }
+            break;
+
+        case SCORE_SUB_COUNT_UP: {
+            float rate = ANIM_SCORING_COUNTUP_RATE * anim_mult;
+            rs->score_countup_timer += dt;
+            if (rs->score_countup_timer >= rate) {
+                rs->score_countup_timer -= rate;
+                bool any_remaining = false;
+                for (int i = 0; i < NUM_PLAYERS; i++) {
+                    if (rs->score_countup_round[i] > 0) {
+                        rs->score_countup_round[i]--;
+                        rs->displayed_total_scores[i]++;
+                        any_remaining = true;
+                    }
+                }
+                if (any_remaining) {
+                    rs->score_tick_pending = true;
+                } else {
+                    rs->score_subphase = SCORE_SUB_DONE;
+                    rs->btn_continue.visible = true;
+                    rs->btn_continue.label =
+                        game_state_is_game_over(gs) ? "Game Over" : "Next Round";
+                }
+            }
+            break;
+        }
+
+        }
     }
 
     /* Check deal completion */
@@ -1343,6 +1456,11 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     draw_left_panel_chat(rs);
     draw_left_panel_info(rs);
 
+    /* Draw pile cards (underneath trick/hand cards) */
+    for (int i = 0; i < rs->pile_card_count; i++) {
+        draw_card_visual(&rs->pile_cards[i], s);
+    }
+
     /* Draw hands */
     for (int i = 0; i < rs->card_count; i++) {
         draw_card_visual(&rs->cards[i], s);
@@ -1407,80 +1525,169 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     }
 }
 
-static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
+/* Draw the contracts results panel: 3 columns (Player | Contract | Result).
+ * Middle column shows contract name + description on the line below. */
+static void draw_contracts_panel(const RenderState *rs, float s,
+                                  const LayoutConfig *cfg)
 {
-    float s = rs->layout.scale;
-    const LayoutConfig *cfg = &rs->layout;
-
-    Rectangle br = layout_board_rect(cfg);
-    DrawRectangleRec(br, (Color){0, 0, 0, 150});
+    ContractsTableLayout tbl;
+    layout_contracts_table(cfg, &tbl);
 
     Vector2 bc = layout_board_center(cfg);
+    int font22 = (int)(22.0f * s);
+    int font13 = (int)(13.0f * s);
+    int table_x = (int)tbl.table_x;
+    int col2_x  = (int)tbl.col2_x;
+    int col3_x  = (int)tbl.col3_x;
+    int col3_w  = (int)tbl.col3_w;
 
+    /* Title */
+    const char *title = "Contract Results";
+    int title_size = (int)(36.0f * s);
+    int tw = MeasureText(title, title_size);
+    DrawText(title, (int)(bc.x - (float)tw * 0.5f),
+             (int)tbl.title_y, title_size, GOLD);
+
+    /* Header */
+    int header_y = (int)tbl.header_y;
+    DrawText("Player", table_x, header_y, font22, LIGHTGRAY);
+    DrawText("Contract", col2_x, header_y, font22, LIGHTGRAY);
+    {
+        const char *rh = "Result";
+        int rw = MeasureText(rh, font22);
+        DrawText(rh, col3_x + col3_w - rw, header_y, font22, LIGHTGRAY);
+    }
+
+    DrawLine(table_x, (int)tbl.line_y,
+             table_x + (int)tbl.table_w, (int)tbl.line_y, GRAY);
+
+    /* Player rows */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        if (rs->contract_result_name[i][0] == '\0') continue;
+
+        int y = (int)layout_contracts_row_y(i, &tbl);
+        bool revealed = i < rs->contract_reveal_count;
+
+        if (revealed) {
+            Color row_col = rs->contract_result_success[i] ? GREEN : RED;
+            Color desc_col = rs->contract_result_success[i]
+                                 ? (Color){100, 200, 100, 180}
+                                 : (Color){200, 100, 100, 180};
+
+            /* Column 1: Player name */
+            DrawText(player_name(i), table_x, y, font22, row_col);
+
+            /* Column 2: Contract name + description below */
+            DrawText(rs->contract_result_name[i], col2_x, y, font22, row_col);
+            DrawText(rs->contract_result_desc[i], col2_x,
+                     y + font22 + (int)(2.0f * s), font13, desc_col);
+
+            /* Column 3: Result, right-aligned */
+            const char *status = rs->contract_result_success[i]
+                                     ? "Completed!" : "Failed";
+            int sw = MeasureText(status, font22);
+            DrawText(status, col3_x + col3_w - sw, y, font22, row_col);
+        } else {
+            /* Not yet revealed: neutral colors, no result */
+            DrawText(player_name(i), table_x, y, font22, LIGHTGRAY);
+            DrawText(rs->contract_result_name[i], col2_x, y, font22, LIGHTGRAY);
+            DrawText(rs->contract_result_desc[i], col2_x,
+                     y + font22 + (int)(2.0f * s), font13, DARKGRAY);
+        }
+    }
+}
+
+/* Draw the scoring table (shared by several subphases). */
+static void draw_scoring_table(const RenderState *rs, float s,
+                                const LayoutConfig *cfg)
+{
+    ScoringTableLayout tbl;
+    layout_scoring_table(cfg, rs->score_menu_slide_y, &tbl);
+
+    Rectangle br = layout_board_rect(cfg);
+
+    /* Clip the sliding menu content to the board area */
+    BeginScissorMode((int)br.x, (int)br.y, (int)br.width, (int)br.height);
+
+    Vector2 bc = layout_board_center(cfg);
+    int col_w = (int)tbl.col_w;
+    int table_x = (int)tbl.table_x;
+    int table_y = (int)tbl.header_y;
+    int font22 = (int)(22.0f * s);
+
+    /* Title */
     const char *title = "Round Complete";
     int title_size = (int)(36.0f * s);
     int tw = MeasureText(title, title_size);
     DrawText(title, (int)(bc.x - (float)tw * 0.5f),
-             (int)(cfg->board_y + 100.0f * s), title_size, RAYWHITE);
-
-    /* Score table */
-    int col_w = (int)(150.0f * s);
-    int table_x = (int)(cfg->board_x + (cfg->board_size - (float)(col_w * 3)) * 0.5f);
-    int table_y = (int)(cfg->board_y + 180.0f * s);
-    int row_h = (int)(40.0f * s);
-    int font22 = (int)(22.0f * s);
+             (int)tbl.title_y, title_size, RAYWHITE);
 
     /* Header */
     DrawText("Player", table_x, table_y, font22, LIGHTGRAY);
-    DrawText("Round", table_x + col_w, table_y, font22, LIGHTGRAY);
-    DrawText("Total", table_x + col_w * 2, table_y, font22, LIGHTGRAY);
+    DrawText("Total", table_x + col_w, table_y, font22, LIGHTGRAY);
+    DrawText("Round", table_x + col_w * 2, table_y, font22, LIGHTGRAY);
+    DrawText("Cards", table_x + col_w * 3, table_y, font22, LIGHTGRAY);
 
-    DrawLine(table_x, table_y + (int)(28.0f * s),
-             table_x + col_w * 3, table_y + (int)(28.0f * s), GRAY);
+    DrawLine(table_x, (int)tbl.line_y,
+             table_x + col_w * tbl.num_cols, (int)tbl.line_y, GRAY);
 
-    /* Find best/worst for highlighting */
+    /* Find best/worst for highlighting (use displayed totals for animation) */
     int best_score = 999, worst_score = -1;
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (gs->players[i].total_score < best_score)
-            best_score = gs->players[i].total_score;
-        if (gs->players[i].total_score > worst_score)
-            worst_score = gs->players[i].total_score;
+        int score = rs->displayed_total_scores[i];
+        if (score < best_score) best_score = score;
+        if (score > worst_score) worst_score = score;
     }
 
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        int y = table_y + row_h * (i + 1);
+        int y = (int)layout_scoring_row_y(i, &tbl);
         Color row_col = RAYWHITE;
-        if (gs->players[i].total_score == best_score) row_col = GREEN;
-        if (gs->players[i].total_score == worst_score) row_col = RED;
+        if (rs->displayed_total_scores[i] == best_score) row_col = GREEN;
+        if (rs->displayed_total_scores[i] == worst_score) row_col = RED;
 
         DrawText(player_name(i), table_x, y, font22, row_col);
 
         char pts[16];
-        snprintf(pts, sizeof(pts), "%d", rs->displayed_round_points[i]);
+        snprintf(pts, sizeof(pts), "%d", rs->displayed_total_scores[i]);
         DrawText(pts, table_x + col_w, y, font22, row_col);
 
-        snprintf(pts, sizeof(pts), "%d", rs->displayed_total_scores[i]);
+        snprintf(pts, sizeof(pts), "+%d", rs->displayed_round_points[i]);
         DrawText(pts, table_x + col_w * 2, y, font22, row_col);
     }
 
-    /* Contract results */
-    if (rs->show_contract_results) {
-        int cr_y = table_y + row_h * (NUM_PLAYERS + 1) + (int)(20.0f * s);
-        DrawLine(table_x, cr_y - (int)(8.0f * s),
-                 table_x + col_w * 3, cr_y - (int)(8.0f * s), GRAY);
+    EndScissorMode();
+}
 
-        DrawText("Contracts", table_x, cr_y, font22, LIGHTGRAY);
-        cr_y += (int)(30.0f * s);
+static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    float s = rs->layout.scale;
+    const LayoutConfig *cfg = &rs->layout;
+    Rectangle br = layout_board_rect(cfg);
 
-        int font18 = (int)(18.0f * s);
-        for (int i = 0; i < NUM_PLAYERS; i++) {
-            if (rs->contract_result_text[i][0] == '\0') continue;
-            Color cr_col = rs->contract_result_success[i] ? GREEN : RED;
-            DrawText(rs->contract_result_text[i], table_x, cr_y, font18, cr_col);
-            cr_y += (int)(24.0f * s);
+    /* Dark overlay */
+    DrawRectangleRec(br, (Color){0, 0, 0, 150});
+
+    if (rs->score_subphase == SCORE_SUB_CONTRACTS) {
+        /* Contracts results panel */
+        BeginScissorMode((int)br.x, (int)br.y, (int)br.width, (int)br.height);
+        draw_contracts_panel(rs, s, cfg);
+        EndScissorMode();
+    } else {
+        /* Scoring table */
+        draw_scoring_table(rs, s, cfg);
+
+        /* Draw scoring pile cards (flying cards drawn on top of overlay) */
+        card_render_set_filter(TEXTURE_FILTER_BILINEAR);
+        for (int i = 0; i < rs->pile_card_count; i++) {
+            if (rs->pile_cards[i].opacity > 0.0f) {
+                draw_card_visual(&rs->pile_cards[i], s);
+            }
         }
+        card_render_set_filter(TEXTURE_FILTER_POINT);
     }
 
+    /* Buttons drawn outside scissor so they're always visible */
     draw_button(&rs->btn_continue, s);
 }
 
@@ -1638,6 +1845,9 @@ void render_draw(const GameState *gs, const RenderState *rs)
     case PHASE_DEALING: {
         float s = rs->layout.scale;
         Vector2 bc = layout_board_center(&rs->layout);
+
+        draw_left_panel_chat(rs);
+        draw_left_panel_info(rs);
 
         /* Deck stack at board center (diminishing as cards fly out) */
         int cards_in_flight = 0;
@@ -1797,6 +2007,12 @@ void render_clear_selection(RenderState *rs)
         rs->selected_indices[i] = -1;
     }
     rs->selected_count = 0;
+}
+
+void render_clear_piles(RenderState *rs)
+{
+    rs->pile_card_count = 0;
+    rs->pile_anim_in_progress = false;
 }
 
 void render_cancel_drag(RenderState *rs)
