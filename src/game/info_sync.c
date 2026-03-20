@@ -3,7 +3,7 @@
  * @deps-requires: info_sync.h, core/game_state.h, render/render.h (RenderState.trick_transmute_ids),
  *                 phase2/phase2_state.h, phase2/phase2_defs.h,
  *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h
- * @deps-last-changed: 2026-03-20 — Populates trick_transmute_ids from PlayPhaseState.current_tti
+ * @deps-last-changed: 2026-03-20 — Mirror: use transmute_is_effective_fog(), resolved_effects[]
  * ============================================================ */
 
 #include "info_sync.h"
@@ -85,7 +85,7 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
             rs->transmute_btn_count = tcount;
             rs->pending_transmutation_id = pls->pending_transmutation;
 
-            /* Hand transmute IDs for player 0 */
+            /* Hand transmute IDs + fog mode for player 0 */
             HandTransmuteState *hts = &p2->players[0].hand_transmutes;
             for (int i = 0; i < MAX_HAND_SIZE; i++) {
                 rs->hand_transmute_ids[i] =
@@ -93,12 +93,30 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                      hts->slots[i].transmutation_id >= 0)
                         ? hts->slots[i].transmutation_id
                         : -1;
+                if (i < gs->players[0].hand.count &&
+                    transmute_is_effective_fog(hts, i, p2)) {
+                    int tp = transmute_get_transmuter(hts, i);
+                    rs->hand_fog_mode[i] = (tp == 0) ? 1 : 2;
+                } else {
+                    rs->hand_fog_mode[i] = 0;
+                }
             }
 
-            /* Trick transmute IDs */
+            /* Trick transmute IDs + fog mode */
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
                 rs->trick_transmute_ids[i] =
                     pls->current_tti.transmutation_ids[i];
+                int ttid = pls->current_tti.transmutation_ids[i];
+                if (ttid >= 0) {
+                    if (pls->current_tti.resolved_effects[i] == TEFFECT_FOG_HIDDEN) {
+                        int ttp = pls->current_tti.transmuter_player[i];
+                        rs->trick_fog_mode[i] = (ttp == 0) ? 1 : 2;
+                    } else {
+                        rs->trick_fog_mode[i] = 0;
+                    }
+                } else {
+                    rs->trick_fog_mode[i] = 0;
+                }
             }
 
             /* Transmutation card descriptions for info panel */
@@ -169,10 +187,14 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
         rs->transmute_btn_count = 0;
         rs->pending_transmutation_id = -1;
         rs->transmute_info_count = 0;
-        for (int i = 0; i < MAX_HAND_SIZE; i++)
+        for (int i = 0; i < MAX_HAND_SIZE; i++) {
             rs->hand_transmute_ids[i] = -1;
-        for (int i = 0; i < CARDS_PER_TRICK; i++)
+            rs->hand_fog_mode[i] = 0;
+        }
+        for (int i = 0; i < CARDS_PER_TRICK; i++) {
             rs->trick_transmute_ids[i] = -1;
+            rs->trick_fog_mode[i] = 0;
+        }
     }
 }
 
@@ -181,6 +203,7 @@ void info_sync_playability(GameState *gs, RenderState *rs, Phase2State *p2)
     if (gs->phase == PHASE_PLAYING) {
         const Hand *hhand = &gs->players[0].hand;
         bool ft = (gs->tricks_played == 0);
+        bool is_human_turn = (game_state_current_player(gs) == 0);
         for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
             if (p2->enabled) {
                 rs->card_playable[i] = transmute_is_valid_play(
@@ -191,6 +214,14 @@ void info_sync_playability(GameState *gs, RenderState *rs, Phase2State *p2)
                 rs->card_playable[i] = game_state_is_valid_play(
                     gs, 0, hhand->cards[i]);
             }
+            int idx = rs->hand_visuals[0][i];
+            rs->cards[idx].dimmed = is_human_turn && !rs->card_playable[i];
+        }
+    } else {
+        /* Clear dimmed state outside playing phase */
+        for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+            int idx = rs->hand_visuals[0][i];
+            rs->cards[idx].dimmed = false;
         }
     }
 }

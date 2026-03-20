@@ -1,14 +1,13 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (pause_state, pause_btns[], pause_confirm_*, PauseState, is_ingame_phase),
- *                 render.h (settings_tab/btns, settings_return_*, SETTINGS_ACTIVE_COUNT),
- *                 render.h (ScoringSubphase, score_* fields, contract_reveal_* fields, pile_* fields),
- *                 particle.h, anim.h (anim_get_speed, ANIM_SCORING_* macros),
- *                 layout.h (layout_scoring_*, layout_wipe_boundary_x()),
+ * @deps-requires: render.h (opponent_hover_active, RenderState fields),
+ *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to),
+ *                 layout.h (layout_scoring_*, layout_wipe_boundary_x),
  *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
- *                 core/game_state.h (GamePhase, PHASE_SCORING, PHASE_MENU, PHASE_SETTINGS),
+ *                 core/game_state.h (GamePhase, PHASE_SCORING),
  *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-20 — Pause menu UI rendering (buttons, confirmation dialogs)
+ * @deps-last-changed: 2026-03-20 — Reads opponent_hover_active from
+ *                     RenderState; Card visibility uses revealed_to bitmask
  * ============================================================ */
 
 #include "render.h"
@@ -189,6 +188,8 @@ static void sync_hands(const GameState *gs, RenderState *rs)
             cv->animating = false;
             cv->transmute_id = (p == HUMAN_PLAYER)
                                    ? rs->hand_transmute_ids[i] : -1;
+            cv->fog_mode = (p == HUMAN_PLAYER) ? rs->hand_fog_mode[i] : 0;
+            cv->fog_reveal_t = (cv->fog_mode > 0) ? 1.0f : 0.0f;
         }
     }
 
@@ -219,6 +220,8 @@ static void sync_hands(const GameState *gs, RenderState *rs)
         cv->z_order = 100 + i;
         cv->animating = false;
         cv->transmute_id = rs->trick_transmute_ids[i];
+        cv->fog_mode = rs->trick_fog_mode[i];
+        cv->fog_reveal_t = (cv->fog_mode > 0) ? 1.0f : 0.0f;
     }
 }
 
@@ -632,6 +635,18 @@ void render_init(RenderState *rs)
     rs->settings_return_paused = false;
 
     particle_init(&rs->particles);
+
+    /* Fog shader */
+    rs->fog_shader = LoadShader(NULL, "assets/shaders/fog.fs");
+    if (rs->fog_shader.id > 0) {
+        rs->fog_loc_time = GetShaderLocation(rs->fog_shader, "time");
+        rs->fog_loc_opacity = GetShaderLocation(rs->fog_shader, "opacity");
+        rs->fog_shader_loaded = true;
+    } else {
+        rs->fog_shader_loaded = false;
+    }
+    for (int i = 0; i < MAX_HAND_SIZE; i++) rs->hand_fog_mode[i] = 0;
+    for (int i = 0; i < CARDS_PER_TRICK; i++) rs->trick_fog_mode[i] = 0;
 }
 
 void render_reset_to_menu(RenderState *rs)
@@ -647,6 +662,8 @@ void render_reset_to_menu(RenderState *rs)
         rs->hand_visual_counts[i] = 0;
     rs->trick_visual_count = 0;
     rs->sync_needed = true;
+    memset(rs->hand_fog_mode, 0, sizeof(rs->hand_fog_mode));
+    memset(rs->trick_fog_mode, 0, sizeof(rs->trick_fog_mode));
 }
 
 void render_update(const GameState *gs, RenderState *rs, float dt)
@@ -984,6 +1001,23 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         }
     }
 
+    /* Opponent hover (for Rogue/Duel card picking) */
+    for (int p = 1; p < NUM_PLAYERS; p++) {
+        for (int i = 0; i < rs->hand_visual_counts[p]; i++) {
+            int idx = rs->hand_visuals[p][i];
+            if (idx < 0 || idx >= rs->card_count) continue;
+            rs->cards[idx].hovered = false;
+        }
+    }
+    if (rs->opponent_hover_active) {
+        Vector2 mouse = GetMousePosition();
+        int opp = -1;
+        int hit = render_hit_test_opponent_card(rs, mouse, &opp);
+        if (hit >= 0) {
+            rs->cards[hit].hovered = true;
+        }
+    }
+
     /* Drag tracking: smooth card follow */
     if (rs->drag.active && rs->drag.card_visual_idx >= 0 &&
         rs->drag.card_visual_idx < rs->card_count) {
@@ -1117,6 +1151,26 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         }
     }
 
+    /* Animate hover_t for opponent hand cards (when opponent_hover_active) */
+    if (rs->opponent_hover_active) {
+        for (int p = 1; p < NUM_PLAYERS; p++) {
+            for (int i = 0; i < rs->hand_visual_counts[p]; i++) {
+                int idx = rs->hand_visuals[p][i];
+                CardVisual *cv = &rs->cards[idx];
+                float hover_target = cv->hovered ? 1.0f : 0.0f;
+                float diff = hover_target - cv->hover_t;
+                if (fabsf(diff) > 0.001f) {
+                    float blend = 1.0f - expf(-HOVER_ANIM_SPEED * dt);
+                    cv->hover_t += diff * blend;
+                    if (fabsf(hover_target - cv->hover_t) < 0.001f)
+                        cv->hover_t = hover_target;
+                } else {
+                    cv->hover_t = hover_target;
+                }
+            }
+        }
+    }
+
     /* Update vendetta info panel button hover state */
     if (gs->phase == PHASE_PLAYING || gs->phase == PHASE_PASSING) {
         Vector2 mouse = GetMousePosition();
@@ -1202,7 +1256,8 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
 /* ---- Drawing helpers ---- */
 
-static void draw_card_visual(const CardVisual *cv, float ui_scale)
+static void draw_card_visual(const CardVisual *cv, float ui_scale,
+                             const RenderState *rs)
 {
     Vector2 pos = cv->position;
 
@@ -1223,7 +1278,10 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale)
         pos.y -= CARD_SELECT_LIFT_REF * ui_scale;
     }
 
-    if (cv->face_up) {
+    bool visible = cv->face_up || (cv->revealed_to & 1); /* bit 0 = player 0 = viewer */
+    /* Fog opaque mode: hide identity by drawing card back */
+    bool fog_opaque = (cv->fog_mode == 2 && cv->fog_reveal_t > 0.01f);
+    if (visible && !fog_opaque) {
         card_render_face(cv->card, pos, effective_scale, cv->opacity,
                          cv->hovered, cv->selected,
                          cv->rotation, origin);
@@ -1232,10 +1290,27 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale)
                          cv->rotation, origin);
     }
 
+    /* Dim overlay for unplayable cards.  Drawn per-card so that later
+     * cards in the hand paint over earlier dim rects — no overlap darkening. */
+    if (cv->dimmed) {
+        float cw = CARD_WIDTH_REF * effective_scale;
+        float ch = CARD_HEIGHT_REF * effective_scale;
+
+        rlPushMatrix();
+        rlTranslatef(pos.x, pos.y, 0.0f);
+        rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
+        rlTranslatef(-origin.x, -origin.y, 0.0f);
+
+        Rectangle dim_rect = {0, 0, cw, ch};
+        DrawRectangleRounded(dim_rect, 0.15f, 4, (Color){0, 0, 0, 100});
+
+        rlPopMatrix();
+    }
+
     /* Transmuted card overlay: purple border + ID badge.
      * Use the same rlgl matrix transforms as card_render_face so the
      * overlay aligns with the card even when rotated. */
-    if (cv->transmute_id >= 0 && cv->face_up && cv->opacity > 0.0f) {
+    if (cv->transmute_id >= 0 && visible && cv->opacity > 0.0f) {
         float cw = CARD_WIDTH_REF * effective_scale;
         float ch = CARD_HEIGHT_REF * effective_scale;
 
@@ -1258,6 +1333,30 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale)
         DrawRectangle(bx - 2, by - 1, tw + 4, badge_fs + 2,
                       (Color){80, 0, 120, 200});
         DrawText(id_buf, bx, by, badge_fs, WHITE);
+
+        rlPopMatrix();
+    }
+
+    /* Fog overlay */
+    if (cv->fog_mode > 0 && cv->fog_reveal_t > 0.01f && cv->opacity > 0.0f &&
+        rs && rs->fog_shader_loaded) {
+        float cw = CARD_WIDTH_REF * effective_scale;
+        float ch = CARD_HEIGHT_REF * effective_scale;
+        float fog_opacity = (cv->fog_mode == 1) ? 0.4f * cv->fog_reveal_t
+                                                 : 0.95f * cv->fog_reveal_t;
+        float t = (float)GetTime();
+        SetShaderValue(rs->fog_shader, rs->fog_loc_time, &t, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(rs->fog_shader, rs->fog_loc_opacity, &fog_opacity,
+                       SHADER_UNIFORM_FLOAT);
+
+        rlPushMatrix();
+        rlTranslatef(pos.x, pos.y, 0.0f);
+        rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
+        rlTranslatef(-origin.x, -origin.y, 0.0f);
+
+        BeginShaderMode(rs->fog_shader);
+        DrawRectangle(0, 0, (int)cw, (int)ch, WHITE);
+        EndShaderMode();
 
         rlPopMatrix();
     }
@@ -1510,7 +1609,7 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
 
     /* Draw all hands (all subphases) */
     for (int i = 0; i < rs->card_count; i++) {
-        draw_card_visual(&rs->cards[i], s);
+        draw_card_visual(&rs->cards[i], s, rs);
     }
 }
 
@@ -1686,12 +1785,12 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
 
     /* Draw pile cards (underneath trick/hand cards) */
     for (int i = 0; i < rs->pile_card_count; i++) {
-        draw_card_visual(&rs->pile_cards[i], s);
+        draw_card_visual(&rs->pile_cards[i], s, rs);
     }
 
     /* Draw hands */
     for (int i = 0; i < rs->card_count; i++) {
-        draw_card_visual(&rs->cards[i], s);
+        draw_card_visual(&rs->cards[i], s, rs);
     }
 
     /* Turn indicator + timer (top-right of board) */
@@ -1728,29 +1827,7 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
              (int)(cfg->screen_width - (float)trick_tw - 10.0f * s),
              (int)(cfg->board_y + 38.0f * s), trick_size, LIGHTGRAY);
 
-    /* Dim unplayable cards for human player during their turn */
-    if (current == HUMAN_PLAYER) {
-        for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
-            int idx = rs->hand_visuals[HUMAN_PLAYER][i];
-            const CardVisual *cv = &rs->cards[idx];
-            if (!rs->card_playable[i]) {
-                Vector2 pos = cv->position;
-                float w = CARD_WIDTH_REF * cv->scale;
-                float h = CARD_HEIGHT_REF * cv->scale;
-
-                rlPushMatrix();
-                rlTranslatef(pos.x, pos.y, 0.0f);
-                rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
-                rlTranslatef(-cv->origin.x, -cv->origin.y, 0.0f);
-
-                Rectangle dim_rect = {0, 0, w, h};
-                DrawRectangleRounded(dim_rect, 0.15f, 4,
-                                     (Color){0, 0, 0, 100});
-
-                rlPopMatrix();
-            }
-        }
-    }
+    /* Dim unplayable cards — handled inside draw_card_visual via cv->dimmed */
 }
 
 /* Draw the contracts results panel: 3 columns (Player | Contract | Result).
@@ -1909,7 +1986,7 @@ static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
         card_render_set_filter(TEXTURE_FILTER_BILINEAR);
         for (int i = 0; i < rs->pile_card_count; i++) {
             if (rs->pile_cards[i].opacity > 0.0f) {
-                draw_card_visual(&rs->pile_cards[i], s);
+                draw_card_visual(&rs->pile_cards[i], s, rs);
             }
         }
         card_render_set_filter(TEXTURE_FILTER_POINT);
@@ -2155,7 +2232,7 @@ static void draw_ingame_phase(const GameState *gs, const RenderState *rs,
                 sorted[j + 1] = key;
             }
             for (int i = 0; i < n; i++) {
-                draw_card_visual(&rs->cards[sorted[i]], s);
+                draw_card_visual(&rs->cards[sorted[i]], s, rs);
             }
         }
 
@@ -2265,6 +2342,31 @@ int render_hit_test_card(const RenderState *rs, Vector2 mouse_pos)
 
         if (CheckCollisionPointRec(mouse_pos, card_rect)) {
             return idx;
+        }
+    }
+    return -1;
+}
+
+int render_hit_test_opponent_card(const RenderState *rs, Vector2 mouse_pos,
+                                   int *out_player)
+{
+    *out_player = -1;
+    for (int p = 1; p < NUM_PLAYERS; p++) {
+        for (int i = rs->hand_visual_counts[p] - 1; i >= 0; i--) {
+            int idx = rs->hand_visuals[p][i];
+            if (idx < 0 || idx >= rs->card_count) continue;
+            const CardVisual *cv = &rs->cards[idx];
+
+            float w = CARD_WIDTH_REF * cv->scale;
+            float h = CARD_HEIGHT_REF * cv->scale;
+            float top_left_x = cv->position.x - cv->origin.x;
+            float top_left_y = cv->position.y - cv->origin.y;
+            Rectangle card_rect = {top_left_x, top_left_y, w, h};
+
+            if (CheckCollisionPointRec(mouse_pos, card_rect)) {
+                *out_player = p;
+                return idx;
+            }
         }
     }
     return -1;

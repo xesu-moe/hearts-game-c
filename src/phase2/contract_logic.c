@@ -3,7 +3,7 @@
  * @deps-requires: contract_logic.h, phase2_state.h, phase2_defs.h,
  *                 transmutation_logic.h (transmute_round_state_init),
  *                 core/trick.h, core/card.h, raylib.h, string.h
- * @deps-last-changed: 2026-03-20 — Calls transmute_round_state_init in contract_round_reset
+ * @deps-last-changed: 2026-03-20 — Mirror: init global history fields in contract_state_init
  * ============================================================ */
 
 #include "contract_logic.h"
@@ -42,6 +42,10 @@ void contract_state_init(Phase2State *p2)
     p2->round.vendetta_used = false;
     p2->round.vendetta_chosen = false;
     p2->round.contracts_chosen = false;
+
+    /* Mirror history (game-scoped) */
+    p2->last_played_transmute_id = -1;
+    p2->last_played_resolved_effect = TEFFECT_NONE;
 }
 
 void contract_round_reset(Phase2State *p2)

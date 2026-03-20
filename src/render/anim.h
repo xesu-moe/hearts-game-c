@@ -2,17 +2,15 @@
 #define ANIM_H
 
 /* ============================================================
- * @deps-exports: CardVisual (pile_owner field), MAX_CARD_VISUALS,
- *                anim_start/update/toss_enabled(), anim_setup_toss(),
- *                anim_set_speed(), anim_get_speed(),
- *                ANIM_*_DURATION, ANIM_*_STAGGER, ANIM_CONTRACT_REVEAL_STAGGER,
- *                ANIM_REARRANGE_BLEND_RATE, TOSS_*, HOVER_* animation constants
- * @deps-requires: easing.h (EaseType), raylib.h (Vector2), core/card.h (Card)
- * @deps-used-by: render.c, update.c, turn_flow.c, pass_phase.c, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — Added ANIM_REARRANGE_BLEND_RATE macro (12.0f) for hand rearrange blending
+ * @deps-exports: struct CardVisual (fog_mode, fog_reveal_t fields)
+ * @deps-requires: easing.h, raylib.h, core/card.h, stdint.h
+ * @deps-used-by: render.c, render.h, info_sync.c, game/update.c
+ * @deps-last-changed: 2026-03-20 — Fog Transmutation: added fog_mode and
+ *                     fog_reveal_t fields to CardVisual for fog shader animation
  * ============================================================ */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "raylib.h"
 
@@ -56,6 +54,9 @@
 #define ANIM_SCORING_COUNTUP_RATE    0.08f
 #define ANIM_CONTRACT_REVEAL_STAGGER 0.4f
 
+#define ANIM_EFFECT_FLIGHT_DURATION  0.35f  /* card to/from center (Rogue/Duel) */
+#define ANIM_DUEL_EXCHANGE_DURATION  0.40f  /* simultaneous swap flight */
+
 #define ANIM_REARRANGE_BLEND_RATE  12.0f
 
 #define HOVER_SCALE_TARGET   1.15f
@@ -91,6 +92,10 @@ typedef struct CardVisual {
     Vector2  bezier_control;
     float    spin_speed;
     int      pile_owner;       /* player who won this pile card, -1 = unset */
+    uint8_t  revealed_to;     /* per-player visibility bitmask (bit N = visible to player N) */
+    uint8_t  fog_mode;        /* 0 = no fog, 1 = semi-transparent (owner), 2 = opaque */
+    float    fog_reveal_t;    /* 1.0 = fully fogged, 0.0 = revealed; animated on trick resolve */
+    bool     dimmed;          /* true = draw dark overlay (unplayable card) */
 } CardVisual;
 
 /* ---- Animation Speed ---- */

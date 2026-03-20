@@ -2,16 +2,14 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: DragState, RenderState (with pause_state, pause_btns[], etc),
- *                PauseState enum, PAUSE_BTN_COUNT, is_ingame_phase() inline,
- *                SettingsTab enum, SETTINGS_TAB_COUNT, ScoringSubphase, PassStagedCard,
- *                MenuItem, UIButton, render_init/update/draw, hit_test/drag APIs
- * @deps-requires: raylib.h, particle.h, anim.h (CardVisual, MAX_CARD_VISUALS),
- *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS),
- *                 core/game_state.h (GamePhase, PHASE_PASSING/PLAYING/SCORING/DEALING),
- *                 phase2/effect.h
- * @deps-used-by: render.c, process_input.c, update.c, main.c, all game modules
- * @deps-last-changed: 2026-03-20 — Added pause menu: PauseState, is_ingame_phase(), pause fields
+ * @deps-exports: struct RenderState (fog_shader, fog_loc_time, fog_loc_opacity,
+ *                fog_shader_loaded, hand_fog_mode[], trick_fog_mode[])
+ * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/card.h,
+ *                 core/game_state.h, phase2/effect.h
+ * @deps-used-by: render.c, info_sync.c, main.c
+ * @deps-last-changed: 2026-03-20 — Fog Transmutation: added fog shader fields
+ *                     (fog_shader, fog_loc_time, fog_loc_opacity,
+ *                     fog_shader_loaded) and fog mode arrays to RenderState
  * ============================================================ */
 
 #include <stdbool.h>
@@ -291,6 +289,19 @@ typedef struct RenderState {
     /* Layout dirty flag */
     bool layout_dirty;
 
+    /* Fog shader */
+    Shader  fog_shader;
+    int     fog_loc_time;
+    int     fog_loc_opacity;
+    bool    fog_shader_loaded;
+
+    /* Per-card fog mode (parallel arrays) */
+    uint8_t hand_fog_mode[MAX_HAND_SIZE];
+    uint8_t trick_fog_mode[CARDS_PER_TRICK];
+
+    /* Opponent hover (for Rogue/Duel card picking) */
+    bool opponent_hover_active;
+
     /* Flow-driven sync control */
     bool sync_needed;      /* when true, sync_hands() rebuilds visuals */
     int  anim_play_player; /* player whose last card should animate (-1 = none) */
@@ -318,6 +329,11 @@ void render_draw(const GameState *gs, const RenderState *rs);
  * Returns index into rs->cards[], or -1 if no hit.
  * Tests in reverse z-order (topmost card first). */
 int render_hit_test_card(const RenderState *rs, Vector2 mouse_pos);
+
+/* Hit-test mouse position against opponent (players 1-3) hand cards.
+ * Returns card visual index (-1 = miss), sets *out_player to the opponent. */
+int render_hit_test_opponent_card(const RenderState *rs, Vector2 mouse_pos,
+                                   int *out_player);
 
 /* Hit-test a UI button. */
 bool render_hit_test_button(const UIButton *btn, Vector2 mouse_pos);

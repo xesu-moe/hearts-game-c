@@ -6,7 +6,7 @@
  * @deps-requires: core/game_state.h, render/render.h,
  *                 game/pass_phase.h, game/play_phase.h, game/turn_flow.h
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ * @deps-last-changed: 2026-03-20 — Added FLOW_ROGUE_CHOOSING input handling
  * ============================================================ */
 
 #include "core/game_state.h"

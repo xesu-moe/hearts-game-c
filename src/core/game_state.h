@@ -7,15 +7,15 @@
  *                game_state_init(), game_state_start_game(),
  *                game_state_reset_to_menu(), game_state_new_round(),
  *                game_state_current_player(), game_state_play_card(),
- *                game_state_complete_trick(), game_state_is_valid_play(),
- *                game_state_is_game_over(), game_state_advance_scoring(),
- *                game_state_get_winners()
+ *                game_state_complete_trick(), game_state_complete_trick_with(),
+ *                game_state_is_valid_play(), game_state_is_game_over(),
+ *                game_state_advance_scoring(), game_state_get_winners()
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
  * @deps-used-by: game_state.c, render.h, render.c, ai.h, play_phase.h, play_phase.c,
  *                pass_phase.h, pass_phase.c, turn_flow.h, turn_flow.c,
  *                process_input.h, process_input.c, update.h, update.c,
  *                info_sync.h, info_sync.c, phase_transitions.h, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-19 — Added PASS_SUB_TOSS_ANIM/TOSS_WAIT/RECEIVE to PassSubphase
+ * @deps-last-changed: 2026-03-20 — Added game_state_complete_trick_with() for Phase 2 transmutation overrides
  * ============================================================ */
 
 #include <stdbool.h>
@@ -124,6 +124,10 @@ bool game_state_play_card(GameState *gs, int player_id, Card card);
  * transitions to PHASE_SCORING. Otherwise: inits next trick with winner as lead.
  * Returns false if trick not complete or wrong phase. */
 bool game_state_complete_trick(GameState *gs);
+
+/* Same as game_state_complete_trick but with caller-supplied winner and points.
+ * Used by Phase 2 when transmutation cards override trick resolution. */
+bool game_state_complete_trick_with(GameState *gs, int winner, int points);
 
 /* Pure query: would this card play be legal for this player right now?
  * Checks phase, turn order, and delegates to trick_is_valid_play(). */

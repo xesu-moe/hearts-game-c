@@ -1,8 +1,8 @@
 /* ============================================================
  * @deps-implements: game_state.h
- * @deps-requires: game_state.h (PHASE_DEALING), player.h, deck.h, trick.h,
+ * @deps-requires: game_state.h (PHASE_DEALING, PHASE_SCORING), player.h, deck.h, trick.h,
  *                 hand.h, card.h
- * @deps-last-changed: 2026-03-19 — game_state_execute_pass no longer sets PHASE_PLAYING (caller owns transition)
+ * @deps-last-changed: 2026-03-20 — Added game_state_complete_trick_with() implementation
  * ============================================================ */
 
 #include "game_state.h"
@@ -233,14 +233,13 @@ bool game_state_play_card(GameState *gs, int player_id, Card card)
     return true;
 }
 
-bool game_state_complete_trick(GameState *gs)
+bool game_state_complete_trick_with(GameState *gs, int winner, int points)
 {
     if (gs->phase != PHASE_PLAYING || !trick_is_complete(&gs->current_trick)) {
         return false;
     }
+    if (winner < 0 || winner >= NUM_PLAYERS) return false;
 
-    int winner = trick_get_winner(&gs->current_trick);
-    int points = trick_count_points(&gs->current_trick);
     gs->players[winner].round_points += points;
     gs->tricks_played++;
 
@@ -268,6 +267,13 @@ bool game_state_complete_trick(GameState *gs)
     }
 
     return true;
+}
+
+bool game_state_complete_trick(GameState *gs)
+{
+    int winner = trick_get_winner(&gs->current_trick);
+    int points = trick_count_points(&gs->current_trick);
+    return game_state_complete_trick_with(gs, winner, points);
 }
 
 bool game_state_is_valid_play(const GameState *gs, int player_id, Card card)

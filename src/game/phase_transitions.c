@@ -1,13 +1,14 @@
 /* ============================================================
  * @deps-implements: phase_transitions.h
  * @deps-requires: phase_transitions.h, core/game_state.h (GamePhase),
- *                 render/render.h (ScoringSubphase, layout_scoring_card_position),
- *                 render/layout.h (layout_scoring_card_position, LayoutConfig),
- *                 render/anim.h (CardVisual, ANIM_SCORING_*), render/particle.h,
- *                 game/pass_phase.h, game/play_phase.h, game/turn_flow.h,
- *                 phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/vendetta_logic.h, stdio.h
- * @deps-last-changed: 2026-03-19 — Added scoring animation setup with CardVisual pool
+ *                 render/render.h (render_clear_piles, ScoringSubphase),
+ *                 render/layout.h (layout_scoring_table, layout_scoring_card_position),
+ *                 render/anim.h (CardVisual, anim_start, ANIM_SCORING_*,
+ *                 EASE_OUT_QUAD), render/particle.h, game/pass_phase.h,
+ *                 game/play_phase.h, game/turn_flow.h, phase2/phase2_state.h,
+ *                 phase2/contract_logic.h, phase2/transmutation_logic.h
+ *                 (transmute_effect_affects_score), phase2/vendetta_logic.h, stdio.h
+ * @deps-last-changed: 2026-03-20 — Added transmute_effect_affects_score() call
  * ============================================================ */
 
 #include "phase_transitions.h"
@@ -19,6 +20,7 @@
 #include "render/anim.h"
 #include "render/particle.h"
 #include "phase2/contract_logic.h"
+#include "phase2/transmutation_logic.h"
 #include "phase2/vendetta_logic.h"
 
 void phase_transition_update(GameState *gs, RenderState *rs,
@@ -58,8 +60,10 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         for (int i = 0; i < rs->pile_card_count; i++) {
             CardVisual *pv = &rs->pile_cards[i];
             int pts = card_points(pv->card);
-            if (pts == 0) {
-                /* Non-scoring card: hide instantly */
+            bool has_score_effect =
+                transmute_effect_affects_score(pv->transmute_id);
+            if (pts == 0 && !has_score_effect) {
+                /* Non-scoring card with no score effect: hide instantly */
                 pv->opacity = 0.0f;
             } else {
                 /* Scoring card: flip face-up, shrink, fly to row */

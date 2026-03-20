@@ -82,7 +82,7 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "INVERT_POINTS"
+      "effect": "WOTT_REDUCE_SCORE_1"
     },
     {
       "id": 7,
@@ -100,8 +100,8 @@
       "id": 8,
       "name": "The Fog",
       "description": "Card is hidden under fog — nobody can see what it is. Card logic is unchanged.",
-      "result_suit": "SUIT_NONE",
-      "result_rank": "RANK_NONE",
+      "result_suit": "SUIT_CLUBS",
+      "result_rank": "RANK_2",
       "special": "TRANSMUTE_NORMAL",
       "suit_mask": [],
       "custom_points": -1,
@@ -111,7 +111,7 @@
     {
       "id": 9,
       "name": "The Mirror",
-      "description": "Copies the effects of other special cards played in the same trick, duplicating their effects.",
+      "description": "Copies the triggered effect of the last transmutation card played in any previous trick.",
       "result_suit": "SUIT_DIAMONDS",
       "result_rank": "RANK_6",
       "special": "TRANSMUTE_NORMAL",

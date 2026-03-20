@@ -123,7 +123,7 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
             for (int p = 1; p < NUM_PLAYERS; p++) {
                 transmute_ai_apply(&gs->players[p].hand,
                                    &p2->players[p].hand_transmutes,
-                                   &p2->players[p].transmute_inv, true);
+                                   &p2->players[p].transmute_inv, true, p);
             }
         }
         break;

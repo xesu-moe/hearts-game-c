@@ -2,16 +2,13 @@
 #define TRANSMUTATION_H
 
 /* ============================================================
- * @deps-exports: enum TransmuteEffect, enum TransmuteSpecial,
- *                enum SuitMask, struct TransmutationDef,
- *                struct TransmuteInventory, struct TransmuteSlot,
- *                struct HandTransmuteState, struct TrickTransmuteInfo,
- *                struct TransmuteRoundState,
- *                MAX_TRANSMUTATION_DEFS, MAX_TRANSMUTE_INVENTORY
- * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE, CARDS_PER_TRICK)
- * @deps-used-by: phase2_state.h, phase2_defs.h, transmutation_logic.h,
- *                json_parse.h, contract_logic.c, game/play_phase.h
- * @deps-last-changed: 2026-03-20 — Added TEFFECT_WOTT_REDUCE_SCORE_3 to enum, gatherer_reduction field
+ * @deps-exports: enum TransmuteEffect (TEFFECT_FOG_HIDDEN, TEFFECT_MIRROR),
+ *                enum SuitMask, struct TransmuteSlot (transmuter_player),
+ *                TrickTransmuteInfo (resolved_effects[])
+ * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE)
+ * @deps-used-by: transmutation_logic.h, play_phase.c, info_sync.c, update.c,
+ *                turn_flow.c, json_parse.c, phase2_state.h, main.c
+ * @deps-last-changed: 2026-03-20 — Mirror: added TEFFECT_MIRROR, resolved_effects[]
  * ============================================================ */
 
 #include <stdbool.h>
@@ -24,6 +21,11 @@ typedef enum TransmuteEffect {
     TEFFECT_NONE = 0,
     TEFFECT_WOTT_DUPLICATE_ROUND_POINTS,  /* The Martyr */
     TEFFECT_WOTT_REDUCE_SCORE_3,          /* The Gatherer */
+    TEFFECT_WOTT_REVEAL_OPPONENT_CARD,    /* The Rogue */
+    TEFFECT_WOTT_REDUCE_SCORE_1,          /* The Pendulum */
+    TEFFECT_WOTT_SWAP_CARD,               /* The Duel */
+    TEFFECT_FOG_HIDDEN,                   /* The Fog: card hidden visually, logic unchanged */
+    TEFFECT_MIRROR,                       /* Mirror: copies last globally-played transmutation effect */
     TEFFECT_COUNT
 } TransmuteEffect;
 
@@ -75,6 +77,7 @@ typedef struct TransmuteInventory {
 typedef struct TransmuteSlot {
     int  transmutation_id; /* -1 = not transmuted */
     Card original_card;    /* Card before transmutation */
+    int  transmuter_player; /* player who applied, -1 = none */
 } TransmuteSlot;
 
 typedef struct HandTransmuteState {
@@ -85,6 +88,8 @@ typedef struct HandTransmuteState {
 
 typedef struct TrickTransmuteInfo {
     int transmutation_ids[CARDS_PER_TRICK]; /* -1 = not transmuted */
+    int transmuter_player[CARDS_PER_TRICK]; /* player who applied each transmutation, -1 = none */
+    TransmuteEffect resolved_effects[CARDS_PER_TRICK]; /* actual effect after Mirror resolution */
 } TrickTransmuteInfo;
 
 /* --- Per-round transmutation effect tracking --- */
@@ -92,6 +97,8 @@ typedef struct TrickTransmuteInfo {
 typedef struct TransmuteRoundState {
     bool martyr_flags[NUM_PLAYERS]; /* true = this player's round_points doubled at round end */
     int gatherer_reduction[NUM_PLAYERS]; /* Accumulated score reduction (multiples of 3) */
+    int rogue_pending_winner; /* Player who won a Rogue trick, -1 = none */
+    int duel_pending_winner;  /* Player who won a Duel trick, -1 = none */
 } TransmuteRoundState;
 
 #endif /* TRANSMUTATION_H */

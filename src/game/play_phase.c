@@ -4,7 +4,7 @@
  *                 core/hand.h, core/trick.h, render/render.h,
  *                 phase2/phase2_state.h, phase2/transmutation_logic.h,
  *                 phase2/phase2_defs.h (phase2_get_transmutation)
- * @deps-last-changed: 2026-03-19 — Set SFX flags in play_card_with_transmute()
+ * @deps-last-changed: 2026-03-20 — Mirror: resolve effect, update global history, chat log
  * ============================================================ */
 
 #include "play_phase.h"
@@ -83,15 +83,33 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
     /* Record in trick transmute info */
     if (trick_slot < CARDS_PER_TRICK) {
         pps->current_tti.transmutation_ids[trick_slot] = tid;
+        pps->current_tti.transmuter_player[trick_slot] =
+            (hand_idx >= 0) ? hts->slots[hand_idx].transmuter_player : -1;
+
+        /* Resolve effect (handles Mirror chaining) and record */
+        TransmuteEffect resolved = transmute_resolve_effect(tid, p2);
+        pps->current_tti.resolved_effects[trick_slot] = resolved;
+
+        /* Update global Mirror history */
+        if (tid >= 0) {
+            p2->last_played_transmute_id = tid;
+            p2->last_played_resolved_effect = resolved;
+        }
     }
 
     /* Log transmuted card play in violet */
-    if (is_transmuted && tid >= 0) {
+    if (is_transmuted && tid >= 0 && trick_slot < CARDS_PER_TRICK) {
         const TransmutationDef *tdef = phase2_get_transmutation(tid);
         if (tdef) {
             char tmsg[CHAT_MSG_LEN];
-            snprintf(tmsg, sizeof(tmsg), "[%s] %s",
-                     tdef->name, tdef->description);
+            if (tdef->effect == TEFFECT_MIRROR) {
+                snprintf(tmsg, sizeof(tmsg), "[%s] Mirroring: %s",
+                         tdef->name, transmute_effect_name(
+                             pps->current_tti.resolved_effects[trick_slot]));
+            } else {
+                snprintf(tmsg, sizeof(tmsg), "[%s] %s",
+                         tdef->name, tdef->description);
+            }
             render_chat_log_push_color(rs, tmsg, VIOLET);
         }
     }

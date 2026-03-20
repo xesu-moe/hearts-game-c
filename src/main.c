@@ -66,8 +66,10 @@ int main(void)
     p2.enabled = true;
 
 #ifdef DEBUG
-    /* DEBUG: give player 0 a Black Joker for testing */
-    transmute_inv_add(&p2.players[0].transmute_inv, 1);
+    /* DEBUG: give player 0 Mirror, Fog, and Duel for testing */
+    transmute_inv_add(&p2.players[0].transmute_inv, 9);  /* The Mirror */
+    transmute_inv_add(&p2.players[0].transmute_inv, 8);  /* The Fog */
+    transmute_inv_add(&p2.players[0].transmute_inv, 7);  /* The Duel */
 #endif
 
     RenderState rs;
@@ -95,8 +97,11 @@ int main(void)
     PlayPhaseState pls = {
         .pending_transmutation = -1,
     };
-    for (int ti = 0; ti < CARDS_PER_TRICK; ti++)
+    for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
         pls.current_tti.transmutation_ids[ti] = -1;
+        pls.current_tti.transmuter_player[ti] = -1;
+        pls.current_tti.resolved_effects[ti] = TEFFECT_NONE;
+    }
 
     SettingsUIState sui = {
         .is_pending = false,
@@ -142,7 +147,7 @@ int main(void)
         GamePhase phase_before_update = gs.phase;
         while (clk.accumulator >= FIXED_DT) {
             game_update(&gs, &rs, &p2, &pps, &pls, &sui, &g_settings,
-                        FIXED_DT, &quit_requested);
+                        &flow, FIXED_DT, &quit_requested);
             clk.accumulator -= FIXED_DT;
         }
 
@@ -228,6 +233,7 @@ int main(void)
 
     audio_shutdown(&audio);
     card_render_shutdown();
+    if (rs.fog_shader_loaded) UnloadShader(rs.fog_shader);
     CloseWindow();
     return 0;
 }

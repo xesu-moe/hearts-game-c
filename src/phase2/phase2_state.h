@@ -3,15 +3,17 @@
 
 /* ============================================================
  * @deps-exports: struct RoundPhase2 (suit_seen[], transmute_round),
- *                struct PlayerPhase2, struct KingProgress, struct Phase2State
+ *                struct PlayerPhase2, struct KingProgress,
+ *                struct Phase2State (last_played_transmute_id, last_played_resolved_effect)
  * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT),
  *                 contract.h (ContractInstance, CONTRACT_TIERS),
  *                 effect.h (ActiveEffect),
- *                 transmutation.h (TransmuteInventory, HandTransmuteState, TransmuteRoundState)
+ *                 transmutation.h (TransmuteEffect, TransmuteInventory,
+ *                 HandTransmuteState, TransmuteRoundState)
  * @deps-used-by: phase2_defs.h, contract_logic.c, vendetta_logic.h, ai.h,
  *                play_phase.h, pass_phase.h, turn_flow.h, update.h,
  *                info_sync.h, phase_transitions.h, main.c
- * @deps-last-changed: 2026-03-20 — Added transmute_round field to RoundPhase2
+ * @deps-last-changed: 2026-03-20 — Mirror: added global history fields to Phase2State
  * ============================================================ */
 
 #include <stdbool.h>
@@ -82,6 +84,10 @@ typedef struct Phase2State {
     bool         enabled;
     PlayerPhase2 players[NUM_PLAYERS];
     RoundPhase2  round;
+
+    /* Game-scoped Mirror history (persists across rounds) */
+    int             last_played_transmute_id;      /* -1 = none played yet */
+    TransmuteEffect last_played_resolved_effect;   /* resolved effect (handles Mirror chain) */
 } Phase2State;
 
 #endif /* PHASE2_STATE_H */

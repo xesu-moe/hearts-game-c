@@ -1,11 +1,10 @@
 /* ============================================================
  * @deps-implements: process_input.h
- * @deps-requires: process_input.h, core/input.h (INPUT_CMD_RETURN_TO_MENU, etc),
- *                 core/game_state.h, render/render.h (pause_state, pause_btns[],
- *                 pause_confirm_*, is_ingame_phase, drag, hit_test functions),
- *                 render/layout.h (layout_trick_position), game/pass_phase.h,
- *                 game/play_phase.h, game/turn_flow.h, math.h
- * @deps-last-changed: 2026-03-20 — Pause menu input handling (buttons, confirmations)
+ * @deps-requires: input.h (INPUT_CMD_DUEL_PICK/GIVE/RETURN), game_state.h,
+ *                 hand.h, render.h (hit_test_opponent_card, drag, pause fields),
+ *                 layout.h, pass_phase.h, play_phase.h,
+ *                 turn_flow.h (FLOW_DUEL_PICK_OPPONENT/OWN), math.h
+ * @deps-last-changed: 2026-03-20 — Added Duel opponent+own card hit-testing
  * ============================================================ */
 
 #include "process_input.h"
@@ -269,6 +268,89 @@ void process_input(GameState *gs, RenderState *rs,
         }
 
         case PHASE_PLAYING: {
+            /* Duel pick opponent: intercept clicks on opponent cards */
+            if (flow_step == FLOW_DUEL_PICK_OPPONENT) {
+                int opp_player = -1;
+                int cv_hit = render_hit_test_opponent_card(rs, mouse, &opp_player);
+                if (cv_hit >= 0 && opp_player > 0) {
+                    int hand_idx = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[opp_player]; ci++) {
+                        if (rs->hand_visuals[opp_player][ci] == cv_hit) {
+                            hand_idx = ci;
+                            break;
+                        }
+                    }
+                    if (hand_idx >= 0) {
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_DUEL_PICK,
+                            .source_player = 0,
+                            .duel_pick = {
+                                .target_player = opp_player,
+                                .hand_index = hand_idx,
+                            },
+                        });
+                    }
+                }
+                break;
+            }
+            /* Duel pick own card or return: intercept clicks */
+            if (flow_step == FLOW_DUEL_PICK_OWN) {
+                /* Check own hand cards first */
+                int hit = render_hit_test_card(rs, mouse);
+                if (hit >= 0) {
+                    int hand_idx = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                        if (rs->hand_visuals[0][ci] == hit) {
+                            hand_idx = ci;
+                            break;
+                        }
+                    }
+                    if (hand_idx >= 0) {
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_DUEL_GIVE,
+                            .source_player = 0,
+                            .duel_give = { .hand_index = hand_idx },
+                        });
+                    }
+                    break;
+                }
+                /* Check if clicking the same opponent card to return it */
+                int opp_player = -1;
+                int cv_hit = render_hit_test_opponent_card(rs, mouse, &opp_player);
+                if (cv_hit >= 0 && opp_player > 0) {
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_DUEL_RETURN,
+                        .source_player = 0,
+                    });
+                }
+                break;
+            }
+            /* Rogue choosing: intercept clicks on opponent cards */
+            if (flow_step == FLOW_ROGUE_CHOOSING) {
+                int opp_player = -1;
+                int cv_hit = render_hit_test_opponent_card(rs, mouse, &opp_player);
+                if (cv_hit >= 0 && opp_player > 0) {
+                    /* Reverse lookup: card visual index → hand index */
+                    int hand_idx = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[opp_player]; ci++) {
+                        if (rs->hand_visuals[opp_player][ci] == cv_hit) {
+                            hand_idx = ci;
+                            break;
+                        }
+                    }
+                    if (hand_idx >= 0) {
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_ROGUE_REVEAL,
+                            .source_player = 0,
+                            .rogue_reveal = {
+                                .target_player = opp_player,
+                                .hand_index = hand_idx,
+                            },
+                        });
+                    }
+                }
+                break;
+            }
             /* Vendetta panel buttons */
             if (flow_step == FLOW_WAITING_FOR_HUMAN &&
                 rs->vendetta_available && rs->vendetta_interactive) {

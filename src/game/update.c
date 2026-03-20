@@ -1,13 +1,11 @@
 /* ============================================================
  * @deps-implements: update.h
- * @deps-requires: update.h, core/input.h (INPUT_CMD_RETURN_TO_MENU, INPUT_CMD_CANCEL, etc),
- *                 core/game_state.h, core/settings.h, render/render.h (pause_state,
- *                 settings_return_phase/paused, is_ingame_phase, sync_needed),
- *                 render/anim.h (ANIM_CONTRACT_REVEAL_STAGGER, anim_get_speed),
- *                 game/pass_phase.h, game/play_phase.h, game/settings_ui.h,
- *                 phase2/contract_logic.h, phase2/vendetta_logic.h,
- *                 phase2/transmutation_logic.h, phase2/phase2_defs.h, stdbool.h
- * @deps-last-changed: 2026-03-20 — Pause menu state transitions (INPUT_CMD_CANCEL, INPUT_CMD_RETURN_TO_MENU)
+ * @deps-requires: input.h (INPUT_CMD_DUEL_PICK/GIVE/RETURN), game_state.h,
+ *                 settings.h, render.h (pause_state, settings_return_*,
+ *                 is_ingame_phase, sync_needed), anim.h,
+ *                 pass_phase.h, play_phase.h, settings_ui.h, turn_flow.h,
+ *                 phase2/contract_logic.h, transmutation_logic.h, phase2_defs.h
+ * @deps-last-changed: 2026-03-20 — Added Duel input command handlers
  * ============================================================ */
 
 #include "update.h"
@@ -24,7 +22,7 @@
 void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                  PassPhaseState *pps, PlayPhaseState *pls,
                  SettingsUIState *sui, GameSettings *settings,
-                 float dt, bool *quit_requested)
+                 TurnFlow *flow, float dt, bool *quit_requested)
 {
     (void)dt;
 
@@ -61,8 +59,11 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 pps->vendetta_ui_active = false;
                 pps->subphase = PASS_SUB_VENDETTA;
                 pls->pending_transmutation = -1;
-                for (int ti = 0; ti < CARDS_PER_TRICK; ti++)
+                for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
                     pls->current_tti.transmutation_ids[ti] = -1;
+                    pls->current_tti.transmuter_player[ti] = -1;
+                    pls->current_tti.resolved_effects[ti] = TEFFECT_NONE;
+                }
                 game_state_reset_to_menu(gs);
                 render_reset_to_menu(rs);
                 input_cmd_queue_clear();
@@ -169,7 +170,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 transmute_apply(&gs->players[0].hand,
                                 &p2->players[0].hand_transmutes,
                                 &p2->players[0].transmute_inv,
-                                hand_idx, tid);
+                                hand_idx, tid, 0);
                 rs->sync_needed = true;
                 pls->pending_transmutation = -1;
             }
@@ -215,9 +216,36 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 transmute_apply(&gs->players[0].hand,
                                 &p2->players[0].hand_transmutes,
                                 &p2->players[0].transmute_inv,
-                                hand_idx, tid);
+                                hand_idx, tid, 0);
                 rs->sync_needed = true;
                 pls->pending_transmutation = -1;
+            } else if (cmd.type == INPUT_CMD_ROGUE_REVEAL && flow &&
+                       flow->step == FLOW_ROGUE_CHOOSING) {
+                int tp = cmd.rogue_reveal.target_player;
+                int hi = cmd.rogue_reveal.hand_index;
+                if (tp > 0 && tp < NUM_PLAYERS && tp != flow->rogue_winner &&
+                    hi >= 0 && hi < gs->players[tp].hand.count) {
+                    flow->rogue_reveal_player = tp;
+                    flow->rogue_reveal_card_idx = hi;
+                }
+            } else if (cmd.type == INPUT_CMD_DUEL_PICK && flow &&
+                       flow->step == FLOW_DUEL_PICK_OPPONENT) {
+                int tp = cmd.duel_pick.target_player;
+                int hi = cmd.duel_pick.hand_index;
+                if (tp > 0 && tp < NUM_PLAYERS && tp != flow->duel_winner &&
+                    hi >= 0 && hi < gs->players[tp].hand.count) {
+                    flow->duel_target_player = tp;
+                    flow->duel_target_card_idx = hi;
+                }
+            } else if (cmd.type == INPUT_CMD_DUEL_GIVE && flow &&
+                       flow->step == FLOW_DUEL_PICK_OWN) {
+                int hi = cmd.duel_give.hand_index;
+                if (hi >= 0 && hi < gs->players[0].hand.count) {
+                    flow->duel_own_card_idx = hi;
+                }
+            } else if (cmd.type == INPUT_CMD_DUEL_RETURN && flow &&
+                       flow->step == FLOW_DUEL_PICK_OWN) {
+                flow->duel_returned = true;
             } else if (cmd.type == INPUT_CMD_SKIP_VENDETTA) {
                 p2->round.vendetta_used = true;
                 p2->round.vendetta_chosen = true;

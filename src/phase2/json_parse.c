@@ -10,7 +10,7 @@
  * @deps-implements: json_parse.h
  * @deps-requires: json_parse.h, contract.h (ConditionType), transmutation.h (TransmuteEffect),
  *                 vendor/cJSON.h, raylib.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-20 — Added WOTT_REDUCE_SCORE_3 to TRANSMUTE_EFFECT_MAP
+ * @deps-last-changed: 2026-03-20 — Added MIRROR_COPY_EFFECTS to TRANSMUTE_EFFECT_MAP
  * ============================================================ */
 
 /* ----------------------------------------------------------------
@@ -89,6 +89,11 @@ static const EnumMapping TRANSMUTE_EFFECT_MAP[] = {
     {"EFFECT_NONE",                    TEFFECT_NONE},
     {"WOTT_DUPLICATE_ROUND_POINTS",    TEFFECT_WOTT_DUPLICATE_ROUND_POINTS},
     {"WOTT_REDUCE_SCORE_3",            TEFFECT_WOTT_REDUCE_SCORE_3},
+    {"WOTT_REVEAL_OPPONENT_CARD",      TEFFECT_WOTT_REVEAL_OPPONENT_CARD},
+    {"WOTT_REDUCE_SCORE_1",            TEFFECT_WOTT_REDUCE_SCORE_1},
+    {"WOTT_SWAP_CARD",                 TEFFECT_WOTT_SWAP_CARD},
+    {"FOG_HIDDEN",                     TEFFECT_FOG_HIDDEN},
+    {"MIRROR_COPY_EFFECTS",            TEFFECT_MIRROR},
 };
 
 static const EnumMapping FIGURE_TYPE_MAP[] = {

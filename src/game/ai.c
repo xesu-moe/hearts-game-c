@@ -1,17 +1,24 @@
 /* ============================================================
  * @deps-implements: ai.h
- * @deps-requires: ai.h, core/hand.h, render/render.h,
- *                 phase2/transmutation_logic.h
- * @deps-last-changed: 2026-03-20 — Moved from core/ to game/
+ * @deps-requires: ai.h, core/game_state.h (GameState), core/hand.h (Hand),
+ *                 render/render.h (render_chat_log_push),
+ *                 phase2/transmutation_logic.h (transmute_swap_between_players),
+ *                 phase2/phase2_defs.h (p2_player_name), stdlib.h, stdio.h
+ * @deps-last-changed: 2026-03-20 — Added ai_duel_choose() implementation,
+ *                     selects random opponent and cards for duel
  * ============================================================ */
 
 #include "ai.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
+
+#include <stdio.h>
 
 #include "core/hand.h"
 #include "render/render.h"
 #include "phase2/transmutation_logic.h"
+#include "phase2/phase2_defs.h"
 
 void ai_select_pass(GameState *gs, int player_id)
 {
@@ -68,4 +75,74 @@ void ai_play_card(GameState *gs, RenderState *rs, Phase2State *p2,
             return;
         }
     }
+}
+
+void ai_rogue_choose(const GameState *gs, int winner,
+                     int *out_player, int *out_hand_idx)
+{
+    *out_player = -1;
+    *out_hand_idx = -1;
+
+    /* Pick opponent with most cards remaining (random tiebreak) */
+    int best_count = 0;
+    int candidates[NUM_PLAYERS];
+    int num_candidates = 0;
+
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        if (p == winner) continue;
+        int cnt = gs->players[p].hand.count;
+        if (cnt <= 0) continue;
+        if (cnt > best_count) {
+            best_count = cnt;
+            num_candidates = 0;
+        }
+        if (cnt == best_count) {
+            candidates[num_candidates++] = p;
+        }
+    }
+
+    if (num_candidates == 0) return;
+
+    int chosen_p = candidates[rand() % num_candidates];
+    int chosen_idx = rand() % gs->players[chosen_p].hand.count;
+
+    *out_player = chosen_p;
+    *out_hand_idx = chosen_idx;
+}
+
+void ai_duel_choose(const GameState *gs, int winner,
+                    int *out_target_player, int *out_target_idx,
+                    int *out_own_idx)
+{
+    *out_target_player = -1;
+    *out_target_idx = -1;
+    *out_own_idx = -1;
+
+    /* Pick random opponent (most cards, random tiebreak — same as rogue) */
+    int tp = -1, ti = -1;
+    ai_rogue_choose(gs, winner, &tp, &ti);
+    if (tp < 0 || ti < 0) return;
+
+    /* Pick random card from own hand to give */
+    int own_count = gs->players[winner].hand.count;
+    if (own_count <= 0) return;
+
+    *out_target_player = tp;
+    *out_target_idx = ti;
+    *out_own_idx = rand() % own_count;
+}
+
+void ai_duel_execute(GameState *gs, Phase2State *p2, RenderState *rs,
+                     int winner)
+{
+    int out_p = -1, out_idx = -1, own_idx = -1;
+    ai_duel_choose(gs, winner, &out_p, &out_idx, &own_idx);
+    if (out_p < 0 || out_idx < 0 || own_idx < 0) return;
+
+    transmute_swap_between_players(gs, p2, winner, own_idx, out_p, out_idx);
+
+    char msg[CHAT_MSG_LEN];
+    snprintf(msg, sizeof(msg), "Duel: %s swaps a card with %s!",
+             p2_player_name(winner), p2_player_name(out_p));
+    render_chat_log_push(rs, msg);
 }

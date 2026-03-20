@@ -1,12 +1,12 @@
 /* ============================================================
- * @deps-exports: InputCmdType (RETURN_TO_MENU, OPEN_SETTINGS, SELECT_CARD, etc),
- *                InputCmd, InputCmdQueue, InputAction, InputState,
- *                input_init(), input_poll(), input_cmd_push(), input_cmd_pop(),
- *                input_cmd_queue_empty(), input_cmd_queue_clear(),
- *                input_get_state(), INPUT_CMD_QUEUE_CAPACITY
+ * @deps-exports: InputCmdType (SELECT_CARD, PLAY_CARD, DUEL_PICK, DUEL_GIVE,
+ *                DUEL_RETURN, ROGUE_REVEAL, RETURN_TO_MENU, etc),
+ *                InputCmd (rogue_reveal, duel_pick, duel_give union members),
+ *                InputCmdQueue, InputAction, InputState,
+ *                input_init/poll/cmd_push/pop/cmd_queue_empty/clear/get_state()
  * @deps-requires: raylib.h (Vector2), card.h (Card)
  * @deps-used-by: input.c, process_input.c, update.c, main.c
- * @deps-last-changed: 2026-03-20 — Added INPUT_CMD_RETURN_TO_MENU for pause menu
+ * @deps-last-changed: 2026-03-20 — Added INPUT_CMD_DUEL_* commands and unions
  * ============================================================ */
 
 #ifndef INPUT_H
@@ -57,6 +57,14 @@ typedef enum InputCmdType {
     INPUT_CMD_SETTING_NEXT,          /* navigate setting right */
     INPUT_CMD_APPLY_DISPLAY,         /* apply display settings (window/res/fps) */
 
+    /* Phase 2: Rogue reveal */
+    INPUT_CMD_ROGUE_REVEAL,          /* reveal an opponent's card (Rogue effect) */
+
+    /* Phase 2: Duel swap */
+    INPUT_CMD_DUEL_PICK,             /* pick an opponent's card (Duel step 1) */
+    INPUT_CMD_DUEL_GIVE,             /* pick own card to give (Duel step 2) */
+    INPUT_CMD_DUEL_RETURN,           /* return opponent's card (cancel swap) */
+
     /* Pause menu */
     INPUT_CMD_RETURN_TO_MENU,        /* return to main menu from pause */
 
@@ -90,6 +98,15 @@ typedef struct InputCmd {
 
         /* INPUT_CMD_APPLY_TRANSMUTATION: */
         struct { int hand_index; } transmute_apply;
+
+        /* INPUT_CMD_ROGUE_REVEAL: */
+        struct { int target_player; int hand_index; } rogue_reveal;
+
+        /* INPUT_CMD_DUEL_PICK: */
+        struct { int target_player; int hand_index; } duel_pick;
+
+        /* INPUT_CMD_DUEL_GIVE: */
+        struct { int hand_index; } duel_give;
 
         /* INPUT_CMD_SETTING_PREV, INPUT_CMD_SETTING_NEXT: */
         struct { int setting_id; } setting; /* which setting row (0-based) */
