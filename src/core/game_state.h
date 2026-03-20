@@ -35,6 +35,13 @@ typedef enum GamePhase {
     PHASE_COUNT
 } GamePhase;
 
+/* Returns true for phases that represent active gameplay (not menu/settings/game-over). */
+static inline bool is_ingame_phase(GamePhase phase)
+{
+    return phase == PHASE_DEALING || phase == PHASE_PASSING ||
+           phase == PHASE_PLAYING || phase == PHASE_SCORING;
+}
+
 typedef enum PassDirection {
     PASS_LEFT   = 0, /* to player (id + 1) % 4 */
     PASS_RIGHT  = 1, /* to player (id + 3) % 4 */

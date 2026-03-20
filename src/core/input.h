@@ -1,15 +1,12 @@
 /* ============================================================
- * @deps-exports: InputCmdType (SELECT_CONTRACT, SELECT_VENDETTA,
- *                ACTIVATE_VENDETTA, SKIP_VENDETTA, SELECT_TRANSMUTATION,
- *                APPLY_TRANSMUTATION, OPEN_SETTINGS, etc),
- *                InputCmd (contract, vendetta, transmute_select, transmute_apply, setting),
- *                InputCmdQueue, InputAction, InputState, input_init(),
- *                input_poll(), input_cmd_push(), input_cmd_pop(),
+ * @deps-exports: InputCmdType (RETURN_TO_MENU, OPEN_SETTINGS, SELECT_CARD, etc),
+ *                InputCmd, InputCmdQueue, InputAction, InputState,
+ *                input_init(), input_poll(), input_cmd_push(), input_cmd_pop(),
  *                input_cmd_queue_empty(), input_cmd_queue_clear(),
  *                input_get_state(), INPUT_CMD_QUEUE_CAPACITY
- * @deps-requires: raylib.h, card.h (Card, Vector2)
+ * @deps-requires: raylib.h (Vector2), card.h (Card)
  * @deps-used-by: input.c, process_input.c, update.c, main.c
- * @deps-last-changed: 2026-03-19 — Extended used_by: process_input, update modules
+ * @deps-last-changed: 2026-03-20 — Added INPUT_CMD_RETURN_TO_MENU for pause menu
  * ============================================================ */
 
 #ifndef INPUT_H
@@ -59,6 +56,9 @@ typedef enum InputCmdType {
     INPUT_CMD_SETTING_PREV,          /* navigate setting left */
     INPUT_CMD_SETTING_NEXT,          /* navigate setting right */
     INPUT_CMD_APPLY_DISPLAY,         /* apply display settings (window/res/fps) */
+
+    /* Pause menu */
+    INPUT_CMD_RETURN_TO_MENU,        /* return to main menu from pause */
 
     INPUT_CMD_COUNT
 } InputCmdType;

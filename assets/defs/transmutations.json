@@ -8,19 +8,21 @@
       "result_rank": "RANK_A",
       "special": "TRANSMUTE_ALWAYS_WIN",
       "suit_mask": ["SUIT_HEARTS", "SUIT_DIAMONDS"],
-      "custom_points": 5,
-      "negative": false
+      "custom_points": 0,
+      "negative": false,
+      "effect": "EFFECT_NONE"
     },
     {
       "id": 1,
       "name": "Black Joker",
-      "description": "Multi-suit joker (spades+clubs) that always loses.",
+      "description": "Multi-suit joker (spades+clubs) that always wins.",
       "result_suit": "SUIT_SPADES",
-      "result_rank": "RANK_2",
-      "special": "TRANSMUTE_ALWAYS_LOSE",
+      "result_rank": "RANK_A",
+      "special": "TRANSMUTE_ALWAYS_WIN",
       "suit_mask": ["SUIT_SPADES", "SUIT_CLUBS"],
       "custom_points": 0,
-      "negative": true
+      "negative": true,
+      "effect": "EFFECT_NONE"
     },
     {
       "id": 2,
@@ -31,7 +33,152 @@
       "special": "TRANSMUTE_NORMAL",
       "suit_mask": [],
       "custom_points": -1,
-      "negative": false
+      "negative": false,
+      "effect": "EFFECT_NONE"
+    },
+    {
+      "id": 3,
+      "name": "The Martyr",
+      "description": "Winner of the trick duplicates their round points at the end of the round.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_K",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "WOTT_DUPLICATE_ROUND_POINTS"
+    },
+    {
+      "id": 4,
+      "name": "The Gatherer",
+      "description": "Winner of the trick reduces their score by 3 points.",
+      "result_suit": "SUIT_DIAMONDS",
+      "result_rank": "RANK_J",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "WOTT_REDUCE_SCORE_3"
+    },
+    {
+      "id": 5,
+      "name": "The Rogue",
+      "description": "Winner of the trick can immediately choose an opponent's card to be revealed to everyone.",
+      "result_suit": "SUIT_SPADES",
+      "result_rank": "RANK_J",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "WOTT_REVEAL_OPPONENT_CARD"
+    },
+    {
+      "id": 6,
+      "name": "The Pendulum",
+      "description": "Scores -1 instead of +1.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_8",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "INVERT_POINTS"
+    },
+    {
+      "id": 7,
+      "name": "The Duel",
+      "description": "Winner of the trick can immediately choose an opponent's card and take it in exchange for one of their own.",
+      "result_suit": "SUIT_SPADES",
+      "result_rank": "RANK_8",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "WOTT_SWAP_CARD"
+    },
+    {
+      "id": 8,
+      "name": "The Fog",
+      "description": "Card is hidden under fog — nobody can see what it is. Card logic is unchanged.",
+      "result_suit": "SUIT_NONE",
+      "result_rank": "RANK_NONE",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "FOG_HIDDEN"
+    },
+    {
+      "id": 9,
+      "name": "The Mirror",
+      "description": "Copies the effects of other special cards played in the same trick, duplicating their effects.",
+      "result_suit": "SUIT_DIAMONDS",
+      "result_rank": "RANK_6",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "MIRROR_COPY_EFFECTS"
+    },
+    {
+      "id": 10,
+      "name": "The Roulette",
+      "description": "The trick winner is chosen randomly.",
+      "result_suit": "SUIT_CLUBS",
+      "result_rank": "RANK_3",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "RANDOM_TRICK_WINNER"
+    },
+    {
+      "id": 11,
+      "name": "The Echo",
+      "description": "Points in this trick are also obtained in the next round.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_J",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "ECHO_NEXT_ROUND"
+    },
+    {
+      "id": 12,
+      "name": "The Trap",
+      "description": "If played in the same trick as Queen of Spades, that trick's score is doubled.",
+      "result_suit": "SUIT_SPADES",
+      "result_rank": "RANK_2",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "TRAP_DOUBLE_WITH_QOS"
+    },
+    {
+      "id": 13,
+      "name": "The Shield",
+      "description": "Winner of the trick scores 0 points in the next trick, no matter what.",
+      "result_suit": "SUIT_DIAMONDS",
+      "result_rank": "RANK_7",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "WOTT_SHIELD_NEXT_TRICK"
+    },
+    {
+      "id": 14,
+      "name": "The Curse",
+      "description": "Winner of the trick must open the next trick with hearts, even if hearts are not broken.",
+      "result_suit": "SUIT_CLUBS",
+      "result_rank": "RANK_4",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "WOTT_FORCE_LEAD_HEARTS"
     }
   ]
 }

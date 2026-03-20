@@ -1,12 +1,11 @@
 /* ============================================================
  * @deps-implements: pass_phase.h
  * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, ai.h,
- *                 render/anim.h (anim_get_speed), render/layout.h,
- *                 render/render.h, phase2/phase2_state.h,
- *                 phase2/contract_logic.h, phase2/vendetta_logic.h,
- *                 phase2/transmutation_logic.h, phase2/phase2_defs.h,
- *                 assert.h, stdio.h
- * @deps-last-changed: 2026-03-19 — Uses anim_get_speed() for wait duration
+ *                 render/anim.h, render/layout.h, render/render.h,
+ *                 phase2/phase2_state.h, phase2/contract_logic.h (record_received_cards),
+ *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/phase2_defs.h, assert.h, stdio.h
+ * @deps-last-changed: 2026-03-20 — Calls contract_record_received_cards in finalize_card_pass and pass_start_receive_anim
  * ============================================================ */
 
 #include "pass_phase.h"
@@ -188,6 +187,16 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
                         }
                     }
                 }
+            }
+        }
+
+        /* Record received cards for contract tracking */
+        if (p2->enabled && gs->pass_direction != PASS_NONE) {
+            for (int p = 0; p < NUM_PLAYERS; p++) {
+                int dest = (p + pass_offset) % NUM_PLAYERS;
+                contract_record_received_cards(p2, dest,
+                                               gs->pass_selections[p],
+                                               PASS_CARD_COUNT);
             }
         }
 
@@ -405,6 +414,16 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
                     }
                 }
             }
+        }
+    }
+
+    /* Record received cards for contract tracking */
+    if (p2->enabled && gs->pass_direction != PASS_NONE) {
+        for (int p = 0; p < NUM_PLAYERS; p++) {
+            int dest = (p + pass_offset) % NUM_PLAYERS;
+            contract_record_received_cards(p2, dest,
+                                           gs->pass_selections[p],
+                                           PASS_CARD_COUNT);
         }
     }
 

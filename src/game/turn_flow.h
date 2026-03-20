@@ -2,12 +2,12 @@
 #define TURN_FLOW_H
 
 /* ============================================================
- * @deps-exports: FlowStep (includes FLOW_TRICK_PILE_ANIM), TurnFlow,
- *                FLOW_* timing constants (includes FLOW_PILE_ANIM_TIME),
- *                flow_init(), flow_update()
- * @deps-requires: core/game_state.h, core/settings.h
+ * @deps-exports: struct TurnFlow (hearts_broken_at_trick_start added),
+ *                flow_update(), flow_init(), FlowStep enum
+ * @deps-requires: core/game_state.h (GameState), core/settings.h (GameSettings),
+ *                 phase2/phase2_state.h (Phase2State), game/play_phase.h (PlayPhaseState)
  * @deps-used-by: main.c, process_input.c, phase_transitions.c
- * @deps-last-changed: 2026-03-19 — Added FLOW_TRICK_PILE_ANIM and FLOW_PILE_ANIM_TIME
+ * @deps-last-changed: 2026-03-20 — Added hearts_broken_at_trick_start field to TurnFlow
  * ============================================================ */
 
 #include "core/game_state.h"
@@ -35,6 +35,7 @@ typedef struct TurnFlow {
     float    turn_timer;
     int      animating_player;
     int      prev_trick_count;
+    bool     hearts_broken_at_trick_start;
 } TurnFlow;
 
 #define FLOW_TURN_TIME_LIMIT   30.0f

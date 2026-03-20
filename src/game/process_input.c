@@ -1,11 +1,11 @@
 /* ============================================================
  * @deps-implements: process_input.h
- * @deps-requires: process_input.h, core/input.h, core/game_state.h,
- *                 render/render.h (render_start_card_drag, render_commit_hand_reorder,
- *                                  render_update_snap_target, render_cancel_drag),
- *                 render/layout.h (layout_trick_position),
- *                 game/pass_phase.h, game/play_phase.h, game/turn_flow.h
- * @deps-last-changed: 2026-03-19 — Moved drag helpers to render.c; process_input now calls render API
+ * @deps-requires: process_input.h, core/input.h (INPUT_CMD_RETURN_TO_MENU, etc),
+ *                 core/game_state.h, render/render.h (pause_state, pause_btns[],
+ *                 pause_confirm_*, is_ingame_phase, drag, hit_test functions),
+ *                 render/layout.h (layout_trick_position), game/pass_phase.h,
+ *                 game/play_phase.h, game/turn_flow.h, math.h
+ * @deps-last-changed: 2026-03-20 — Pause menu input handling (buttons, confirmations)
  * ============================================================ */
 
 #include "process_input.h"
@@ -29,6 +29,11 @@ void process_input(GameState *gs, RenderState *rs,
     input_poll();
 
     const InputState *is = input_get_state();
+
+    /* Cancel drag release if paused */
+    if (rs->pause_state != PAUSE_INACTIVE && rs->drag.active) {
+        render_cancel_drag(rs);
+    }
 
     /* Handle drag release — must come before new press detection */
     if (is->released[INPUT_ACTION_LEFT_CLICK] && rs->drag.active) {
@@ -108,6 +113,52 @@ void process_input(GameState *gs, RenderState *rs,
     /* Generate game-layer commands from mouse clicks */
     if (is->pressed[INPUT_ACTION_LEFT_CLICK]) {
         Vector2 mouse = is->mouse_pos;
+
+        /* Pause menu button clicks — intercept before game switch */
+        if (rs->pause_state == PAUSE_MENU && is_ingame_phase(gs->phase)) {
+            /* Continue */
+            if (render_hit_test_button(&rs->pause_btns[0], mouse)) {
+                rs->pause_state = PAUSE_INACTIVE;
+            }
+            /* Settings */
+            else if (render_hit_test_button(&rs->pause_btns[1], mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_OPEN_SETTINGS,
+                    .source_player = 0,
+                });
+            }
+            /* Return to Menu */
+            else if (render_hit_test_button(&rs->pause_btns[2], mouse)) {
+                rs->pause_state = PAUSE_CONFIRM_MENU;
+            }
+            /* Quit Game */
+            else if (render_hit_test_button(&rs->pause_btns[3], mouse)) {
+                rs->pause_state = PAUSE_CONFIRM_QUIT;
+            }
+            goto skip_game_clicks;
+        }
+
+        /* Confirmation dialog clicks */
+        if ((rs->pause_state == PAUSE_CONFIRM_MENU ||
+             rs->pause_state == PAUSE_CONFIRM_QUIT) &&
+            is_ingame_phase(gs->phase)) {
+            if (render_hit_test_button(&rs->pause_confirm_yes, mouse)) {
+                if (rs->pause_state == PAUSE_CONFIRM_MENU) {
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_RETURN_TO_MENU,
+                        .source_player = 0,
+                    });
+                } else {
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_QUIT,
+                        .source_player = 0,
+                    });
+                }
+            } else if (render_hit_test_button(&rs->pause_confirm_no, mouse)) {
+                rs->pause_state = PAUSE_MENU;
+            }
+            goto skip_game_clicks;
+        }
 
         switch (gs->phase) {
         case PHASE_MENU:
@@ -290,7 +341,18 @@ void process_input(GameState *gs, RenderState *rs,
             break;
         }
 
-        case PHASE_SETTINGS:
+        case PHASE_SETTINGS: {
+            /* Tab switching */
+            bool tab_clicked = false;
+            for (int t = 0; t < SETTINGS_TAB_COUNT; t++) {
+                if (render_hit_test_button(&rs->settings_tab_btns[t], mouse)) {
+                    rs->settings_tab = (SettingsTab)t;
+                    rs->sync_needed = true;
+                    tab_clicked = true;
+                    break;
+                }
+            }
+            if (tab_clicked) break;
             if (render_hit_test_button(&rs->btn_settings_back, mouse)) {
                 input_cmd_push((InputCmd){
                     .type = INPUT_CMD_CANCEL,
@@ -324,6 +386,7 @@ void process_input(GameState *gs, RenderState *rs,
                 }
             }
             break;
+        }
 
         case PHASE_SCORING:
         case PHASE_GAME_OVER:
@@ -338,6 +401,8 @@ void process_input(GameState *gs, RenderState *rs,
         default:
             break;
         }
+
+    skip_game_clicks: (void)0;
     }
 
 }

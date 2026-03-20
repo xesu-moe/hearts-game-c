@@ -2,18 +2,16 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: DragState (hand_slot_origin, hand_slot_current, is_play_drag, rearrange_map, rearrange_count),
- *                RenderState (trick_transmute_ids field), ScoringSubphase enum, PassStagedCard, MenuItem, UIButton,
- *                render_init/update/draw(), render_hit_test_*(), render_cancel_drag(),
- *                render_toggle_card_selection(), render_clear_selection(), render_alloc_card_visual(),
- *                render_set_contract_options(), render_clear_piles(), render_chat_log_push*(),
- *                render_effect_label()
- * @deps-requires: raylib.h (Rectangle, Vector2, Color, RenderTexture2D),
- *                 particle.h, anim.h (CardVisual, MAX_CARD_VISUALS, ANIM_CONTRACT_REVEAL_STAGGER),
- *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS, CARDS_PER_TRICK),
- *                 core/game_state.h (GamePhase), phase2/effect.h
- * @deps-used-by: render.c, update.c, main.c, game modules, info_sync.c, phase2 modules
- * @deps-last-changed: 2026-03-20 — Added trick_transmute_ids[CARDS_PER_TRICK] field to RenderState
+ * @deps-exports: DragState, RenderState (with pause_state, pause_btns[], etc),
+ *                PauseState enum, PAUSE_BTN_COUNT, is_ingame_phase() inline,
+ *                SettingsTab enum, SETTINGS_TAB_COUNT, ScoringSubphase, PassStagedCard,
+ *                MenuItem, UIButton, render_init/update/draw, hit_test/drag APIs
+ * @deps-requires: raylib.h, particle.h, anim.h (CardVisual, MAX_CARD_VISUALS),
+ *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS),
+ *                 core/game_state.h (GamePhase, PHASE_PASSING/PLAYING/SCORING/DEALING),
+ *                 phase2/effect.h
+ * @deps-used-by: render.c, process_input.c, update.c, main.c, all game modules
+ * @deps-last-changed: 2026-03-20 — Added pause menu: PauseState, is_ingame_phase(), pause fields
  * ============================================================ */
 
 #include <stdbool.h>
@@ -61,6 +59,24 @@ typedef struct UIButton {
 
 #define SETTINGS_ROW_COUNT     8  /* 3 display + 2 gameplay + 3 audio */
 #define SETTINGS_ACTIVE_COUNT  8
+#define SETTINGS_TAB_COUNT     3
+
+typedef enum SettingsTab {
+    SETTINGS_TAB_DISPLAY  = 0,
+    SETTINGS_TAB_GAMEPLAY = 1,
+    SETTINGS_TAB_AUDIO    = 2,
+} SettingsTab;
+
+/* ---- Pause state ---- */
+
+typedef enum PauseState {
+    PAUSE_INACTIVE = 0,
+    PAUSE_MENU,
+    PAUSE_CONFIRM_MENU,
+    PAUSE_CONFIRM_QUIT,
+} PauseState;
+
+#define PAUSE_BTN_COUNT 4
 
 /* ---- Scoring subphase ---- */
 
@@ -226,6 +242,8 @@ typedef struct RenderState {
     int      trick_transmute_ids[CARDS_PER_TRICK]; /* -1 = not transmuted */
 
     /* Settings UI */
+    SettingsTab settings_tab;
+    UIButton    settings_tab_btns[SETTINGS_TAB_COUNT];
     UIButton settings_rows_prev[SETTINGS_ROW_COUNT];
     UIButton settings_rows_next[SETTINGS_ROW_COUNT];
     const char *settings_labels[SETTINGS_ROW_COUNT];
@@ -256,6 +274,16 @@ typedef struct RenderState {
     int            pass_staged_count;
     bool           pass_anim_in_progress;  /* blocks sync_needed during toss/wait */
     float          pass_wait_timer;
+
+    /* Pause overlay */
+    PauseState pause_state;
+    UIButton   pause_btns[PAUSE_BTN_COUNT];     /* Continue, Settings, Return to Menu, Quit */
+    UIButton   pause_confirm_yes;
+    UIButton   pause_confirm_no;
+
+    /* Settings return path (so settings can return to pause or menu) */
+    GamePhase  settings_return_phase;
+    bool       settings_return_paused;
 
     /* Mutable layout config */
     LayoutConfig layout;
@@ -346,5 +374,9 @@ void render_chat_log_push_color(RenderState *rs, const char *msg, Color color);
 
 /* Convert an ActiveEffect to a short human-readable label. */
 const char *render_effect_label(const ActiveEffect *ae, char *buf, int buflen);
+
+/* Reset render state for returning to main menu mid-game.
+ * Clears card visuals, piles, pass staging, and pause state. */
+void render_reset_to_menu(RenderState *rs);
 
 #endif /* RENDER_H */

@@ -2,15 +2,16 @@
 #define PHASE2_STATE_H
 
 /* ============================================================
- * @deps-exports: struct KingProgress, struct PlayerPhase2,
- *                struct RoundPhase2, struct Phase2State
+ * @deps-exports: struct RoundPhase2 (suit_seen[], transmute_round),
+ *                struct PlayerPhase2, struct KingProgress, struct Phase2State
  * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT),
- *                 effect.h (ActiveEffect), contract.h (ContractInstance, CONTRACT_TIERS),
- *                 transmutation.h (TransmuteInventory, HandTransmuteState)
+ *                 contract.h (ContractInstance, CONTRACT_TIERS),
+ *                 effect.h (ActiveEffect),
+ *                 transmutation.h (TransmuteInventory, HandTransmuteState, TransmuteRoundState)
  * @deps-used-by: phase2_defs.h, contract_logic.c, vendetta_logic.h, ai.h,
  *                play_phase.h, pass_phase.h, turn_flow.h, update.h,
  *                info_sync.h, phase_transitions.h, main.c
- * @deps-last-changed: 2026-03-19 — Extended used_by: new game modules
+ * @deps-last-changed: 2026-03-20 — Added transmute_round field to RoundPhase2
  * ============================================================ */
 
 #include <stdbool.h>
@@ -67,6 +68,12 @@ typedef struct RoundPhase2 {
     int          num_round_effects;
 
     bool contracts_chosen;
+
+    /* Per-round suit tracking (has any card of this suit been played) */
+    bool suit_seen[SUIT_COUNT];
+
+    /* Transmutation effect flags for this round */
+    TransmuteRoundState transmute_round;
 } RoundPhase2;
 
 /* --- Top-Level Phase 2 State --- */

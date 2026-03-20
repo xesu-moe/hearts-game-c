@@ -33,6 +33,14 @@ bool game_state_start_game(GameState *gs)
     gs->round_number = 0;
 
     game_state_new_round(gs);
+
+#ifdef DEBUG
+    /* Debug cheat: start everyone near game-over threshold */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        gs->players[i].total_score = GAME_OVER_SCORE - 1;
+    }
+#endif
+
     return true;
 }
 

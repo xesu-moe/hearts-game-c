@@ -2,15 +2,16 @@
 #define TRANSMUTATION_H
 
 /* ============================================================
- * @deps-exports: enum TransmuteSpecial, enum SuitMask,
- *                struct TransmutationDef, struct TransmuteInventory,
- *                struct TransmuteSlot, struct HandTransmuteState,
- *                struct TrickTransmuteInfo,
+ * @deps-exports: enum TransmuteEffect, enum TransmuteSpecial,
+ *                enum SuitMask, struct TransmutationDef,
+ *                struct TransmuteInventory, struct TransmuteSlot,
+ *                struct HandTransmuteState, struct TrickTransmuteInfo,
+ *                struct TransmuteRoundState,
  *                MAX_TRANSMUTATION_DEFS, MAX_TRANSMUTE_INVENTORY
- * @deps-requires: core/card.h (Card, Suit, Rank, MAX_HAND_SIZE, CARDS_PER_TRICK)
+ * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE, CARDS_PER_TRICK)
  * @deps-used-by: phase2_state.h, phase2_defs.h, transmutation_logic.h,
- *                json_parse.h, contract_logic.c
- * @deps-last-changed: 2026-03-18 — Initial creation
+ *                json_parse.h, contract_logic.c, game/play_phase.h
+ * @deps-last-changed: 2026-03-20 — Added TEFFECT_WOTT_REDUCE_SCORE_3 to enum, gatherer_reduction field
  * ============================================================ */
 
 #include <stdbool.h>
@@ -18,6 +19,13 @@
 #include "core/card.h"
 
 /* --- Enums --- */
+
+typedef enum TransmuteEffect {
+    TEFFECT_NONE = 0,
+    TEFFECT_WOTT_DUPLICATE_ROUND_POINTS,  /* The Martyr */
+    TEFFECT_WOTT_REDUCE_SCORE_3,          /* The Gatherer */
+    TEFFECT_COUNT
+} TransmuteEffect;
 
 typedef enum TransmuteSpecial {
     TRANSMUTE_NORMAL = 0,    /* Standard card, just different suit/rank */
@@ -51,6 +59,7 @@ typedef struct TransmutationDef {
     SuitMask         suit_mask;      /* Override suit-following (0 = use result_suit) */
     int              custom_points;  /* Point value override; -1 = use card_points() */
     bool             negative;       /* AI hint: pass this to opponents */
+    TransmuteEffect  effect;         /* Triggered effect (TEFFECT_NONE = no effect) */
     char             art_asset[32];  /* Future: card art key */
 } TransmutationDef;
 
@@ -77,5 +86,12 @@ typedef struct HandTransmuteState {
 typedef struct TrickTransmuteInfo {
     int transmutation_ids[CARDS_PER_TRICK]; /* -1 = not transmuted */
 } TrickTransmuteInfo;
+
+/* --- Per-round transmutation effect tracking --- */
+
+typedef struct TransmuteRoundState {
+    bool martyr_flags[NUM_PLAYERS]; /* true = this player's round_points doubled at round end */
+    int gatherer_reduction[NUM_PLAYERS]; /* Accumulated score reduction (multiples of 3) */
+} TransmuteRoundState;
 
 #endif /* TRANSMUTATION_H */

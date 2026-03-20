@@ -1,12 +1,13 @@
 /* ============================================================
  * @deps-implements: update.h
- * @deps-requires: update.h, core/input.h, core/game_state.h, core/settings.h,
- *                 render/render.h (ScoringSubphase, contract_reveal_count/timer),
+ * @deps-requires: update.h, core/input.h (INPUT_CMD_RETURN_TO_MENU, INPUT_CMD_CANCEL, etc),
+ *                 core/game_state.h, core/settings.h, render/render.h (pause_state,
+ *                 settings_return_phase/paused, is_ingame_phase, sync_needed),
  *                 render/anim.h (ANIM_CONTRACT_REVEAL_STAGGER, anim_get_speed),
  *                 game/pass_phase.h, game/play_phase.h, game/settings_ui.h,
  *                 phase2/contract_logic.h, phase2/vendetta_logic.h,
  *                 phase2/transmutation_logic.h, phase2/phase2_defs.h, stdbool.h
- * @deps-last-changed: 2026-03-19 — SCORE_SUB_DONE handler initializes contract_reveal_count/timer for staggered animation
+ * @deps-last-changed: 2026-03-20 — Pause menu state transitions (INPUT_CMD_CANCEL, INPUT_CMD_RETURN_TO_MENU)
  * ============================================================ */
 
 #include "update.h"
@@ -30,6 +31,47 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
     InputCmd cmd;
     for (int n = 0; n < INPUT_CMD_QUEUE_CAPACITY &&
                     (cmd = input_cmd_pop()).type != INPUT_CMD_NONE; n++) {
+
+        /* ESC during in-game phase → open pause menu */
+        if (cmd.type == INPUT_CMD_CANCEL && is_ingame_phase(gs->phase) &&
+            rs->pause_state == PAUSE_INACTIVE) {
+            rs->pause_state = PAUSE_MENU;
+            if (rs->drag.active) render_cancel_drag(rs);
+            continue;
+        }
+
+        /* Intercept all commands while paused during in-game phases */
+        if (rs->pause_state != PAUSE_INACTIVE && is_ingame_phase(gs->phase)) {
+            if (cmd.type == INPUT_CMD_CANCEL) {
+                /* ESC: unpause, or back from confirmation to pause menu */
+                if (rs->pause_state == PAUSE_MENU)
+                    rs->pause_state = PAUSE_INACTIVE;
+                else
+                    rs->pause_state = PAUSE_MENU;
+            } else if (cmd.type == INPUT_CMD_OPEN_SETTINGS) {
+                rs->settings_return_phase = gs->phase;
+                rs->settings_return_paused = true;
+                rs->pause_state = PAUSE_INACTIVE;
+                gs->phase = PHASE_SETTINGS;
+                rs->settings_tab = SETTINGS_TAB_DISPLAY;
+                rs->sync_needed = true;
+                sync_settings_values(sui, settings, rs);
+                input_cmd_queue_clear();
+            } else if (cmd.type == INPUT_CMD_RETURN_TO_MENU) {
+                pps->vendetta_ui_active = false;
+                pps->subphase = PASS_SUB_VENDETTA;
+                pls->pending_transmutation = -1;
+                for (int ti = 0; ti < CARDS_PER_TRICK; ti++)
+                    pls->current_tti.transmutation_ids[ti] = -1;
+                game_state_reset_to_menu(gs);
+                render_reset_to_menu(rs);
+                input_cmd_queue_clear();
+            } else if (cmd.type == INPUT_CMD_QUIT) {
+                *quit_requested = true;
+            }
+            continue;
+        }
+
         switch (gs->phase) {
         case PHASE_MENU:
             if (cmd.type == INPUT_CMD_START_GAME ||
@@ -37,7 +79,10 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 game_state_start_game(gs);
                 rs->sync_needed = true;
             } else if (cmd.type == INPUT_CMD_OPEN_SETTINGS) {
+                rs->settings_return_phase = PHASE_MENU;
+                rs->settings_return_paused = false;
                 gs->phase = PHASE_SETTINGS;
+                rs->settings_tab = SETTINGS_TAB_DISPLAY;
                 rs->sync_needed = true;
                 sync_settings_values(sui, settings, rs);
             } else if (cmd.type == INPUT_CMD_QUIT ||
@@ -53,7 +98,9 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     settings_save(settings);
                     settings->dirty = false;
                 }
-                gs->phase = PHASE_MENU;
+                gs->phase = rs->settings_return_phase;
+                if (rs->settings_return_paused)
+                    rs->pause_state = PAUSE_MENU;
                 rs->sync_needed = true;
             } else if (cmd.type == INPUT_CMD_APPLY_DISPLAY) {
                 apply_display_settings(sui, settings, rs);
@@ -198,7 +245,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     rs->score_countup_timer = 0.0f;
                 } else if (rs->score_subphase == SCORE_SUB_DONE) {
                     /* Advance to next round (show contracts if Phase 2) */
-                    if (p2->enabled) {
+                    if (p2->enabled && !game_state_is_game_over(gs)) {
                         /* Evaluate contracts and populate result fields */
                         for (int i = 0; i < NUM_PLAYERS; i++) {
                             contract_evaluate(p2, i);

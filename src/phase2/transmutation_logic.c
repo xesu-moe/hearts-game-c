@@ -1,8 +1,9 @@
 /* ============================================================
  * @deps-implements: transmutation_logic.h
  * @deps-requires: transmutation_logic.h, transmutation.h, phase2_defs.h,
- *                 core/hand.h, core/trick.h, core/card.h
- * @deps-last-changed: 2026-03-18 — Initial creation
+ *                 phase2_state.h, core/hand.h, core/trick.h, core/card.h,
+ *                 string.h, raylib.h
+ * @deps-last-changed: 2026-03-20 — Gatherer effect: accumulate/apply score reduction
  * ============================================================ */
 
 #include "transmutation_logic.h"
@@ -12,6 +13,7 @@
 #include <raylib.h>
 
 #include "phase2_defs.h"
+#include "phase2_state.h"
 
 /* ----------------------------------------------------------------
  * Inventory
@@ -356,6 +358,73 @@ bool transmute_is_valid_play(const Trick *trick, const Hand *hand,
 
     /* No transmutation override — use standard rules */
     return trick_is_valid_play(trick, hand, card, hearts_broken, first_trick);
+}
+
+/* ----------------------------------------------------------------
+ * Round-scoped effect tracking
+ * ---------------------------------------------------------------- */
+
+void transmute_round_state_init(TransmuteRoundState *trs)
+{
+    memset(trs, 0, sizeof(*trs));
+}
+
+void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,
+                                  int winner, const TrickTransmuteInfo *tti)
+{
+    (void)trick; /* Reserved for future effects that inspect trick cards */
+    if (!p2 || !tti || winner < 0 || winner >= NUM_PLAYERS) return;
+
+    for (int i = 0; i < CARDS_PER_TRICK; i++) {
+        if (tti->transmutation_ids[i] < 0) continue;
+        const TransmutationDef *td =
+            phase2_get_transmutation(tti->transmutation_ids[i]);
+        if (!td) continue;
+
+        if (td->effect == TEFFECT_WOTT_DUPLICATE_ROUND_POINTS) {
+            p2->round.transmute_round.martyr_flags[winner] = true;
+            TraceLog(LOG_INFO, "TRANSMUTE: Martyr effect flagged for player %d",
+                     winner);
+        } else if (td->effect == TEFFECT_WOTT_REDUCE_SCORE_3) {
+            p2->round.transmute_round.gatherer_reduction[winner] += 3;
+            TraceLog(LOG_INFO,
+                     "TRANSMUTE: Gatherer +3 reduction for player %d (total %d)",
+                     winner, p2->round.transmute_round.gatherer_reduction[winner]);
+        }
+    }
+}
+
+void transmute_apply_round_end(Phase2State *p2,
+                                const int round_points[NUM_PLAYERS],
+                                int total_scores[NUM_PLAYERS])
+{
+    if (!p2) return;
+
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        if (p2->round.transmute_round.martyr_flags[i]) {
+            int dup = round_points[i];
+            total_scores[i] += dup;
+            TraceLog(LOG_INFO,
+                     "TRANSMUTE: Martyr doubles player %d round_points (%d), "
+                     "new total = %d",
+                     i, dup, total_scores[i]);
+        }
+    }
+
+    /* Gatherer: reduce total score (floor at 0).
+     * Applied after Martyr so the reduction offsets the final total,
+     * including any Martyr penalty — this is intentional. */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        int red = p2->round.transmute_round.gatherer_reduction[i];
+        if (red > 0) {
+            total_scores[i] -= red;
+            if (total_scores[i] < 0) total_scores[i] = 0;
+            TraceLog(LOG_INFO,
+                     "TRANSMUTE: Gatherer reduces player %d by %d, "
+                     "new total = %d",
+                     i, red, total_scores[i]);
+        }
+    }
 }
 
 /* ----------------------------------------------------------------

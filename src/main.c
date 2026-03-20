@@ -1,12 +1,12 @@
 /* ============================================================
  * @deps-implements: (entry point)
  * @deps-requires: core/clock.h, core/game_state.h (game_state_advance_scoring),
- *                 core/input.h, core/settings.h,
- *                 render/anim.h (anim_set_speed, ANIM_DEAL_CARD_STAGGER),
- *                 render/render.h (RenderState.score_advance_pending/tick_pending),
- *                 render/card_render.h, audio/audio.h (SFX_SCORE_TICK),
- *                 phase2/phase2_defs.h, game modules, raylib.h
- * @deps-last-changed: 2026-03-19 — Consume score_advance_pending flag; manage RT lifecycle (load/unload score_contracts_rt); call game_state_advance_scoring()
+ *                 core/input.h, core/settings.h, render/anim.h (anim_set_speed),
+ *                 render/layout.h (layout_recalculate), render/render.h (pause_state, is_ingame_phase),
+ *                 render/card_render.h, audio/audio.h, phase2/phase2_defs.h,
+ *                 game modules (ai, play_phase, pass_phase, turn_flow, process_input, update,
+ *                 settings_ui, info_sync, phase_transitions), raylib.h
+ * @deps-last-changed: 2026-03-20 — Check pause_state and is_ingame_phase() in main loop timing
  * ============================================================ */
 
 #include <stdbool.h>
@@ -51,6 +51,7 @@ int main(void)
     int init_w = RESOLUTIONS[g_settings.resolution_index].width;
     int init_h = RESOLUTIONS[g_settings.resolution_index].height;
     InitWindow(init_w, init_h, WINDOW_TITLE);
+    SetExitKey(0);  /* Disable ESC auto-close — we handle ESC ourselves */
 
     GameClock clk;
     clock_init(&clk);
@@ -145,71 +146,82 @@ int main(void)
             clk.accumulator -= FIXED_DT;
         }
 
+        /* Reset flow if we just returned to menu mid-game (e.g. pause → return to menu) */
+        if (is_ingame_phase(phase_before_update) && gs.phase == PHASE_MENU)
+            flow_init(&flow);
+
+        bool paused_ingame = rs.pause_state != PAUSE_INACTIVE &&
+                             is_ingame_phase(gs.phase);
+
         audio_update(&audio, clk.raw_dt, anim_get_speed());
 
-        phase_transition_update(&gs, &rs, &p2, &pps, &pls, &flow,
-                                &prev_phase, &prev_hearts_broken);
+        if (!paused_ingame) {
+            phase_transition_update(&gs, &rs, &p2, &pps, &pls, &flow,
+                                    &prev_phase, &prev_hearts_broken);
 
-        /* SFX: deal — one sound per card at stagger rate */
-        if (gs.phase == PHASE_DEALING && phase_before_update != PHASE_DEALING)
-            audio_start_stagger(&audio, SFX_CARD_DEAL, DECK_SIZE,
-                                ANIM_DEAL_CARD_STAGGER, true);
+            /* SFX: deal — one sound per card at stagger rate */
+            if (gs.phase == PHASE_DEALING && phase_before_update != PHASE_DEALING)
+                audio_start_stagger(&audio, SFX_CARD_DEAL, DECK_SIZE,
+                                    ANIM_DEAL_CARD_STAGGER, true);
+
+            /* SFX: hearts broken */
+            if (gs.hearts_broken && !prev_hearts_broken)
+                audio_play_sfx(&audio, SFX_HEARTS_BROKEN);
+
+            /* Sync info panel */
+            info_sync_update(&gs, &rs, &p2, &pls);
+
+            /* Pass subphase timers (real time, UI deadlines) */
+            pass_subphase_update(&pps, &gs, &rs, &p2, clk.raw_dt);
+
+            /* SFX: pass toss — one sound per card at stagger rate */
+            if (pps.subphase == PASS_SUB_TOSS_ANIM &&
+                prev_subphase != PASS_SUB_TOSS_ANIM)
+                audio_start_stagger(&audio, SFX_CARD_PLAY, rs.pass_staged_count,
+                                    PASS_TOSS_STAGGER, true);
+            prev_subphase = pps.subphase;
+
+            /* Consume SFX flags from PlayPhaseState */
+            if (pls.card_played_sfx) {
+                audio_play_sfx(&audio, SFX_CARD_PLAY);
+                pls.card_played_sfx = false;
+            }
+            if (pls.transmute_sfx) {
+                audio_play_sfx(&audio, SFX_TRANSMUTE);
+                pls.transmute_sfx = false;
+            }
+
+            /* Flow runs on raw_dt (real time) */
+            flow_update(&flow, &gs, &rs, &p2, &g_settings, &pls, clk.raw_dt);
+
+            /* Pass turn timer to render state for display */
+            rs.turn_time_remaining = flow.turn_timer;
+
+            /* Set interactive flag after flow_update */
+            rs.vendetta_interactive = (flow.step == FLOW_WAITING_FOR_HUMAN);
+        }
 
         /* Music: single background track for all phases */
         audio_set_music(&audio, MUSIC_BACKGROUND);
 
-        /* SFX: hearts broken */
-        if (gs.hearts_broken && !prev_hearts_broken)
-            audio_play_sfx(&audio, SFX_HEARTS_BROKEN);
-
-        /* Sync info panel */
-        info_sync_update(&gs, &rs, &p2, &pls);
-
-        /* Pass subphase timers (real time, UI deadlines) */
-        pass_subphase_update(&pps, &gs, &rs, &p2, clk.raw_dt);
-
-        /* SFX: pass toss — one sound per card at stagger rate */
-        if (pps.subphase == PASS_SUB_TOSS_ANIM &&
-            prev_subphase != PASS_SUB_TOSS_ANIM)
-            audio_start_stagger(&audio, SFX_CARD_PLAY, rs.pass_staged_count,
-                                PASS_TOSS_STAGGER, true);
-        prev_subphase = pps.subphase;
-
-        /* Consume SFX flags from PlayPhaseState */
-        if (pls.card_played_sfx) {
-            audio_play_sfx(&audio, SFX_CARD_PLAY);
-            pls.card_played_sfx = false;
-        }
-        if (pls.transmute_sfx) {
-            audio_play_sfx(&audio, SFX_TRANSMUTE);
-            pls.transmute_sfx = false;
-        }
-
         /* Apply audio settings each frame (cheap, keeps volumes in sync) */
         audio_apply_settings(&audio, &g_settings);
 
-        /* Flow runs on raw_dt (real time) */
-        flow_update(&flow, &gs, &rs, &p2, &g_settings, &pls, clk.raw_dt);
-
-        /* Pass turn timer to render state for display */
-        rs.turn_time_remaining = flow.turn_timer;
-
-        /* Set interactive flag after flow_update */
-        rs.vendetta_interactive = (flow.step == FLOW_WAITING_FOR_HUMAN);
-
         render_update(&gs, &rs, clk.raw_dt);
 
-        /* SFX: score tick */
-        if (rs.score_tick_pending) {
-            audio_play_sfx(&audio, SFX_SCORE_TICK);
-            rs.score_tick_pending = false;
+        if (!paused_ingame) {
+            /* SFX: score tick */
+            if (rs.score_tick_pending) {
+                audio_play_sfx(&audio, SFX_SCORE_TICK);
+                rs.score_tick_pending = false;
+            }
+
+            /* Compute playability for human hand (transmute-aware) */
+            info_sync_playability(&gs, &rs, &p2);
+
+            /* Particle burst: hearts broken (must be after render_update) */
+            phase_transition_post_render(&gs, &rs, &prev_hearts_broken);
         }
-
-        /* Compute playability for human hand (transmute-aware) */
-        info_sync_playability(&gs, &rs, &p2);
-
-        /* Particle burst: hearts broken (must be after render_update) */
-        phase_transition_post_render(&gs, &rs, &prev_hearts_broken);
 
         render_draw(&gs, &rs);
     }

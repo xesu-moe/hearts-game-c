@@ -1,13 +1,12 @@
 /* ============================================================
  * @deps-implements: turn_flow.h
- * @deps-requires: turn_flow.h, core/game_state.h, core/settings.h,
- *                 ai.h, core/trick.h, render/render.h (CardVisual pool),
- *                 render/layout.h (layout_pile_position), render/anim.h
- *                 (CardVisual.pile_owner, ANIM_PILE_*), game/play_phase.h,
- *                 phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ * @deps-requires: turn_flow.h, core/game_state.h, core/settings.h, ai.h,
+ *                 core/trick.h, render/render.h, render/layout.h,
+ *                 game/play_phase.h, phase2/phase2_state.h,
+ *                 phase2/contract_logic.h, phase2/vendetta_logic.h,
+ *                 phase2/transmutation_logic.h (transmute_on_trick_complete, transmute_apply_round_end),
  *                 phase2/phase2_defs.h, stdio.h, stdlib.h
- * @deps-last-changed: 2026-03-19 — Sets pile_owner on CardVisual in pile collection
+ * @deps-last-changed: 2026-03-20 — Calls transmute round-scoped effect functions
  * ============================================================ */
 
 #include "turn_flow.h"
@@ -32,6 +31,7 @@ void flow_init(TurnFlow *flow)
     flow->turn_timer = FLOW_TURN_TIME_LIMIT;
     flow->animating_player = -1;
     flow->prev_trick_count = 0;
+    flow->hearts_broken_at_trick_start = false;
 }
 
 void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
@@ -54,6 +54,10 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             rs->last_trick_winner = -1;
             return;
         }
+
+        /* Snapshot hearts_broken at the start of each new trick */
+        if (gs->current_trick.num_played == 0)
+            flow->hearts_broken_at_trick_start = gs->hearts_broken;
 
         {
             int current = game_state_current_player(gs);
@@ -223,7 +227,12 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                              gs->tricks_played);
                     render_chat_log_push(rs, msg);
 
-                    contract_on_trick_complete(p2, &saved_trick, winner);
+                    contract_on_trick_complete(p2, &saved_trick, winner,
+                                               gs->tricks_played - 1,
+                                               &saved_tti,
+                                               flow->hearts_broken_at_trick_start);
+                    transmute_on_trick_complete(p2, &saved_trick, winner,
+                                                &saved_tti);
                 }
                 /* Reset trick transmute info for next trick */
                 for (int ti = 0; ti < CARDS_PER_TRICK; ti++)
@@ -237,6 +246,18 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                              p2_player_name(winner),
                              gs->tricks_played);
                     render_chat_log_push(rs, msg);
+                }
+            }
+            /* Apply transmutation round-end effects (e.g. Martyr doubling) */
+            if (p2->enabled && gs->phase == PHASE_SCORING) {
+                int rp[NUM_PLAYERS], ts[NUM_PLAYERS];
+                for (int i = 0; i < NUM_PLAYERS; i++) {
+                    rp[i] = gs->players[i].round_points;
+                    ts[i] = gs->players[i].total_score;
+                }
+                transmute_apply_round_end(p2, rp, ts);
+                for (int i = 0; i < NUM_PLAYERS; i++) {
+                    gs->players[i].total_score = ts[i];
                 }
             }
             rs->sync_needed = true;

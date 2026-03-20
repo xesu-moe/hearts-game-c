@@ -8,8 +8,9 @@
 
 /* ============================================================
  * @deps-implements: json_parse.h
- * @deps-requires: json_parse.h, transmutation.h, vendor/cJSON.h, raylib.h
- * @deps-last-changed: 2026-03-18 — Added json_load_transmutations(), transmute_reward parsing
+ * @deps-requires: json_parse.h, contract.h (ConditionType), transmutation.h (TransmuteEffect),
+ *                 vendor/cJSON.h, raylib.h, stdio.h, string.h
+ * @deps-last-changed: 2026-03-20 — Added WOTT_REDUCE_SCORE_3 to TRANSMUTE_EFFECT_MAP
  * ============================================================ */
 
 /* ----------------------------------------------------------------
@@ -17,15 +18,30 @@
  * ---------------------------------------------------------------- */
 
 static const EnumMapping CONDITION_TYPE_MAP[] = {
-    {"COND_NONE",              COND_NONE},
-    {"COND_AVOID_SUIT",        COND_AVOID_SUIT},
-    {"COND_COLLECT_N_OF_SUIT", COND_COLLECT_N_OF_SUIT},
-    {"COND_WIN_N_TRICKS",      COND_WIN_N_TRICKS},
-    {"COND_TAKE_NO_POINTS",    COND_TAKE_NO_POINTS},
-    {"COND_TAKE_EXACT_POINTS", COND_TAKE_EXACT_POINTS},
-    {"COND_AVOID_CARD",        COND_AVOID_CARD},
-    {"COND_COLLECT_CARD",      COND_COLLECT_CARD},
-    {"COND_WIN_LAST_TRICK",    COND_WIN_LAST_TRICK},
+    {"COND_NONE",                    COND_NONE},
+    {"COND_AVOID_SUIT",              COND_AVOID_SUIT},
+    {"COND_COLLECT_N_OF_SUIT",       COND_COLLECT_N_OF_SUIT},
+    {"COND_WIN_N_TRICKS",            COND_WIN_N_TRICKS},
+    {"COND_TAKE_NO_POINTS",          COND_TAKE_NO_POINTS},
+    {"COND_TAKE_EXACT_POINTS",       COND_TAKE_EXACT_POINTS},
+    {"COND_AVOID_CARD",              COND_AVOID_CARD},
+    {"COND_COLLECT_CARD",            COND_COLLECT_CARD},
+    {"COND_WIN_CONSECUTIVE_TRICKS",  COND_WIN_CONSECUTIVE_TRICKS},
+    {"COND_HIT_N_WITH_SUIT",         COND_HIT_N_WITH_SUIT},
+    {"COND_LOWEST_SCORE",            COND_LOWEST_SCORE},
+    {"COND_NEVER_LEAD_SUIT",         COND_NEVER_LEAD_SUIT},
+    {"COND_WIN_TRICK_N",             COND_WIN_TRICK_N},
+    {"COND_BREAK_HEARTS",            COND_BREAK_HEARTS},
+    {"COND_WIN_FIRST_N_TRICKS",      COND_WIN_FIRST_N_TRICKS},
+    {"COND_AVOID_LAST_N_TRICKS",     COND_AVOID_LAST_N_TRICKS},
+    {"COND_WIN_WITH_PASSED_CARD",    COND_WIN_WITH_PASSED_CARD},
+    {"COND_HIT_WITH_PASSED_CARD",    COND_HIT_WITH_PASSED_CARD},
+    {"COND_WIN_FIRST_AND_LAST",      COND_WIN_FIRST_AND_LAST},
+    {"COND_LEAD_QUEEN_SPADES_TRICK", COND_LEAD_QUEEN_SPADES_TRICK},
+    {"COND_SHOOT_THE_MOON",          COND_SHOOT_THE_MOON},
+    {"COND_PREVENT_MOON",            COND_PREVENT_MOON},
+    {"COND_PLAY_CARD_FIRST_OF_SUIT", COND_PLAY_CARD_FIRST_OF_SUIT},
+    {"COND_HIT_WITH_TRANSMUTE",      COND_HIT_WITH_TRANSMUTE},
 };
 
 static const EnumMapping EFFECT_TYPE_MAP[] = {
@@ -67,6 +83,12 @@ static const EnumMapping TRANSMUTE_SPECIAL_MAP[] = {
     {"TRANSMUTE_NORMAL",      TRANSMUTE_NORMAL},
     {"TRANSMUTE_ALWAYS_WIN",  TRANSMUTE_ALWAYS_WIN},
     {"TRANSMUTE_ALWAYS_LOSE", TRANSMUTE_ALWAYS_LOSE},
+};
+
+static const EnumMapping TRANSMUTE_EFFECT_MAP[] = {
+    {"EFFECT_NONE",                    TEFFECT_NONE},
+    {"WOTT_DUPLICATE_ROUND_POINTS",    TEFFECT_WOTT_DUPLICATE_ROUND_POINTS},
+    {"WOTT_REDUCE_SCORE_3",            TEFFECT_WOTT_REDUCE_SCORE_3},
 };
 
 static const EnumMapping FIGURE_TYPE_MAP[] = {
@@ -184,6 +206,8 @@ static ConditionParam parse_condition_param(const cJSON *obj)
     cp.count = json_get_int(obj, "count", 0);
     cp.at_least = cJSON_IsTrue(
         cJSON_GetObjectItemCaseSensitive(obj, "at_least"));
+
+    cp.trick_num = json_get_int(obj, "trick_num", 0);
 
     const cJSON *card_obj = cJSON_GetObjectItemCaseSensitive(obj, "card");
     cp.card = parse_card(card_obj);
@@ -444,6 +468,10 @@ bool json_load_transmutations(const char *path, TransmutationDef *defs,
             cJSON_GetObjectItemCaseSensitive(item, "negative"));
         json_strcpy(d->art_asset, sizeof(d->art_asset),
                     cJSON_GetObjectItemCaseSensitive(item, "art_asset"));
+
+        d->effect = (TransmuteEffect)enum_from_string(
+            TRANSMUTE_EFFECT_MAP, ARRAY_LEN(TRANSMUTE_EFFECT_MAP),
+            json_get_str(item, "effect"), TEFFECT_NONE);
 
         count++;
     }

@@ -8,12 +8,7 @@
       "condition_param": {
         "suit": "SUIT_HEARTS"
       },
-      "rewards": [
-        {
-          "type": "EFFECT_FLAT_SCORE_ADJUST",
-          "param": { "points_delta": -3 }
-        }
-      ],
+      "rewards": [],
       "reward_scope": "EFFECT_SCOPE_SELF",
       "tier": 0
     },
@@ -29,8 +24,7 @@
       },
       "rewards": [],
       "reward_scope": "EFFECT_SCOPE_SELF",
-      "tier": 0,
-      "transmute_rewards": [1]
+      "tier": 0
     },
     {
       "id": 2,
@@ -38,14 +32,9 @@
       "description": "Score 0 points this round.",
       "condition": "COND_TAKE_NO_POINTS",
       "condition_param": {},
-      "rewards": [
-        {
-          "type": "EFFECT_FLAT_SCORE_ADJUST",
-          "param": { "points_delta": -5 }
-        }
-      ],
+      "rewards": [],
       "reward_scope": "EFFECT_SCOPE_SELF",
-      "tier": 1
+      "tier": 0
     },
     {
       "id": 3,
@@ -56,14 +45,298 @@
         "count": 5,
         "at_least": true
       },
-      "rewards": [
-        {
-          "type": "EFFECT_POINTS_PER_HEART",
-          "param": { "points_delta": -1 }
-        }
-      ],
+      "rewards": [],
       "reward_scope": "EFFECT_SCOPE_SELF",
       "tier": 0
+    },
+    {
+      "id": 4,
+      "name": "Diamond Hoarder",
+      "description": "Collect at least 4 diamond cards.",
+      "condition": "COND_COLLECT_N_OF_SUIT",
+      "condition_param": {
+        "suit": "SUIT_DIAMONDS",
+        "count": 4,
+        "at_least": true
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 5,
+      "name": "Spade Hoarder",
+      "description": "Collect at least 4 spade cards.",
+      "condition": "COND_COLLECT_N_OF_SUIT",
+      "condition_param": {
+        "suit": "SUIT_SPADES",
+        "count": 4,
+        "at_least": true
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 6,
+      "name": "Heart Hoarder",
+      "description": "Collect at least 4 heart cards.",
+      "condition": "COND_COLLECT_N_OF_SUIT",
+      "condition_param": {
+        "suit": "SUIT_HEARTS",
+        "count": 4,
+        "at_least": true
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 7,
+      "name": "Hot Streak",
+      "description": "Win 3 consecutive tricks.",
+      "condition": "COND_WIN_CONSECUTIVE_TRICKS",
+      "condition_param": {
+        "count": 3
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 8,
+      "name": "Heart Sniper",
+      "description": "Hit opponents with hearts at least 2 times.",
+      "condition": "COND_HIT_N_WITH_SUIT",
+      "condition_param": {
+        "suit": "SUIT_HEARTS",
+        "count": 2
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 9,
+      "name": "Low Profile",
+      "description": "Have the lowest score this round.",
+      "condition": "COND_LOWEST_SCORE",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 10,
+      "name": "Club Shy",
+      "description": "Never lead with a club.",
+      "condition": "COND_NEVER_LEAD_SUIT",
+      "condition_param": {
+        "suit": "SUIT_CLUBS"
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 11,
+      "name": "Diamond Shy",
+      "description": "Never lead with a diamond.",
+      "condition": "COND_NEVER_LEAD_SUIT",
+      "condition_param": {
+        "suit": "SUIT_DIAMONDS"
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 12,
+      "name": "Spade Shy",
+      "description": "Never lead with a spade.",
+      "condition": "COND_NEVER_LEAD_SUIT",
+      "condition_param": {
+        "suit": "SUIT_SPADES"
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 13,
+      "name": "Heart Shy",
+      "description": "Never lead with a heart.",
+      "condition": "COND_NEVER_LEAD_SUIT",
+      "condition_param": {
+        "suit": "SUIT_HEARTS"
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 14,
+      "name": "Opening Act",
+      "description": "Win the first trick.",
+      "condition": "COND_WIN_TRICK_N",
+      "condition_param": {
+        "trick_num": 0
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 15,
+      "name": "Heartbreaker",
+      "description": "Be the player who breaks hearts.",
+      "condition": "COND_BREAK_HEARTS",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 16,
+      "name": "Queen Hunter",
+      "description": "Capture the Queen of Spades.",
+      "condition": "COND_COLLECT_CARD",
+      "condition_param": {
+        "card": { "suit": "SUIT_SPADES", "rank": "RANK_Q" }
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 0
+    },
+    {
+      "id": 17,
+      "name": "Fast Start",
+      "description": "Win the first 3 tricks.",
+      "condition": "COND_WIN_FIRST_N_TRICKS",
+      "condition_param": {
+        "count": 3
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 18,
+      "name": "Graceful Exit",
+      "description": "Don't win any of the last 3 tricks.",
+      "condition": "COND_AVOID_LAST_N_TRICKS",
+      "condition_param": {
+        "count": 3
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 19,
+      "name": "Return to Sender",
+      "description": "Win a trick using a card you received in the pass.",
+      "condition": "COND_WIN_WITH_PASSED_CARD",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 20,
+      "name": "Gift of Pain",
+      "description": "Hit an opponent with a card you received in the pass.",
+      "condition": "COND_HIT_WITH_PASSED_CARD",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 21,
+      "name": "Lucky Seven",
+      "description": "Win the 7th trick.",
+      "condition": "COND_WIN_TRICK_N",
+      "condition_param": {
+        "trick_num": 6
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 22,
+      "name": "Bookends",
+      "description": "Win both the first and last trick.",
+      "condition": "COND_WIN_FIRST_AND_LAST",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 23,
+      "name": "Queen's Herald",
+      "description": "Lead the trick where the Queen of Spades is played.",
+      "condition": "COND_LEAD_QUEEN_SPADES_TRICK",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 24,
+      "name": "Poisoned Gift",
+      "description": "Hit an opponent with a passed Queen of Spades.",
+      "condition": "COND_HIT_WITH_PASSED_CARD",
+      "condition_param": {
+        "card": { "suit": "SUIT_SPADES", "rank": "RANK_Q" }
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 1
+    },
+    {
+      "id": 25,
+      "name": "Shoot the Moon",
+      "description": "Collect all 26 points in a single round.",
+      "condition": "COND_SHOOT_THE_MOON",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 2
+    },
+    {
+      "id": 26,
+      "name": "Moon Guard",
+      "description": "Break another player's moon run by taking scoring cards.",
+      "condition": "COND_PREVENT_MOON",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 2
+    },
+    {
+      "id": 27,
+      "name": "Trailblazer",
+      "description": "Play the Ace of Hearts as the first heart in the round.",
+      "condition": "COND_PLAY_CARD_FIRST_OF_SUIT",
+      "condition_param": {
+        "card": { "suit": "SUIT_HEARTS", "rank": "RANK_A" }
+      },
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 2
+    },
+    {
+      "id": 28,
+      "name": "Alchemist's Strike",
+      "description": "Hit an opponent with a scoring transmutation card.",
+      "condition": "COND_HIT_WITH_TRANSMUTE",
+      "condition_param": {},
+      "rewards": [],
+      "reward_scope": "EFFECT_SCOPE_SELF",
+      "tier": 2
     }
   ]
 }

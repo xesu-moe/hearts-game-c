@@ -121,15 +121,17 @@ fuente de letra
 3. End the round without scoring any points
 
 4. Win a trick with a card received during passing phase.
-5. Hit with a card you received during passing phase./btw 
+5. Hit with a card you received during passing phase.
 
 6. Win the trick number 7
 7. Win the first and the last trick
 
-8. Lead the trick where the queen is played.
+8. Lead the trick where the queen of spades is played.
+9. Hit with a queen of spades you received during passing phase.
 
 ### Hard
 
 1. Hit the moon.
 2. Take the last card a player is missing to hit the moon.
 3. Play queen of spades as the first spade card in the round.
+4. Hit with a scoring transmutation card.

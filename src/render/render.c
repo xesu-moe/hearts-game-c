@@ -1,13 +1,14 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (ScoringSubphase, score_* fields, contract_reveal_* fields, pile_* fields,
- *                           trick_transmute_ids in sync_hands()),
- *                 particle.h, anim.h (anim_get_speed, ANIM_SCORING_* macros, ANIM_CONTRACT_REVEAL_STAGGER),
+ * @deps-requires: render.h (pause_state, pause_btns[], pause_confirm_*, PauseState, is_ingame_phase),
+ *                 render.h (settings_tab/btns, settings_return_*, SETTINGS_ACTIVE_COUNT),
+ *                 render.h (ScoringSubphase, score_* fields, contract_reveal_* fields, pile_* fields),
+ *                 particle.h, anim.h (anim_get_speed, ANIM_SCORING_* macros),
  *                 layout.h (layout_scoring_*, layout_wipe_boundary_x()),
  *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
- *                 core/game_state.h (PHASE_SCORING), core/card.h,
- *                 core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-20 — sync_hands() now uses trick_transmute_ids to set CardVisual.transmute_id for trick cards
+ *                 core/game_state.h (GamePhase, PHASE_SCORING, PHASE_MENU, PHASE_SETTINGS),
+ *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-03-20 — Pause menu UI rendering (buttons, confirmation dialogs)
  * ============================================================ */
 
 #include "render.h"
@@ -341,9 +342,11 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
     }
 
     if (gs->phase == PHASE_GAME_OVER) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
         rs->btn_continue.bounds = (Rectangle){
-            bc.x - 100.0f * s,
-            cfg->board_y + 460.0f * s,
+            screen_cx - 100.0f * s,
+            screen_cy + 180.0f * s,
             200.0f * s, 50.0f * s
         };
         rs->btn_continue.label = "Return to Menu";
@@ -412,8 +415,31 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         float arrow_sz = 30.0f * s;
         float scx = cfg->screen_width * 0.5f;
         float scy = cfg->screen_height * 0.5f;
-        float start_y = scy - 180.0f * s;
         float cx = scx;
+
+        /* Tab bar layout */
+        static const char *tab_labels[] = {"Display", "Gameplay", "Audio"};
+        float tab_w = 140.0f * s;
+        float tab_h = 36.0f * s;
+        float tab_gap = 8.0f * s;
+        float tab_total_w = SETTINGS_TAB_COUNT * tab_w + (SETTINGS_TAB_COUNT - 1) * tab_gap;
+        float tab_start_x = scx - tab_total_w * 0.5f;
+        float tab_y = scy - 220.0f * s;
+
+        for (int t = 0; t < SETTINGS_TAB_COUNT; t++) {
+            rs->settings_tab_btns[t].bounds = (Rectangle){
+                tab_start_x + (float)t * (tab_w + tab_gap), tab_y, tab_w, tab_h};
+            rs->settings_tab_btns[t].label = tab_labels[t];
+            rs->settings_tab_btns[t].visible = true;
+            rs->settings_tab_btns[t].disabled = false;
+            rs->settings_tab_btns[t].subtitle = NULL;
+        }
+
+        /* Row ranges per tab: Display=0..2, Gameplay=3..4, Audio=5..7 */
+        static const int tab_row_start[] = {0, 3, 5};
+        static const int tab_row_end[]   = {3, 5, 8}; /* exclusive */
+        int rstart = tab_row_start[rs->settings_tab];
+        int rend   = tab_row_end[rs->settings_tab];
 
         static const char *labels[] = {
             "Window Mode", "Resolution", "FPS Cap",
@@ -421,14 +447,20 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             "Master Volume", "Music Volume", "SFX Volume"
         };
 
-        for (int i = 0; i < SETTINGS_ROW_COUNT; i++) {
-            float y = start_y + (float)i * (row_h + row_gap);
-            /* Add section gaps */
-            if (i >= 3) y += 16.0f * s; /* gap before Gameplay */
-            if (i >= 5) y += 16.0f * s; /* gap before Audio */
+        float content_y = tab_y + tab_h + 30.0f * s;
 
+        for (int i = 0; i < SETTINGS_ROW_COUNT; i++) {
             rs->settings_labels[i] = labels[i];
             rs->settings_disabled[i] = (i >= SETTINGS_ACTIVE_COUNT);
+
+            bool in_tab = (i >= rstart && i < rend);
+            if (!in_tab) {
+                rs->settings_rows_prev[i].visible = false;
+                rs->settings_rows_next[i].visible = false;
+                continue;
+            }
+
+            float y = content_y + (float)(i - rstart) * (row_h + row_gap);
 
             /* [<] button */
             rs->settings_rows_prev[i].bounds = (Rectangle){
@@ -449,19 +481,25 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->settings_rows_next[i].subtitle = NULL;
         }
 
-        /* Apply display settings button (between display section and back) */
-        float apply_y = start_y + 3.0f * (row_h + row_gap) - 6.0f * s;
-        rs->btn_settings_apply.bounds = (Rectangle){
-            cx + row_w * 0.5f - 100.0f * s, apply_y, 100.0f * s, 30.0f * s};
-        rs->btn_settings_apply.label = "Apply";
-        rs->btn_settings_apply.visible = true;
-        rs->btn_settings_apply.disabled = false;
-        rs->btn_settings_apply.subtitle = NULL;
+        /* Apply button: only on Display tab */
+        int visible_rows = rend - rstart;
+        float after_rows_y = content_y + (float)visible_rows * (row_h + row_gap);
 
-        /* Back button */
+        if (rs->settings_tab == SETTINGS_TAB_DISPLAY) {
+            rs->btn_settings_apply.bounds = (Rectangle){
+                cx + row_w * 0.5f - 100.0f * s, after_rows_y, 100.0f * s, 30.0f * s};
+            rs->btn_settings_apply.label = "Apply";
+            rs->btn_settings_apply.visible = true;
+            rs->btn_settings_apply.disabled = false;
+            rs->btn_settings_apply.subtitle = NULL;
+        } else {
+            rs->btn_settings_apply.visible = false;
+        }
+
+        /* Back button — always below content area */
         rs->btn_settings_back.bounds = (Rectangle){
             scx - 80.0f * s,
-            start_y + (float)SETTINGS_ROW_COUNT * (row_h + row_gap) + 60.0f * s,
+            after_rows_y + 40.0f * s,
             160.0f * s, 45.0f * s};
         rs->btn_settings_back.label = "Back";
         rs->btn_settings_back.visible = true;
@@ -474,6 +512,69 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->settings_rows_prev[i].visible = false;
             rs->settings_rows_next[i].visible = false;
         }
+        for (int t = 0; t < SETTINGS_TAB_COUNT; t++) {
+            rs->settings_tab_btns[t].visible = false;
+        }
+    }
+
+    /* ---- Pause menu buttons ---- */
+    if (rs->pause_state != PAUSE_INACTIVE) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
+        float pbtn_w = 280.0f * s;
+        float pbtn_h = 50.0f * s;
+        float pbtn_gap = 12.0f * s;
+
+        if (rs->pause_state == PAUSE_MENU) {
+            static const char *pause_labels[PAUSE_BTN_COUNT] = {
+                "Continue", "Settings", "Return to Menu", "Quit Game"
+            };
+            float total_h = PAUSE_BTN_COUNT * pbtn_h +
+                            (PAUSE_BTN_COUNT - 1) * pbtn_gap;
+            float top_y = screen_cy - total_h * 0.5f + 40.0f * s;
+
+            for (int i = 0; i < PAUSE_BTN_COUNT; i++) {
+                rs->pause_btns[i].bounds = (Rectangle){
+                    screen_cx - pbtn_w * 0.5f,
+                    top_y + (float)i * (pbtn_h + pbtn_gap),
+                    pbtn_w, pbtn_h
+                };
+                rs->pause_btns[i].label = pause_labels[i];
+                rs->pause_btns[i].visible = true;
+                rs->pause_btns[i].disabled = false;
+                rs->pause_btns[i].subtitle = NULL;
+            }
+            rs->pause_confirm_yes.visible = false;
+            rs->pause_confirm_no.visible = false;
+        } else {
+            /* Confirmation dialog: Yes / No side by side */
+            for (int i = 0; i < PAUSE_BTN_COUNT; i++)
+                rs->pause_btns[i].visible = false;
+
+            float conf_w = 120.0f * s;
+            float conf_h = 50.0f * s;
+            float conf_gap = 20.0f * s;
+            float conf_y = screen_cy + 20.0f * s;
+
+            rs->pause_confirm_yes.bounds = (Rectangle){
+                screen_cx - conf_w - conf_gap * 0.5f, conf_y, conf_w, conf_h};
+            rs->pause_confirm_yes.label = "Yes";
+            rs->pause_confirm_yes.visible = true;
+            rs->pause_confirm_yes.disabled = false;
+            rs->pause_confirm_yes.subtitle = NULL;
+
+            rs->pause_confirm_no.bounds = (Rectangle){
+                screen_cx + conf_gap * 0.5f, conf_y, conf_w, conf_h};
+            rs->pause_confirm_no.label = "No";
+            rs->pause_confirm_no.visible = true;
+            rs->pause_confirm_no.disabled = false;
+            rs->pause_confirm_no.subtitle = NULL;
+        }
+    } else {
+        for (int i = 0; i < PAUSE_BTN_COUNT; i++)
+            rs->pause_btns[i].visible = false;
+        rs->pause_confirm_yes.visible = false;
+        rs->pause_confirm_no.visible = false;
     }
 }
 
@@ -526,7 +627,26 @@ void render_init(RenderState *rs)
     rs->pass_anim_in_progress = false;
     rs->pass_wait_timer = 0.0f;
 
+    rs->pause_state = PAUSE_INACTIVE;
+    rs->settings_return_phase = PHASE_MENU;
+    rs->settings_return_paused = false;
+
     particle_init(&rs->particles);
+}
+
+void render_reset_to_menu(RenderState *rs)
+{
+    rs->pause_state = PAUSE_INACTIVE;
+    render_clear_piles(rs);
+    rs->pass_staged_count = 0;
+    rs->pass_anim_in_progress = false;
+    rs->pile_anim_in_progress = false;
+    rs->deal_complete = false;
+    rs->card_count = 0;
+    for (int i = 0; i < NUM_PLAYERS; i++)
+        rs->hand_visual_counts[i] = 0;
+    rs->trick_visual_count = 0;
+    rs->sync_needed = true;
 }
 
 void render_update(const GameState *gs, RenderState *rs, float dt)
@@ -545,6 +665,24 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
     }
 
     rs->phase_timer += dt;
+
+    /* Pause freeze: update only pause/confirm button hover, then return */
+    if (rs->pause_state != PAUSE_INACTIVE) {
+        Vector2 mouse = GetMousePosition();
+        for (int i = 0; i < PAUSE_BTN_COUNT; i++) {
+            rs->pause_btns[i].hovered =
+                rs->pause_btns[i].visible &&
+                CheckCollisionPointRec(mouse, rs->pause_btns[i].bounds);
+        }
+        rs->pause_confirm_yes.hovered =
+            rs->pause_confirm_yes.visible &&
+            CheckCollisionPointRec(mouse, rs->pause_confirm_yes.bounds);
+        rs->pause_confirm_no.hovered =
+            rs->pause_confirm_no.visible &&
+            CheckCollisionPointRec(mouse, rs->pause_confirm_no.bounds);
+        sync_buttons(gs, rs);
+        return;
+    }
 
     /* Sync visuals only when game state has mutated or phase changed.
      * Block sync during pass toss/wait/receive to preserve staged visuals.
@@ -1039,6 +1177,11 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             rs->btn_settings_apply.visible &&
             !rs->btn_settings_apply.disabled &&
             CheckCollisionPointRec(mouse, rs->btn_settings_apply.bounds);
+        for (int t = 0; t < SETTINGS_TAB_COUNT; t++) {
+            rs->settings_tab_btns[t].hovered =
+                rs->settings_tab_btns[t].visible &&
+                CheckCollisionPointRec(mouse, rs->settings_tab_btns[t].bounds);
+        }
         for (int i = 0; i < SETTINGS_ROW_COUNT; i++) {
             rs->settings_rows_prev[i].hovered =
                 rs->settings_rows_prev[i].visible &&
@@ -1092,7 +1235,7 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale)
     /* Transmuted card overlay: purple border + ID badge.
      * Use the same rlgl matrix transforms as card_render_face so the
      * overlay aligns with the card even when rotated. */
-    if (cv->transmute_id >= 0 && cv->face_up) {
+    if (cv->transmute_id >= 0 && cv->face_up && cv->opacity > 0.0f) {
         float cw = CARD_WIDTH_REF * effective_scale;
         float ch = CARD_HEIGHT_REF * effective_scale;
 
@@ -1781,16 +1924,18 @@ static void draw_phase_game_over(const GameState *gs, const RenderState *rs)
     float s = rs->layout.scale;
     const LayoutConfig *cfg = &rs->layout;
 
-    Rectangle br = layout_board_rect(cfg);
-    DrawRectangleRec(br, (Color){0, 0, 0, 200});
+    /* Full-screen dark overlay (no left panel on game over) */
+    DrawRectangle(0, 0, (int)cfg->screen_width, (int)cfg->screen_height,
+                  (Color){0, 0, 0, 200});
 
-    Vector2 bc = layout_board_center(cfg);
+    float cx = cfg->screen_width * 0.5f;
+    float cy = cfg->screen_height * 0.5f;
 
     const char *title = "Game Over";
     int title_size = (int)(48.0f * s);
     int tw = MeasureText(title, title_size);
-    DrawText(title, (int)(bc.x - (float)tw * 0.5f),
-             (int)(cfg->board_y + 100.0f * s), title_size, GOLD);
+    DrawText(title, (int)(cx - (float)tw * 0.5f),
+             (int)(cy - 180.0f * s), title_size, GOLD);
 
     /* Winner announcement */
     int winners[NUM_PLAYERS];
@@ -1805,14 +1950,14 @@ static void draw_phase_game_over(const GameState *gs, const RenderState *rs)
     }
     int win_size = (int)(36.0f * s);
     int ww = MeasureText(winner_text, win_size);
-    DrawText(winner_text, (int)(bc.x - (float)ww * 0.5f),
-             (int)(cfg->board_y + 180.0f * s), win_size, RAYWHITE);
+    DrawText(winner_text, (int)(cx - (float)ww * 0.5f),
+             (int)(cy - 100.0f * s), win_size, RAYWHITE);
 
     /* Final scores */
     int score_col_w = (int)(150.0f * s);
     int table_w = (int)(300.0f * s);
-    int table_x = (int)(cfg->board_x + (cfg->board_size - (float)table_w) * 0.5f);
-    int table_y = (int)(cfg->board_y + 260.0f * s);
+    int table_x = (int)(cx - (float)table_w * 0.5f);
+    int table_y = (int)(cy - 20.0f * s);
     int row_h = (int)(35.0f * s);
     int font22 = (int)(22.0f * s);
 
@@ -1843,41 +1988,54 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
     (void)gs;
     float s = rs->layout.scale;
     float screen_cx = rs->layout.screen_width * 0.5f;
-    float screen_cy = rs->layout.screen_height * 0.5f;
 
     /* Title */
     const char *title = "SETTINGS";
     int title_size = (int)(40.0f * s);
     int tw = MeasureText(title, title_size);
-    float title_y = rs->settings_rows_prev[0].bounds.y - 70.0f * s;
+    float title_y = rs->settings_tab_btns[0].bounds.y - 50.0f * s;
     DrawText(title, (int)(screen_cx - (float)tw * 0.5f),
              (int)title_y, title_size, RAYWHITE);
 
-    /* Section headers */
-    float row_h = 40.0f * s;
-    float row_gap = 8.0f * s;
-    float start_y = screen_cy - 180.0f * s;
-    int section_fs = (int)(16.0f * s);
-    float label_x = screen_cx - 230.0f * s;
+    /* Draw tab bar */
+    int tab_fs = (int)(18.0f * s);
+    for (int t = 0; t < SETTINGS_TAB_COUNT; t++) {
+        const UIButton *tab = &rs->settings_tab_btns[t];
+        bool active = (t == (int)rs->settings_tab);
+        Rectangle r = tab->bounds;
 
-    /* Draw section labels */
-    DrawText("Display", (int)label_x,
-             (int)(start_y - 24.0f * s), section_fs, LIGHTGRAY);
-    DrawText("Gameplay", (int)label_x,
-             (int)(start_y + 3.0f * (row_h + row_gap) + 16.0f * s - 24.0f * s),
-             section_fs, LIGHTGRAY);
-    DrawText("Audio", (int)label_x,
-             (int)(start_y + 5.0f * (row_h + row_gap) + 32.0f * s - 24.0f * s),
-             section_fs, LIGHTGRAY);
+        /* Tab background */
+        Color bg = active ? (Color){60, 60, 60, 255} : (Color){35, 35, 35, 255};
+        if (tab->hovered && !active) bg = (Color){50, 50, 50, 255};
+        DrawRectangleRec(r, bg);
 
+        /* Active tab underline */
+        if (active) {
+            DrawRectangle((int)r.x, (int)(r.y + r.height - 3.0f * s),
+                          (int)r.width, (int)(3.0f * s), GOLD);
+        }
+
+        /* Tab label */
+        Color lbl = active ? GOLD : LIGHTGRAY;
+        int lw = MeasureText(tab->label, tab_fs);
+        DrawText(tab->label,
+                 (int)(r.x + (r.width - (float)lw) * 0.5f),
+                 (int)(r.y + (r.height - (float)tab_fs) * 0.5f),
+                 tab_fs, lbl);
+    }
+
+    /* Draw setting rows (only visible ones for active tab) */
     int label_fs = (int)(20.0f * s);
     int value_fs = (int)(20.0f * s);
+    float row_h = 40.0f * s;
+    float label_x = screen_cx - 230.0f * s;
 
-    /* Draw each setting row */
+    float arrow_sz = 30.0f * s;
     for (int i = 0; i < SETTINGS_ROW_COUNT; i++) {
-        float y = start_y + (float)i * (row_h + row_gap);
-        if (i >= 3) y += 16.0f * s;
-        if (i >= 5) y += 16.0f * s;
+        if (!rs->settings_rows_prev[i].visible) continue;
+
+        /* Recover row top from arrow button position */
+        float row_top = rs->settings_rows_prev[i].bounds.y - (row_h - arrow_sz) * 0.5f;
 
         Color lbl_col = rs->settings_disabled[i]
                             ? (Color){100, 100, 100, 255}
@@ -1889,7 +2047,7 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
         /* Label */
         DrawText(rs->settings_labels[i],
                  (int)label_x,
-                 (int)(y + (row_h - (float)label_fs) * 0.5f),
+                 (int)(row_top + (row_h - (float)label_fs) * 0.5f),
                  label_fs, lbl_col);
 
         /* Value text centered between arrows */
@@ -1901,7 +2059,7 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
             float arrow_right = rs->settings_rows_next[i].bounds.x;
             float center_x = (arrow_left + arrow_right) * 0.5f;
             DrawText(val, (int)(center_x - (float)vw * 0.5f),
-                     (int)(y + (row_h - (float)value_fs) * 0.5f),
+                     (int)(row_top + (row_h - (float)value_fs) * 0.5f),
                      value_fs, val_col);
         }
 
@@ -1915,18 +2073,51 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
     draw_button(&rs->btn_settings_back, s);
 }
 
-/* ---- Main draw ---- */
+/* ---- Pause overlay ---- */
 
-void render_draw(const GameState *gs, const RenderState *rs)
+static void draw_pause_overlay(const RenderState *rs)
 {
-    BeginDrawing();
-    ClearBackground((Color){20, 60, 20, 255});
+    float s = rs->layout.scale;
+    const LayoutConfig *cfg = &rs->layout;
+    float cx = cfg->screen_width * 0.5f;
 
-    switch (gs->phase) {
-    case PHASE_MENU:
-        draw_phase_menu(gs, rs);
-        break;
+    /* Dark overlay */
+    DrawRectangle(0, 0, (int)cfg->screen_width, (int)cfg->screen_height,
+                  (Color){0, 0, 0, 200});
 
+    if (rs->pause_state == PAUSE_MENU) {
+        /* "PAUSED" title */
+        const char *title = "PAUSED";
+        int title_size = (int)(48.0f * s);
+        int tw = MeasureText(title, title_size);
+        float title_y = rs->pause_btns[0].bounds.y - 60.0f * s;
+        DrawText(title, (int)(cx - (float)tw * 0.5f),
+                 (int)title_y, title_size, GOLD);
+
+        /* 4 buttons */
+        for (int i = 0; i < PAUSE_BTN_COUNT; i++)
+            draw_button(&rs->pause_btns[i], s);
+    } else {
+        /* Confirmation dialog */
+        const char *prompt = (rs->pause_state == PAUSE_CONFIRM_MENU)
+                                 ? "Return to Main Menu?"
+                                 : "Quit Game?";
+        int prompt_size = (int)(36.0f * s);
+        int pw = MeasureText(prompt, prompt_size);
+        float prompt_y = rs->pause_confirm_yes.bounds.y - 60.0f * s;
+        DrawText(prompt, (int)(cx - (float)pw * 0.5f),
+                 (int)prompt_y, prompt_size, RAYWHITE);
+
+        draw_button(&rs->pause_confirm_yes, s);
+        draw_button(&rs->pause_confirm_no, s);
+    }
+}
+
+/* Draw the game scene for a given in-game phase (used to show game behind overlays). */
+static void draw_ingame_phase(const GameState *gs, const RenderState *rs,
+                               GamePhase phase)
+{
+    switch (phase) {
     case PHASE_DEALING: {
         float s = rs->layout.scale;
         Vector2 bc = layout_board_center(&rs->layout);
@@ -1934,16 +2125,14 @@ void render_draw(const GameState *gs, const RenderState *rs)
         draw_left_panel_chat(rs);
         draw_left_panel_info(rs);
 
-        /* Deck stack at board center (diminishing as cards fly out) */
         int cards_in_flight = 0;
         for (int i = 0; i < rs->card_count; i++) {
             if (rs->cards[i].animating || rs->cards[i].anim_delay > 0.0f)
                 cards_in_flight++;
         }
-        /* Show remaining deck cards as stacked backs */
         int deck_remaining = 52 - (rs->card_count - cards_in_flight);
         if (deck_remaining < 0) deck_remaining = 0;
-        int deck_layers = (deck_remaining + 6) / 7; /* ~1 layer per 7 cards */
+        int deck_layers = (deck_remaining + 6) / 7;
         if (deck_layers > 7) deck_layers = 7;
         Vector2 deck_origin = {rs->layout.card_width * 0.5f, rs->layout.card_height * 0.5f};
         for (int i = 0; i < deck_layers; i++) {
@@ -1951,13 +2140,10 @@ void render_draw(const GameState *gs, const RenderState *rs)
             card_render_back(pos, s, 1.0f, 0.0f, deck_origin);
         }
 
-        /* Draw card visuals sorted by z_order (smaller AI cards underneath,
-         * bigger human cards on top).  Build a sorted index array. */
         {
             int sorted[MAX_CARD_VISUALS];
             int n = rs->card_count;
             for (int i = 0; i < n; i++) sorted[i] = i;
-            /* Simple insertion sort — only 52 cards */
             for (int i = 1; i < n; i++) {
                 int key = sorted[i];
                 int kz = rs->cards[key].z_order;
@@ -1973,7 +2159,6 @@ void render_draw(const GameState *gs, const RenderState *rs)
             }
         }
 
-        /* "Dealing..." text below deck */
         if (!rs->deal_complete) {
             const char *deal_text = "Dealing...";
             int deal_size = (int)(22.0f * s);
@@ -1983,7 +2168,6 @@ void render_draw(const GameState *gs, const RenderState *rs)
                      deal_size, LIGHTGRAY);
         }
 
-        /* Round number banner */
         char round_text[32];
         snprintf(round_text, sizeof(round_text), "Round %d", gs->round_number);
         int round_size = (int)(30.0f * s);
@@ -1992,23 +2176,43 @@ void render_draw(const GameState *gs, const RenderState *rs)
                  (int)(rs->layout.board_y + 20.0f * s), round_size, GOLD);
         break;
     }
-
     case PHASE_PASSING:
         draw_left_panel_chat(rs);
         draw_left_panel_info(rs);
         draw_phase_passing(gs, rs);
         break;
-
     case PHASE_PLAYING:
         draw_phase_playing(gs, rs);
         particle_draw(&rs->particles);
         break;
-
     case PHASE_SCORING:
         draw_left_panel_chat(rs);
         draw_left_panel_info(rs);
         draw_phase_scoring(gs, rs);
         particle_draw(&rs->particles);
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- Main draw ---- */
+
+void render_draw(const GameState *gs, const RenderState *rs)
+{
+    BeginDrawing();
+    ClearBackground((Color){20, 60, 20, 255});
+
+    switch (gs->phase) {
+    case PHASE_MENU:
+        draw_phase_menu(gs, rs);
+        break;
+
+    case PHASE_DEALING:
+    case PHASE_PASSING:
+    case PHASE_PLAYING:
+    case PHASE_SCORING:
+        draw_ingame_phase(gs, rs, gs->phase);
         break;
 
     case PHASE_GAME_OVER:
@@ -2016,11 +2220,23 @@ void render_draw(const GameState *gs, const RenderState *rs)
         break;
 
     case PHASE_SETTINGS:
+        /* If opened from an in-game pause, show the game underneath (dimmed) */
+        if (is_ingame_phase(rs->settings_return_phase)) {
+            draw_ingame_phase(gs, rs, rs->settings_return_phase);
+            DrawRectangle(0, 0, (int)rs->layout.screen_width,
+                          (int)rs->layout.screen_height,
+                          (Color){0, 0, 0, 180});
+        }
         draw_phase_settings(gs, rs);
         break;
 
     default:
         break;
+    }
+
+    /* Pause overlay (drawn on top of the game scene, but not during settings) */
+    if (rs->pause_state != PAUSE_INACTIVE && gs->phase != PHASE_SETTINGS) {
+        draw_pause_overlay(rs);
     }
 
     DrawFPS(10, 10);
