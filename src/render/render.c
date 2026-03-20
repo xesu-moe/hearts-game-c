@@ -1,12 +1,13 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (ScoringSubphase, score_* fields, contract_reveal_* fields, pile_* fields),
+ * @deps-requires: render.h (ScoringSubphase, score_* fields, contract_reveal_* fields, pile_* fields,
+ *                           trick_transmute_ids in sync_hands()),
  *                 particle.h, anim.h (anim_get_speed, ANIM_SCORING_* macros, ANIM_CONTRACT_REVEAL_STAGGER),
  *                 layout.h (layout_scoring_*, layout_wipe_boundary_x()),
  *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
  *                 core/game_state.h (PHASE_SCORING), core/card.h,
  *                 core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-19 — Added contract_reveal_timer countdown logic in SCORE_SUB_CONTRACTS case; uses ANIM_CONTRACT_REVEAL_STAGGER for staggered row reveal
+ * @deps-last-changed: 2026-03-20 — sync_hands() now uses trick_transmute_ids to set CardVisual.transmute_id for trick cards
  * ============================================================ */
 
 #include "render.h"
@@ -216,6 +217,7 @@ static void sync_hands(const GameState *gs, RenderState *rs)
         cv->opacity = 1.0f;
         cv->z_order = 100 + i;
         cv->animating = false;
+        cv->transmute_id = rs->trick_transmute_ids[i];
     }
 }
 
@@ -509,6 +511,8 @@ void render_init(RenderState *rs)
     rs->transmute_info_count = 0;
     for (int i = 0; i < MAX_HAND_SIZE; i++)
         rs->hand_transmute_ids[i] = -1;
+    for (int i = 0; i < CARDS_PER_TRICK; i++)
+        rs->trick_transmute_ids[i] = -1;
 
     for (int i = 0; i < CHAT_LOG_MAX; i++)
         rs->chat_colors[i] = LIGHTGRAY;

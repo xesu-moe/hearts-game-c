@@ -53,13 +53,20 @@ Phase 0: Prerequisite Refactoring (hardest, highest risk)
 
 
 
+Time Counter
+Transmutation
+Contract Draft System
+Game over
+In game menu.
+
+Check:
+  Point-scoring transmutation cards are included in scoring menu 
+
+
+
 
   
 
-bugs:
-	Efectos no funcionan
-	When choosing a host action it displays "choose a contract:" instead "Choose a host action:"
-musica
 
 
 Cartas especiales:
@@ -71,8 +78,7 @@ Cartas especiales:
 
 
 
-settings
-	antialiasing?
+
 statistics
 collection
 animaciones
@@ -80,7 +86,6 @@ animaciones
 
 networking (docker container per game room)
 sprites
-reorganización de archivos.
 fuente de letra
 
 

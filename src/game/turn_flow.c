@@ -149,7 +149,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                     /* Copy card identity and current position from trick visual */
                     *pv = rs->cards[src_idx];
                     pv->pile_owner = winner;
-                    pv->face_up = false;  /* instant flip */
+                    pv->face_up = false;  /* instant flip; hides transmute border */
                     pv->selected = false;
                     pv->hovered = false;
                     pv->hover_t = 0.0f;

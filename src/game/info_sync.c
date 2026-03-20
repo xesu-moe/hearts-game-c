@@ -1,9 +1,9 @@
 /* ============================================================
  * @deps-implements: info_sync.h
- * @deps-requires: info_sync.h, core/game_state.h, render/render.h,
+ * @deps-requires: info_sync.h, core/game_state.h, render/render.h (RenderState.trick_transmute_ids),
  *                 phase2/phase2_state.h, phase2/phase2_defs.h,
  *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h
- * @deps-last-changed: 2026-03-19 — Extracted from main.c
+ * @deps-last-changed: 2026-03-20 — Populates trick_transmute_ids from PlayPhaseState.current_tti
  * ============================================================ */
 
 #include "info_sync.h"
@@ -95,6 +95,12 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                         : -1;
             }
 
+            /* Trick transmute IDs */
+            for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                rs->trick_transmute_ids[i] =
+                    pls->current_tti.transmutation_ids[i];
+            }
+
             /* Transmutation card descriptions for info panel */
             rs->transmute_info_count = 0;
             int seen_tids[MAX_TRANSMUTE_INFO];
@@ -165,6 +171,8 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
         rs->transmute_info_count = 0;
         for (int i = 0; i < MAX_HAND_SIZE; i++)
             rs->hand_transmute_ids[i] = -1;
+        for (int i = 0; i < CARDS_PER_TRICK; i++)
+            rs->trick_transmute_ids[i] = -1;
     }
 }
 

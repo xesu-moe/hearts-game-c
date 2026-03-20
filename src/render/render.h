@@ -3,17 +3,17 @@
 
 /* ============================================================
  * @deps-exports: DragState (hand_slot_origin, hand_slot_current, is_play_drag, rearrange_map, rearrange_count),
- *                RenderState, ScoringSubphase enum, PassStagedCard, MenuItem, UIButton,
+ *                RenderState (trick_transmute_ids field), ScoringSubphase enum, PassStagedCard, MenuItem, UIButton,
  *                render_init/update/draw(), render_hit_test_*(), render_cancel_drag(),
  *                render_toggle_card_selection(), render_clear_selection(), render_alloc_card_visual(),
  *                render_set_contract_options(), render_clear_piles(), render_chat_log_push*(),
  *                render_effect_label()
  * @deps-requires: raylib.h (Rectangle, Vector2, Color, RenderTexture2D),
  *                 particle.h, anim.h (CardVisual, MAX_CARD_VISUALS, ANIM_CONTRACT_REVEAL_STAGGER),
- *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS),
+ *                 layout.h (LayoutConfig), core/card.h (NUM_PLAYERS, CARDS_PER_TRICK),
  *                 core/game_state.h (GamePhase), phase2/effect.h
- * @deps-used-by: render.c, update.c, main.c, game modules, phase2 modules
- * @deps-last-changed: 2026-03-19 — Extended DragState with rearranging fields for hand reordering feature
+ * @deps-used-by: render.c, update.c, main.c, game modules, info_sync.c, phase2 modules
+ * @deps-last-changed: 2026-03-20 — Added trick_transmute_ids[CARDS_PER_TRICK] field to RenderState
  * ============================================================ */
 
 #include <stdbool.h>
@@ -221,6 +221,9 @@ typedef struct RenderState {
 
     /* Per-card transmuted flag for player 0 hand */
     int      hand_transmute_ids[MAX_HAND_SIZE]; /* -1 = not transmuted */
+
+    /* Transmute IDs for cards in the current trick */
+    int      trick_transmute_ids[CARDS_PER_TRICK]; /* -1 = not transmuted */
 
     /* Settings UI */
     UIButton settings_rows_prev[SETTINGS_ROW_COUNT];

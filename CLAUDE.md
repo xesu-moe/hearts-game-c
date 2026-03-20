@@ -63,7 +63,7 @@ make debug    # debug build (-DDEBUG -g -O0, enables debug cheats)
 
 ## Development Workflow
 
-Every feature or significant change follows a 4-step pipeline using subagents. The main agent orchestrates the workflow and writes all implementation code.
+Every feature or significant change follows a 5-step pipeline using subagents. The main agent orchestrates the workflow and writes all implementation code.
 
 ### Step 1: Plan — `@game-developer`
 
@@ -75,16 +75,29 @@ Before implementing any new system, feature, or multi-file change, consult `@gam
 **When to use:** New features, new game systems, complex changes touching 2+ files, architectural decisions.
 **When to skip:** Trivial bug fixes, single-line changes, formatting, comments.
 
-### Step 2: Implement — Main Agent
+### Step 2: Route — `@architecture-router`
 
-The main agent executes the plan from `@game-developer`:
+Immediately after `@game-developer` produces a plan and before the main agent begins writing, run `@architecture-router`. This agent:
+- Reads `ARCHITECTURE.md` and the file tree to determine where every planned item (function, struct, enum) belongs
+- Produces a Routing Table mapping each item to a target file with a rationale
+- Proposes new files if no existing file fits, and flags mixed-concern or bloat risks
+- Does NOT write or modify code — it only decides where code belongs
+
+The main agent **must** receive the Routing Table as a constraint before implementing.
+
+**When to use:** Whenever `@game-developer` produces a plan (i.e., new features, new systems, multi-file changes).
+**When to skip:** Same as `@game-developer` — trivial bug fixes, single-line changes, formatting, comments.
+
+### Step 3: Implement — Main Agent
+
+The main agent executes the plan from `@game-developer`, constrained by the Routing Table from `@architecture-router`:
 - Follow the checklist item by item
 - Create/modify files as specified in the plan
 - Leverage auto-triggered C skills (`c-data-structures`, `c-memory-management`, `c-systems-programming`) for correct patterns — write it right the first time to minimize audit rework
 - Use **Context7** MCP server to verify Raylib API signatures before calling them
 - Build with `make` to verify compilation
 
-### Step 3: Map Dependencies — `@dependency-mapper`
+### Step 4: Map Dependencies — `@dependency-mapper`
 
 After implementation, run `@dependency-mapper` to update the dependency graph. This agent:
 - Updates `.claude/deps.json` with new/changed dependencies
@@ -94,7 +107,7 @@ After implementation, run `@dependency-mapper` to update the dependency graph. T
 **When to use:** Any change to headers, structs, enums, typedefs, function signatures, or file creation/deletion.
 **When to skip:** Implementation-only changes inside function bodies, comments, formatting.
 
-### Step 4: Review — `@code-auditor`
+### Step 5: Review — `@code-auditor`
 
 After implementation (and dependency mapping if applicable), run `@code-auditor` to review. This agent checks:
 - Correctness, memory safety, performance
@@ -109,16 +122,19 @@ Fix any critical/warning issues before considering the task complete.
 Feature Request
     │
     ▼
-@game-developer  →  Structured Plan
+@game-developer       →  Structured Plan
     │
     ▼
-Main Agent       →  Implementation + `make`
+@architecture-router  →  Routing Table (file assignments)
     │
     ▼
-@dependency-mapper → deps.json + impact report (if headers/types changed)
+Main Agent            →  Implementation + `make`
     │
     ▼
-@code-auditor    →  Audit report → fix issues → done
+@dependency-mapper    →  deps.json + impact report (if headers/types changed)
+    │
+    ▼
+@code-auditor         →  Audit report → fix issues → done
 ```
 
 ## Project Structure
@@ -171,6 +187,7 @@ hollow-hearts/
 ├── .claude/
 │   ├── agents/            # Subagent definitions
 │   │   ├── game-developer.md
+│   │   ├── architecture-router.md
 │   │   ├── dependency-mapper.md
 │   │   └── code-auditor.md
 │   ├── docs/              # Architecture reference documentation
