@@ -2,15 +2,18 @@
 #define TRANSMUTATION_LOGIC_H
 
 /* ============================================================
- * @deps-exports: transmute_apply(transmuter_player param),
+ * @deps-exports: transmute_apply(transmuter_player, fog stacking guard),
  *                transmute_ai_apply(player_id param), transmute_is_fog(),
- *                transmute_get_transmuter(), transmute_resolve_effect(),
- *                transmute_is_effective_fog(), transmute_effect_name()
- * @deps-requires: transmutation.h (TransmuteSlot.transmuter_player,
- *                TrickTransmuteInfo.transmuter_player/resolved_effects,
- *                TEFFECT_FOG_HIDDEN, TEFFECT_MIRROR)
- * @deps-used-by: play_phase.c, info_sync.c, turn_flow.c, update.c
- * @deps-last-changed: 2026-03-20 — Mirror: added resolve/query functions
+ *                transmute_get_transmuter(), transmute_get_fog_transmuter(),
+ *                transmute_curse_is_valid_lead(), transmute_curse_consume(),
+ *                transmute_anchor_is_valid_lead(), transmute_anchor_consume(),
+ *                transmute_trick_get_winner(const Phase2State *p2), transmute_resolve_effect(), transmute_effect_name()
+ * @deps-requires: transmutation.h (TEFFECT_ANCHOR_FORCE_LEAD_SUIT, TEFFECT_BINDING_AUTO_WIN_NEXT, others),
+ *                core/hand.h (Hand, hand_contains, hand_has_suit), core/trick.h (Trick),
+ *                phase2_state.h (Phase2State, shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[]),
+ *                core/game_state.h (GameState)
+ * @deps-used-by: transmutation_logic.c, play_phase.c, info_sync.c, pass_phase.c, turn_flow.c, update.c, json_parse.c, ai.c
+ * @deps-last-changed: 2026-03-21 — Added transmute_anchor_is_valid_lead(), transmute_anchor_consume(); transmute_trick_get_winner() now takes Phase2State *p2
  * ============================================================ */
 
 #include <stdbool.h>
@@ -51,6 +54,7 @@ const TransmutationDef *transmute_get_def(const HandTransmuteState *hts, int idx
 Card                    transmute_get_original(const HandTransmuteState *hts, int idx);
 bool                    transmute_is_fog(const HandTransmuteState *hts, int idx);
 int                     transmute_get_transmuter(const HandTransmuteState *hts, int idx);
+int                     transmute_get_fog_transmuter(const HandTransmuteState *hts, int idx);
 
 /* --- Trick resolution helpers --- */
 int  transmute_card_points(const HandTransmuteState *hts, int idx, Card card);
@@ -60,7 +64,8 @@ bool transmute_is_always_lose(const HandTransmuteState *hts, int idx);
 
 /* Transmutation-aware trick winner. Falls back to trick_get_winner() when
  * no special cards are present. */
-int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti);
+int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti,
+                               const Phase2State *p2);
 
 /* Transmutation-aware point counting for a trick. */
 int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti);
@@ -69,6 +74,21 @@ int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *t
 bool transmute_is_valid_play(const Trick *trick, const Hand *hand,
                              const HandTransmuteState *hts, int hand_index,
                              Card card, bool hearts_broken, bool first_trick);
+
+/* Curse: check if a card is valid when the player must lead hearts.
+ * Returns true if the card is allowed. Assumes player is leading (num_played==0).
+ * If player has hearts, only hearts are allowed. If no hearts, any card is valid. */
+bool transmute_curse_is_valid_lead(const Hand *hand, Card card);
+
+/* Consume the curse flag for a player after they lead. Sets hearts_broken. */
+void transmute_curse_consume(Phase2State *p2, GameState *gs, int player_id);
+
+/* Anchor: check if a card is valid when the player must lead a specific suit.
+ * If player has the forced suit, only that suit is allowed. Otherwise any card. */
+bool transmute_anchor_is_valid_lead(const Hand *hand, Card card, Suit forced_suit);
+
+/* Consume the anchor flag for a player after they lead. */
+void transmute_anchor_consume(Phase2State *p2, int player_id);
 
 /* --- Effect queries --- */
 

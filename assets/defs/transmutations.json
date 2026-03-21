@@ -147,7 +147,7 @@
     {
       "id": 12,
       "name": "The Trap",
-      "description": "If played in the same trick as Queen of Spades, that trick's score is doubled.",
+      "description": "If played in the same trick as Queen of Spades, the Queen's point value is doubled.",
       "result_suit": "SUIT_SPADES",
       "result_rank": "RANK_2",
       "special": "TRANSMUTE_NORMAL",
@@ -159,7 +159,7 @@
     {
       "id": 13,
       "name": "The Shield",
-      "description": "Winner of the trick scores 0 points in the next trick, no matter what.",
+      "description": "Winner of the trick scores 0 points for the next 3 tricks.",
       "result_suit": "SUIT_DIAMONDS",
       "result_rank": "RANK_7",
       "special": "TRANSMUTE_NORMAL",
@@ -179,6 +179,90 @@
       "custom_points": -1,
       "negative": false,
       "effect": "WOTT_FORCE_LEAD_HEARTS"
+    },
+    {
+      "id": 15,
+      "name": "The Anchor",
+      "description": "The lead suit of this trick becomes the forced lead suit for the next trick.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_A",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "ANCHOR_FORCE_LEAD_SUIT"
+    },
+    {
+      "id": 16,
+      "name": "The Crown",
+      "description": "Whoever plays the highest rank card (any suit) wins the trick, not highest of lead suit.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_K",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "CROWN_HIGHEST_RANK"
+    },
+    {
+      "id": 17,
+      "name": "The Parasite",
+      "description": "Points from this trick are added to the player who played the Parasite, not the trick winner.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_2",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "PARASITE_REDIRECT_POINTS"
+    },
+    {
+      "id": 18,
+      "name": "The Bounty",
+      "description": "If Queen of Spades is in this trick, the player who played it takes the 13 points, not the trick winner.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_J",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "BOUNTY_REDIRECT_QOS"
+    },
+    {
+      "id": 19,
+      "name": "The Inversion",
+      "description": "All point cards in this trick score negative. Score-reducing effects in this trick become additions.",
+      "result_suit": "SUIT_HEARTS",
+      "result_rank": "RANK_7",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "INVERSION_NEGATE_POINTS"
+    },
+    {
+      "id": 20,
+      "name": "The Binding",
+      "description": "Forces the trick winner to win the next trick as well. Only a Joker can override this.",
+      "result_suit": "SUIT_SPADES",
+      "result_rank": "RANK_3",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": [],
+      "custom_points": -1,
+      "negative": false,
+      "effect": "BINDING_AUTO_WIN_NEXT"
+    },
+    {
+      "id": 21,
+      "name": "The Joker",
+      "description": "When leading, always wins the trick (beats all other cards including jokers). When not leading, always loses.",
+      "result_suit": "SUIT_DIAMONDS",
+      "result_rank": "RANK_A",
+      "special": "TRANSMUTE_NORMAL",
+      "suit_mask": ["SUIT_CLUBS", "SUIT_DIAMONDS", "SUIT_SPADES", "SUIT_HEARTS"],
+      "custom_points": 0,
+      "negative": false,
+      "effect": "JOKER_LEAD_WIN"
     }
   ]
 }

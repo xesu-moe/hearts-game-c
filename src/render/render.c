@@ -1,13 +1,12 @@
 /* ============================================================
  * @deps-implements: render.h
  * @deps-requires: render.h (opponent_hover_active, RenderState fields),
- *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to),
+ *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to, CardVisual.inverted),
  *                 layout.h (layout_scoring_*, layout_wipe_boundary_x),
  *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
  *                 core/game_state.h (GamePhase, PHASE_SCORING),
  *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-20 — Reads opponent_hover_active from
- *                     RenderState; Card visibility uses revealed_to bitmask
+ * @deps-last-changed: 2026-03-21 — Inversion overlay: down arrow on inverted cards
  * ============================================================ */
 
 #include "render.h"
@@ -641,6 +640,7 @@ void render_init(RenderState *rs)
     if (rs->fog_shader.id > 0) {
         rs->fog_loc_time = GetShaderLocation(rs->fog_shader, "time");
         rs->fog_loc_opacity = GetShaderLocation(rs->fog_shader, "opacity");
+        rs->fog_loc_aspect = GetShaderLocation(rs->fog_shader, "aspect");
         rs->fog_shader_loaded = true;
     } else {
         rs->fog_shader_loaded = false;
@@ -782,6 +782,10 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                 CardVisual saved = saved_tricks[i];
                 saved.card = rs->cards[idx].card;
                 saved.scale = rs->cards[idx].scale;
+                /* Preserve freshly-synced fog and transmute state */
+                saved.fog_mode = rs->cards[idx].fog_mode;
+                saved.fog_reveal_t = rs->cards[idx].fog_reveal_t;
+                saved.transmute_id = rs->cards[idx].transmute_id;
                 rs->cards[idx] = saved;
             }
         }
@@ -1279,12 +1283,17 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
     }
 
     bool visible = cv->face_up || (cv->revealed_to & 1); /* bit 0 = player 0 = viewer */
-    /* Fog opaque mode: hide identity by drawing card back */
-    bool fog_opaque = (cv->fog_mode == 2 && cv->fog_reveal_t > 0.01f);
-    if (visible && !fog_opaque) {
-        card_render_face(cv->card, pos, effective_scale, cv->opacity,
-                         cv->hovered, cv->selected,
-                         cv->rotation, origin);
+    if (visible) {
+        if (cv->transmute_id >= 0 &&
+            card_render_has_transmute_sprite(cv->transmute_id)) {
+            card_render_transmute_face(cv->transmute_id, pos, effective_scale,
+                                       cv->opacity, cv->hovered, cv->selected,
+                                       cv->rotation, origin);
+        } else {
+            card_render_face(cv->card, pos, effective_scale, cv->opacity,
+                             cv->hovered, cv->selected,
+                             cv->rotation, origin);
+        }
     } else {
         card_render_back(pos, effective_scale, cv->opacity,
                          cv->rotation, origin);
@@ -1307,6 +1316,93 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
         rlPopMatrix();
     }
 
+    /* Shield negation overlay: dim card + small shield icon */
+    if (cv->shielded && cv->face_up && cv->opacity > 0.0f) {
+        float cw = CARD_WIDTH_REF * effective_scale;
+        float ch = CARD_HEIGHT_REF * effective_scale;
+
+        rlPushMatrix();
+        rlTranslatef(pos.x, pos.y, 0.0f);
+        rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
+        rlTranslatef(-origin.x, -origin.y, 0.0f);
+
+        /* Dim overlay */
+        Rectangle dim_rect = {0, 0, cw, ch};
+        DrawRectangleRounded(dim_rect, 0.15f, 4, (Color){0, 0, 0, 120});
+
+        /* Small shield icon centered on card */
+        float sr = ch * 0.18f; /* shield size relative to card */
+        float sx = cw * 0.5f;
+        float sy = ch * 0.45f;
+        float shw = sr * 0.7f;
+        float s_top = sy - sr;
+        float s_mid = sy + sr * 0.3f;
+        float s_bot = sy + sr;
+        Vector2 stl = {sx - shw, s_top};
+        Vector2 str_ = {sx + shw, s_top};
+        Vector2 sbr = {sx + shw, s_mid};
+        Vector2 sbl = {sx - shw, s_mid};
+        Vector2 stip = {sx, s_bot};
+        Color sfill = (Color){220, 190, 50, 220};
+        Color sedge = (Color){220, 190, 50, 255};
+        float slw = 1.5f * ui_scale;
+        DrawTriangle(stl, str_, sbl, sfill);
+        DrawTriangle(sbl, str_, sbr, sfill);
+        DrawTriangle(sbl, sbr, stip, sfill);
+        DrawLineEx(stl, str_, slw, sedge);
+        DrawLineEx(str_, sbr, slw, sedge);
+        DrawLineEx(sbr, stip, slw, sedge);
+        DrawLineEx(stip, sbl, slw, sedge);
+        DrawLineEx(sbl, stl, slw, sedge);
+
+        rlPopMatrix();
+    }
+
+    /* Inversion overlay: dim card + down arrow icon */
+    if (cv->inverted && cv->face_up && cv->opacity > 0.0f) {
+        float cw = CARD_WIDTH_REF * effective_scale;
+        float ch = CARD_HEIGHT_REF * effective_scale;
+
+        rlPushMatrix();
+        rlTranslatef(pos.x, pos.y, 0.0f);
+        rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
+        rlTranslatef(-origin.x, -origin.y, 0.0f);
+
+        /* Dim overlay */
+        Rectangle dim_rect = {0, 0, cw, ch};
+        DrawRectangleRounded(dim_rect, 0.15f, 4, (Color){0, 0, 0, 120});
+
+        /* Down arrow icon centered on card */
+        float ar = ch * 0.18f; /* arrow size relative to card */
+        float ax = cw * 0.5f;
+        float ay = ch * 0.40f;
+        Color afill = (Color){50, 200, 220, 220};
+        Color aedge = (Color){50, 200, 220, 255};
+        float alw = 1.5f * ui_scale;
+
+        /* Stem rectangle */
+        float stem_hw = ar * 0.25f;
+        float stem_top = ay - ar * 0.6f;
+        float stem_bot = ay + ar * 0.1f;
+        DrawRectangleRec((Rectangle){ax - stem_hw, stem_top,
+                                      stem_hw * 2.0f, stem_bot - stem_top},
+                         afill);
+
+        /* Triangle pointing down */
+        float tri_hw = ar * 0.7f;
+        float tri_top = ay;
+        float tri_bot = ay + ar;
+        Vector2 atl = {ax - tri_hw, tri_top};
+        Vector2 atr = {ax + tri_hw, tri_top};
+        Vector2 atip = {ax, tri_bot};
+        DrawTriangle(atl, atr, atip, afill);
+        DrawLineEx(atl, atr, alw, aedge);
+        DrawLineEx(atr, atip, alw, aedge);
+        DrawLineEx(atip, atl, alw, aedge);
+
+        rlPopMatrix();
+    }
+
     /* Transmuted card overlay: purple border + ID badge.
      * Use the same rlgl matrix transforms as card_render_face so the
      * overlay aligns with the card even when rotated. */
@@ -1323,31 +1419,39 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
         Rectangle card_rect = {0, 0, cw, ch};
         DrawRectangleLinesEx(card_rect, 3.0f * ui_scale, PURPLE);
 
-        /* ID badge in top-right corner */
-        char id_buf[8];
-        snprintf(id_buf, sizeof(id_buf), "%d", cv->transmute_id);
-        int badge_fs = (int)(12.0f * ui_scale);
-        int tw = MeasureText(id_buf, badge_fs);
-        int bx = (int)(cw - (float)tw - 4.0f * ui_scale);
-        int by = (int)(3.0f * ui_scale);
-        DrawRectangle(bx - 2, by - 1, tw + 4, badge_fs + 2,
-                      (Color){80, 0, 120, 200});
-        DrawText(id_buf, bx, by, badge_fs, WHITE);
+        /* ID badge in top-right corner — only for cards without a custom sprite */
+        if (!card_render_has_transmute_sprite(cv->transmute_id)) {
+            char id_buf[8];
+            snprintf(id_buf, sizeof(id_buf), "%d", cv->transmute_id);
+            int badge_fs = (int)(12.0f * ui_scale);
+            int tw = MeasureText(id_buf, badge_fs);
+            int bx = (int)(cw - (float)tw - 4.0f * ui_scale);
+            int by = (int)(3.0f * ui_scale);
+            DrawRectangle(bx - 2, by - 1, tw + 4, badge_fs + 2,
+                          (Color){80, 0, 120, 200});
+            DrawText(id_buf, bx, by, badge_fs, WHITE);
+        }
 
         rlPopMatrix();
     }
 
-    /* Fog overlay */
+    /* Fog overlay — fits inside card, does not cover purple border */
     if (cv->fog_mode > 0 && cv->fog_reveal_t > 0.01f && cv->opacity > 0.0f &&
         rs && rs->fog_shader_loaded) {
         float cw = CARD_WIDTH_REF * effective_scale;
         float ch = CARD_HEIGHT_REF * effective_scale;
-        float fog_opacity = (cv->fog_mode == 1) ? 0.4f * cv->fog_reveal_t
-                                                 : 0.95f * cv->fog_reveal_t;
+        float fog_opacity = (cv->fog_mode == 1) ? 0.45f * cv->fog_reveal_t
+                                                 : 1.0f * cv->fog_reveal_t;
         float t = (float)GetTime();
+        float aspect = ch / cw; /* card height/width ratio (~1.5) */
         SetShaderValue(rs->fog_shader, rs->fog_loc_time, &t, SHADER_UNIFORM_FLOAT);
         SetShaderValue(rs->fog_shader, rs->fog_loc_opacity, &fog_opacity,
                        SHADER_UNIFORM_FLOAT);
+        SetShaderValue(rs->fog_shader, rs->fog_loc_aspect, &aspect,
+                       SHADER_UNIFORM_FLOAT);
+
+        /* Inset to avoid covering the purple transmute border (3px at ui_scale) */
+        float inset = 3.0f * ui_scale;
 
         rlPushMatrix();
         rlTranslatef(pos.x, pos.y, 0.0f);
@@ -1355,7 +1459,9 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
         rlTranslatef(-origin.x, -origin.y, 0.0f);
 
         BeginShaderMode(rs->fog_shader);
-        DrawRectangle(0, 0, (int)cw, (int)ch, WHITE);
+        DrawRectangle((int)inset, (int)inset,
+                      (int)(cw - 2.0f * inset),
+                      (int)(ch - 2.0f * inset), WHITE);
         EndShaderMode();
 
         rlPopMatrix();
@@ -1791,6 +1897,53 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     /* Draw hands */
     for (int i = 0; i < rs->card_count; i++) {
         draw_card_visual(&rs->cards[i], s, rs);
+    }
+
+    /* Shield indicators next to player piles */
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        if (rs->shield_remaining[p] <= 0) continue;
+        PlayerPosition spos = player_screen_pos(p);
+        Vector2 pile = layout_pile_position(spos, cfg);
+        float r = 14.0f * s; /* shield radius */
+        float ox, oy;
+        switch (spos) {
+        case POS_BOTTOM: ox = pile.x + 65.0f * s; oy = pile.y;              break; /* right */
+        case POS_TOP:    ox = pile.x - 65.0f * s; oy = pile.y;              break; /* left */
+        case POS_RIGHT:  ox = pile.x;              oy = pile.y - 70.0f * s; break; /* top */
+        case POS_LEFT:   ox = pile.x;              oy = pile.y + 70.0f * s; break; /* bottom */
+        default:         ox = pile.x;              oy = pile.y;        break;
+        }
+        /* Shield shape: flat top, vertical sides, angled point at bottom */
+        float hw = r * 0.7f;        /* half width */
+        float top_y = oy - r;       /* top edge */
+        float mid_y = oy + r * 0.3f; /* where sides end and angle begins */
+        float bot_y = oy + r;       /* bottom tip */
+        Vector2 tl = {ox - hw, top_y};
+        Vector2 tr = {ox + hw, top_y};
+        Vector2 br = {ox + hw, mid_y};
+        Vector2 bl = {ox - hw, mid_y};
+        Vector2 tip = {ox, bot_y};
+        Color fill = (Color){220, 190, 50, 220};
+        Color edge = (Color){220, 190, 50, 255};
+        float lw = 2.0f * s; /* line thickness */
+        /* Fill: rectangle top + triangle bottom */
+        DrawTriangle(tl, tr, bl, fill);
+        DrawTriangle(bl, tr, br, fill);
+        DrawTriangle(bl, br, tip, fill);
+        /* Thick outline */
+        DrawLineEx(tl, tr, lw, edge);  /* top */
+        DrawLineEx(tr, br, lw, edge);  /* right side */
+        DrawLineEx(br, tip, lw, edge); /* right angle */
+        DrawLineEx(tip, bl, lw, edge); /* left angle */
+        DrawLineEx(bl, tl, lw, edge);  /* left side */
+        /* Number in shield color */
+        char shield_txt[4];
+        snprintf(shield_txt, sizeof(shield_txt), "%d", rs->shield_remaining[p]);
+        int stfs = (int)(13.0f * s);
+        int stw = MeasureText(shield_txt, stfs);
+        float text_cy = (top_y + mid_y) * 0.5f + 2.0f * s; /* slightly below rect center */
+        DrawText(shield_txt, (int)(ox - (float)stw * 0.5f),
+                 (int)(text_cy - (float)stfs * 0.5f), stfs, edge);
     }
 
     /* Turn indicator + timer (top-right of board) */
@@ -2336,11 +2489,18 @@ int render_hit_test_card(const RenderState *rs, Vector2 mouse_pos)
 
         float w = CARD_WIDTH_REF * cv->scale;
         float h = CARD_HEIGHT_REF * cv->scale;
-        float top_left_x = pos.x - cv->origin.x;
-        float top_left_y = pos.y - cv->origin.y;
-        Rectangle card_rect = {top_left_x, top_left_y, w, h};
 
-        if (CheckCollisionPointRec(mouse_pos, card_rect)) {
+        /* Transform mouse into card-local (unrotated) space */
+        float angle_rad = cv->rotation * DEG2RAD;
+        float cos_a = cosf(-angle_rad);
+        float sin_a = sinf(-angle_rad);
+        float dx = mouse_pos.x - pos.x;
+        float dy = mouse_pos.y - pos.y;
+        float local_x = dx * cos_a - dy * sin_a;
+        float local_y = dx * sin_a + dy * cos_a;
+
+        Rectangle card_rect = {-cv->origin.x, -cv->origin.y, w, h};
+        if (CheckCollisionPointRec((Vector2){local_x, local_y}, card_rect)) {
             return idx;
         }
     }
@@ -2359,11 +2519,18 @@ int render_hit_test_opponent_card(const RenderState *rs, Vector2 mouse_pos,
 
             float w = CARD_WIDTH_REF * cv->scale;
             float h = CARD_HEIGHT_REF * cv->scale;
-            float top_left_x = cv->position.x - cv->origin.x;
-            float top_left_y = cv->position.y - cv->origin.y;
-            Rectangle card_rect = {top_left_x, top_left_y, w, h};
 
-            if (CheckCollisionPointRec(mouse_pos, card_rect)) {
+            /* Transform mouse into card-local (unrotated) space */
+            float angle_rad = cv->rotation * DEG2RAD;
+            float cos_a = cosf(-angle_rad);
+            float sin_a = sinf(-angle_rad);
+            float dx = mouse_pos.x - cv->position.x;
+            float dy = mouse_pos.y - cv->position.y;
+            float local_x = dx * cos_a - dy * sin_a;
+            float local_y = dx * sin_a + dy * cos_a;
+
+            Rectangle card_rect = {-cv->origin.x, -cv->origin.y, w, h};
+            if (CheckCollisionPointRec((Vector2){local_x, local_y}, card_rect)) {
                 *out_player = p;
                 return idx;
             }

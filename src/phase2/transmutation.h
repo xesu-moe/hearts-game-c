@@ -2,13 +2,11 @@
 #define TRANSMUTATION_H
 
 /* ============================================================
- * @deps-exports: enum TransmuteEffect (TEFFECT_FOG_HIDDEN, TEFFECT_MIRROR),
- *                enum SuitMask, struct TransmuteSlot (transmuter_player),
- *                TrickTransmuteInfo (resolved_effects[])
- * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE)
- * @deps-used-by: transmutation_logic.h, play_phase.c, info_sync.c, update.c,
- *                turn_flow.c, json_parse.c, phase2_state.h, main.c
- * @deps-last-changed: 2026-03-20 — Mirror: added TEFFECT_MIRROR, resolved_effects[]
+ * @deps-exports: enum TransmuteEffect (TEFFECT_NONE..TEFFECT_JOKER_LEAD_WIN),
+ *                enum SuitMask, struct TransmuteSlot, struct TrickTransmuteInfo
+ * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE, CARDS_PER_TRICK)
+ * @deps-used-by: transmutation_logic.h, phase2_state.h, json_parse.c, play_phase.c, info_sync.c, pass_phase.c, turn_flow.c, phase_transitions.c, main.c
+ * @deps-last-changed: 2026-03-21 — Added TEFFECT_JOKER_LEAD_WIN (wins leading, loses non-leading)
  * ============================================================ */
 
 #include <stdbool.h>
@@ -26,6 +24,17 @@ typedef enum TransmuteEffect {
     TEFFECT_WOTT_SWAP_CARD,               /* The Duel */
     TEFFECT_FOG_HIDDEN,                   /* The Fog: card hidden visually, logic unchanged */
     TEFFECT_MIRROR,                       /* Mirror: copies last globally-played transmutation effect */
+    TEFFECT_RANDOM_TRICK_WINNER,          /* Roulette: trick winner chosen randomly */
+    TEFFECT_TRAP_DOUBLE_WITH_QOS,         /* Trap: double QoS points in this trick */
+    TEFFECT_WOTT_SHIELD_NEXT_TRICK,       /* Shield: winner scores 0 for next 3 tricks */
+    TEFFECT_WOTT_FORCE_LEAD_HEARTS,       /* Curse: winner must lead hearts next trick */
+    TEFFECT_ANCHOR_FORCE_LEAD_SUIT,       /* Anchor: force next trick lead suit */
+    TEFFECT_BINDING_AUTO_WIN_NEXT,        /* Binding: winner auto-wins next trick */
+    TEFFECT_CROWN_HIGHEST_RANK,           /* Crown: highest rank wins regardless of suit */
+    TEFFECT_PARASITE_REDIRECT_POINTS,     /* Parasite: points go to card player, not winner */
+    TEFFECT_BOUNTY_REDIRECT_QOS,          /* Bounty: QoS points go to QoS player, not winner */
+    TEFFECT_INVERSION_NEGATE_POINTS,      /* Inversion: all point cards score negative */
+    TEFFECT_JOKER_LEAD_WIN,               /* Joker: wins when leading, loses otherwise */
     TEFFECT_COUNT
 } TransmuteEffect;
 
@@ -75,9 +84,11 @@ typedef struct TransmuteInventory {
 /* --- Per-hand-card transmutation tracking (parallel to Hand.cards[]) --- */
 
 typedef struct TransmuteSlot {
-    int  transmutation_id; /* -1 = not transmuted */
-    Card original_card;    /* Card before transmutation */
+    int  transmutation_id;  /* -1 = not transmuted */
+    Card original_card;     /* Card before transmutation */
     int  transmuter_player; /* player who applied, -1 = none */
+    bool fogged;            /* true = fog overlay applied on top */
+    int  fog_transmuter;    /* player who applied fog, -1 = none */
 } TransmuteSlot;
 
 typedef struct HandTransmuteState {
@@ -90,6 +101,8 @@ typedef struct TrickTransmuteInfo {
     int transmutation_ids[CARDS_PER_TRICK]; /* -1 = not transmuted */
     int transmuter_player[CARDS_PER_TRICK]; /* player who applied each transmutation, -1 = none */
     TransmuteEffect resolved_effects[CARDS_PER_TRICK]; /* actual effect after Mirror resolution */
+    bool fogged[CARDS_PER_TRICK];           /* true = fog overlay on this trick card */
+    int  fog_transmuter[CARDS_PER_TRICK];   /* player who applied fog, -1 = none */
 } TrickTransmuteInfo;
 
 /* --- Per-round transmutation effect tracking --- */

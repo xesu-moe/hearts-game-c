@@ -2,10 +2,10 @@
  * @deps-implements: ai.h
  * @deps-requires: ai.h, core/game_state.h (GameState), core/hand.h (Hand),
  *                 render/render.h (render_chat_log_push),
- *                 phase2/transmutation_logic.h (transmute_swap_between_players),
+ *                 phase2/phase2_state.h (curse_force_hearts[], anchor_force_suit[]),
+ *                 phase2/transmutation_logic.h (transmute_curse_is_valid_lead, transmute_anchor_is_valid_lead),
  *                 phase2/phase2_defs.h (p2_player_name), stdlib.h, stdio.h
- * @deps-last-changed: 2026-03-20 — Added ai_duel_choose() implementation,
- *                     selects random opponent and cards for duel
+ * @deps-last-changed: 2026-03-21 — Added Anchor transmutation: check force lead suit in valid play
  * ============================================================ */
 
 #include "ai.h"
@@ -59,13 +59,25 @@ void ai_play_card(GameState *gs, RenderState *rs, Phase2State *p2,
 {
     const Hand *hand = &gs->players[player_id].hand;
     bool first_trick = (gs->tricks_played == 0);
+    bool leading = (gs->current_trick.num_played == 0);
+    bool cursed = p2->enabled && p2->curse_force_hearts[player_id];
+    bool anchored = p2->enabled && p2->anchor_force_suit[player_id] >= 0;
     for (int i = 0; i < hand->count; i++) {
         bool valid;
         if (p2->enabled) {
+            bool hb = gs->hearts_broken || (leading && cursed);
             valid = transmute_is_valid_play(
                 &gs->current_trick, hand,
                 &p2->players[player_id].hand_transmutes, i,
-                hand->cards[i], gs->hearts_broken, first_trick);
+                hand->cards[i], hb, first_trick);
+            if (leading && cursed && valid) {
+                valid = transmute_curse_is_valid_lead(hand, hand->cards[i]);
+            }
+            if (leading && !cursed && anchored && valid) {
+                valid = transmute_anchor_is_valid_lead(
+                    hand, hand->cards[i],
+                    p2->anchor_force_suit[player_id]);
+            }
         } else {
             valid = game_state_is_valid_play(gs, player_id, hand->cards[i]);
         }

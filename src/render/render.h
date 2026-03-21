@@ -163,6 +163,7 @@ typedef struct RenderState {
     /* Display caches */
     int           displayed_round_points[NUM_PLAYERS];
     int           displayed_total_scores[NUM_PLAYERS];
+    int           shield_remaining[NUM_PLAYERS]; /* Shield tricks remaining per player */
     PassDirection displayed_pass_dir;
     int           last_trick_winner;
     float         trick_winner_timer;
@@ -293,6 +294,7 @@ typedef struct RenderState {
     Shader  fog_shader;
     int     fog_loc_time;
     int     fog_loc_opacity;
+    int     fog_loc_aspect;
     bool    fog_shader_loaded;
 
     /* Per-card fog mode (parallel arrays) */

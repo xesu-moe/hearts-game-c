@@ -2,10 +2,11 @@
  * @deps-implements: pass_phase.h
  * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, ai.h,
  *                 render/anim.h, render/layout.h, render/render.h,
- *                 phase2/phase2_state.h, phase2/contract_logic.h (record_received_cards),
+ *                 phase2/phase2_state.h, phase2/contract_logic.h,
  *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/transmutation.h (TransmuteSlot.fogged/fog_transmuter),
  *                 phase2/phase2_defs.h, assert.h, stdio.h
- * @deps-last-changed: 2026-03-20 — Calls contract_record_received_cards in finalize_card_pass and pass_start_receive_anim
+ * @deps-last-changed: 2026-03-21 — Fog stacking: save/restore fogged/fog_transmuter in SavedTransmute
  * ============================================================ */
 
 #include "pass_phase.h"
@@ -156,6 +157,9 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
             int  tid;
             Card orig;
             Card transmuted;
+            int  transmuter_player;
+            bool fogged;
+            int  fog_transmuter;
             bool is_passed;
         } SavedTransmute;
         SavedTransmute saved[NUM_PLAYERS][MAX_HAND_SIZE];
@@ -178,6 +182,9 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
                     saved[pl][si].tid = hts->slots[k].transmutation_id;
                     saved[pl][si].orig = hts->slots[k].original_card;
                     saved[pl][si].transmuted = hand->cards[k];
+                    saved[pl][si].transmuter_player = hts->slots[k].transmuter_player;
+                    saved[pl][si].fogged = hts->slots[k].fogged;
+                    saved[pl][si].fog_transmuter = hts->slots[k].fog_transmuter;
                     saved[pl][si].is_passed = false;
                     for (int j = 0; j < PASS_CARD_COUNT; j++) {
                         if (card_equals(hand->cards[k],
@@ -226,6 +233,12 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
                                 saved[pl][si].tid;
                             ohts->slots[k].original_card =
                                 saved[pl][si].orig;
+                            ohts->slots[k].transmuter_player =
+                                saved[pl][si].transmuter_player;
+                            ohts->slots[k].fogged =
+                                saved[pl][si].fogged;
+                            ohts->slots[k].fog_transmuter =
+                                saved[pl][si].fog_transmuter;
                             break;
                         }
                     }
@@ -383,6 +396,9 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
         int  tid;
         Card orig;
         Card transmuted;
+        int  transmuter_player;
+        bool fogged;
+        int  fog_transmuter;
         bool is_passed;
     } SavedTransmute;
     SavedTransmute saved[NUM_PLAYERS][MAX_HAND_SIZE];
@@ -405,6 +421,9 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
                 saved[pl][si].tid = hts->slots[k].transmutation_id;
                 saved[pl][si].orig = hts->slots[k].original_card;
                 saved[pl][si].transmuted = hand->cards[k];
+                saved[pl][si].transmuter_player = hts->slots[k].transmuter_player;
+                saved[pl][si].fogged = hts->slots[k].fogged;
+                saved[pl][si].fog_transmuter = hts->slots[k].fog_transmuter;
                 saved[pl][si].is_passed = false;
                 for (int j = 0; j < PASS_CARD_COUNT; j++) {
                     if (card_equals(hand->cards[k],
@@ -453,6 +472,11 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
                         !transmute_is_transmuted(ohts, k)) {
                         ohts->slots[k].transmutation_id = saved[pl][si].tid;
                         ohts->slots[k].original_card = saved[pl][si].orig;
+                        ohts->slots[k].transmuter_player =
+                            saved[pl][si].transmuter_player;
+                        ohts->slots[k].fogged = saved[pl][si].fogged;
+                        ohts->slots[k].fog_transmuter =
+                            saved[pl][si].fog_transmuter;
                         break;
                     }
                 }

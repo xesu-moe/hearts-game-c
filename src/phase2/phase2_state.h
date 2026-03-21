@@ -2,18 +2,12 @@
 #define PHASE2_STATE_H
 
 /* ============================================================
- * @deps-exports: struct RoundPhase2 (suit_seen[], transmute_round),
- *                struct PlayerPhase2, struct KingProgress,
- *                struct Phase2State (last_played_transmute_id, last_played_resolved_effect)
- * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT),
- *                 contract.h (ContractInstance, CONTRACT_TIERS),
- *                 effect.h (ActiveEffect),
- *                 transmutation.h (TransmuteEffect, TransmuteInventory,
- *                 HandTransmuteState, TransmuteRoundState)
- * @deps-used-by: phase2_defs.h, contract_logic.c, vendetta_logic.h, ai.h,
- *                play_phase.h, pass_phase.h, turn_flow.h, update.h,
- *                info_sync.h, phase_transitions.h, main.c
- * @deps-last-changed: 2026-03-20 — Mirror: added global history fields to Phase2State
+ * @deps-exports: struct Phase2State (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[], last_played_transmute_id, last_played_resolved_effect),
+ *                struct PlayerPhase2, struct RoundPhase2, struct KingProgress
+ * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT), contract.h (ContractInstance, CONTRACT_TIERS),
+ *                 effect.h (ActiveEffect), transmutation.h (TransmuteEffect, TransmuteInventory, HandTransmuteState, TransmuteRoundState)
+ * @deps-used-by: transmutation_logic.c, turn_flow.c, contract_logic.c, play_phase.c, ai.c, info_sync.c, main.c
+ * @deps-last-changed: 2026-03-21 — Added anchor_force_suit[], binding_auto_win[] for Anchor/Binding transmutation effects
  * ============================================================ */
 
 #include <stdbool.h>
@@ -88,6 +82,18 @@ typedef struct Phase2State {
     /* Game-scoped Mirror history (persists across rounds) */
     int             last_played_transmute_id;      /* -1 = none played yet */
     TransmuteEffect last_played_resolved_effect;   /* resolved effect (handles Mirror chain) */
+
+    /* Game-scoped Shield countdown (persists across rounds) */
+    int shield_tricks_remaining[NUM_PLAYERS]; /* 0 = inactive, 1-3 = tricks of 0-point protection */
+
+    /* Curse: force lead hearts on next trick */
+    bool curse_force_hearts[NUM_PLAYERS]; /* true = must lead a heart next trick */
+
+    /* Anchor: forced lead suit for next trick (-1 = inactive) */
+    int anchor_force_suit[NUM_PLAYERS];
+
+    /* Binding: auto-win next trick (0 = inactive, 1 = active) */
+    int binding_auto_win[NUM_PLAYERS];
 } Phase2State;
 
 #endif /* PHASE2_STATE_H */

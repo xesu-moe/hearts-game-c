@@ -1,9 +1,9 @@
 /* ============================================================
  * @deps-implements: contract_logic.h
- * @deps-requires: contract_logic.h, phase2_state.h, phase2_defs.h,
+ * @deps-requires: contract_logic.h, phase2_state.h (anchor_force_suit[], binding_auto_win[]), phase2_defs.h,
  *                 transmutation_logic.h (transmute_round_state_init),
  *                 core/trick.h, core/card.h, raylib.h, string.h
- * @deps-last-changed: 2026-03-20 — Mirror: init global history fields in contract_state_init
+ * @deps-last-changed: 2026-03-21 — Added Anchor/Binding: init and reset anchor_force_suit[] and binding_auto_win[]
  * ============================================================ */
 
 #include "contract_logic.h"
@@ -46,6 +46,11 @@ void contract_state_init(Phase2State *p2)
     /* Mirror history (game-scoped) */
     p2->last_played_transmute_id = -1;
     p2->last_played_resolved_effect = TEFFECT_NONE;
+
+    /* Anchor: -1 = inactive (memset set 0, need explicit -1) */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        p2->anchor_force_suit[i] = -1;
+    }
 }
 
 void contract_round_reset(Phase2State *p2)
@@ -86,6 +91,13 @@ void contract_round_reset(Phase2State *p2)
     p2->round.num_round_effects = 0;
     memset(p2->round.suit_seen, 0, sizeof(p2->round.suit_seen));
     transmute_round_state_init(&p2->round.transmute_round);
+    /* Curse does not survive round boundaries */
+    memset(p2->curse_force_hearts, 0, sizeof(p2->curse_force_hearts));
+    /* Anchor and Binding do not survive round boundaries */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        p2->anchor_force_suit[i] = -1;
+        p2->binding_auto_win[i] = 0;
+    }
 }
 
 int contract_get_available(const Phase2State *p2, int player_id,

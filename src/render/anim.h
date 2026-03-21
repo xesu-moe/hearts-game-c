@@ -2,11 +2,10 @@
 #define ANIM_H
 
 /* ============================================================
- * @deps-exports: struct CardVisual (fog_mode, fog_reveal_t fields)
+ * @deps-exports: struct CardVisual (fog_mode, fog_reveal_t, shielded, inverted fields)
  * @deps-requires: easing.h, raylib.h, core/card.h, stdint.h
- * @deps-used-by: render.c, render.h, info_sync.c, game/update.c
- * @deps-last-changed: 2026-03-20 — Fog Transmutation: added fog_mode and
- *                     fog_reveal_t fields to CardVisual for fog shader animation
+ * @deps-used-by: render.c, render.h, info_sync.c, game/update.c, game/turn_flow.c
+ * @deps-last-changed: 2026-03-21 — Inversion effect: added inverted field to mark point-negation cards
  * ============================================================ */
 
 #include <stdbool.h>
@@ -96,6 +95,8 @@ typedef struct CardVisual {
     uint8_t  fog_mode;        /* 0 = no fog, 1 = semi-transparent (owner), 2 = opaque */
     float    fog_reveal_t;    /* 1.0 = fully fogged, 0.0 = revealed; animated on trick resolve */
     bool     dimmed;          /* true = draw dark overlay (unplayable card) */
+    bool     shielded;        /* true = points negated by Shield effect */
+    bool     inverted;        /* true = points negated by Inversion (down arrow) */
 } CardVisual;
 
 /* ---- Animation Speed ---- */

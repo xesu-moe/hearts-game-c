@@ -8,9 +8,9 @@
 
 /* ============================================================
  * @deps-implements: json_parse.h
- * @deps-requires: json_parse.h, contract.h (ConditionType), transmutation.h (TransmuteEffect),
+ * @deps-requires: json_parse.h, contract.h (ConditionType), transmutation.h (TransmuteEffect, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN),
  *                 vendor/cJSON.h, raylib.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-20 — Added MIRROR_COPY_EFFECTS to TRANSMUTE_EFFECT_MAP
+ * @deps-last-changed: 2026-03-21 — Added JOKER_LEAD_WIN to TRANSMUTE_EFFECT_MAP
  * ============================================================ */
 
 /* ----------------------------------------------------------------
@@ -94,6 +94,17 @@ static const EnumMapping TRANSMUTE_EFFECT_MAP[] = {
     {"WOTT_SWAP_CARD",                 TEFFECT_WOTT_SWAP_CARD},
     {"FOG_HIDDEN",                     TEFFECT_FOG_HIDDEN},
     {"MIRROR_COPY_EFFECTS",            TEFFECT_MIRROR},
+    {"RANDOM_TRICK_WINNER",            TEFFECT_RANDOM_TRICK_WINNER},
+    {"TRAP_DOUBLE_WITH_QOS",           TEFFECT_TRAP_DOUBLE_WITH_QOS},
+    {"WOTT_SHIELD_NEXT_TRICK",         TEFFECT_WOTT_SHIELD_NEXT_TRICK},
+    {"WOTT_FORCE_LEAD_HEARTS",         TEFFECT_WOTT_FORCE_LEAD_HEARTS},
+    {"ANCHOR_FORCE_LEAD_SUIT",         TEFFECT_ANCHOR_FORCE_LEAD_SUIT},
+    {"BINDING_AUTO_WIN_NEXT",          TEFFECT_BINDING_AUTO_WIN_NEXT},
+    {"CROWN_HIGHEST_RANK",             TEFFECT_CROWN_HIGHEST_RANK},
+    {"PARASITE_REDIRECT_POINTS",       TEFFECT_PARASITE_REDIRECT_POINTS},
+    {"BOUNTY_REDIRECT_QOS",            TEFFECT_BOUNTY_REDIRECT_QOS},
+    {"INVERSION_NEGATE_POINTS",        TEFFECT_INVERSION_NEGATE_POINTS},
+    {"JOKER_LEAD_WIN",                 TEFFECT_JOKER_LEAD_WIN},
 };
 
 static const EnumMapping FIGURE_TYPE_MAP[] = {

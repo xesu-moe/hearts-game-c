@@ -66,10 +66,11 @@ int main(void)
     p2.enabled = true;
 
 #ifdef DEBUG
-    /* DEBUG: give player 0 Mirror, Fog, and Duel for testing */
-    transmute_inv_add(&p2.players[0].transmute_inv, 9);  /* The Mirror */
-    transmute_inv_add(&p2.players[0].transmute_inv, 8);  /* The Fog */
-    transmute_inv_add(&p2.players[0].transmute_inv, 7);  /* The Duel */
+    /* Debug: give player 0 test transmutations */
+    transmute_inv_add(&p2.players[0].transmute_inv,  8); /* Fog */
+    transmute_inv_add(&p2.players[0].transmute_inv,  9); /* Mirror */
+    transmute_inv_add(&p2.players[0].transmute_inv,  4); /* Gatherer */
+
 #endif
 
     RenderState rs;
@@ -83,6 +84,7 @@ int main(void)
     audio_init(&audio, &g_settings);
 
     card_render_init();
+    card_render_transmute_init();
 
     TurnFlow flow;
     flow_init(&flow);
@@ -101,6 +103,8 @@ int main(void)
         pls.current_tti.transmutation_ids[ti] = -1;
         pls.current_tti.transmuter_player[ti] = -1;
         pls.current_tti.resolved_effects[ti] = TEFFECT_NONE;
+        pls.current_tti.fogged[ti] = false;
+        pls.current_tti.fog_transmuter[ti] = -1;
     }
 
     SettingsUIState sui = {
@@ -117,32 +121,6 @@ int main(void)
         anim_set_speed(settings_anim_multiplier(g_settings.anim_speed));
         clock_update(&clk);
         process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
-
-#ifdef DEBUG
-        /* DEBUG: F5 = skip to last trick */
-        if (IsKeyPressed(KEY_F5) && gs.phase == PHASE_PLAYING) {
-            while (gs.phase == PHASE_PLAYING && gs.tricks_played < 12) {
-                if (gs.current_trick.num_played >= CARDS_PER_TRICK) {
-                    game_state_complete_trick(&gs);
-                    if (gs.phase != PHASE_PLAYING) break;
-                }
-                int current = game_state_current_player(&gs);
-                if (current < 0) {
-                    game_state_complete_trick(&gs);
-                    if (gs.phase != PHASE_PLAYING) break;
-                    continue;
-                }
-                ai_play_card(&gs, &rs, &p2, &pls, current);
-            }
-            if (gs.phase == PHASE_PLAYING &&
-                gs.current_trick.num_played >= CARDS_PER_TRICK) {
-                game_state_complete_trick(&gs);
-            }
-            rs.sync_needed = true;
-            rs.pile_card_count = 0;
-            flow_init(&flow);
-        }
-#endif
 
         GamePhase phase_before_update = gs.phase;
         while (clk.accumulator >= FIXED_DT) {
@@ -232,6 +210,7 @@ int main(void)
     }
 
     audio_shutdown(&audio);
+    card_render_transmute_shutdown();
     card_render_shutdown();
     if (rs.fog_shader_loaded) UnloadShader(rs.fog_shader);
     CloseWindow();

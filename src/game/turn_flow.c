@@ -1,16 +1,14 @@
 /* ============================================================
  * @deps-implements: turn_flow.h
- * @deps-requires: turn_flow.h, core/game_state.h (game_state_*,
- *                 game_state_complete_trick_with), core/settings.h,
- *                 core/trick.h, game/ai.h (ai_duel_choose, ai_duel_execute),
+ * @deps-requires: turn_flow.h, core/game_state.h (game_state_current_player, game_state_complete_trick, game_state_complete_trick_with),
+ *                 core/settings.h, core/trick.h, game/ai.h (ai_duel_choose, ai_duel_execute),
  *                 render/render.h (opponent_hover_active, render_chat_log_push),
  *                 render/layout.h (layout_board_center, layout_pile_position),
- *                 render/anim.h (ANIM_EFFECT_FLIGHT_DURATION,
- *                 ANIM_DUEL_EXCHANGE_DURATION), game/play_phase.h,
- *                 phase2 (transmute, contract, vendetta)
- * @deps-used-by: process_input.c, phase_transitions.c, update.c, main.c
- * @deps-last-changed: 2026-03-20 — Added try_start_duel(), uses new
- *                     animation constants, FlowStep values, ai_duel_choose
+ *                 render/anim.h (ANIM_EFFECT_FLIGHT_DURATION, ANIM_DUEL_EXCHANGE_DURATION, CardVisual.inverted), game/play_phase.h,
+ *                 phase2/transmutation_logic.h (transmute_trick_get_winner, transmute_trick_count_points, transmute_on_trick_complete, transmute_apply_round_end, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS),
+ *                 phase2/contract_logic.h, phase2/vendetta_logic.h, phase2/phase2_defs.h,
+ *                 phase2/phase2_state.h (shield_tricks_remaining[], binding_auto_win[])
+ * @deps-last-changed: 2026-03-21 — Added Inversion effect: mark heart pile with inverted flag, negate QoS points
  * ============================================================ */
 
 #include "turn_flow.h"
@@ -32,6 +30,131 @@
 static const PlayerPosition pos_map[NUM_PLAYERS] = {
     POS_BOTTOM, POS_LEFT, POS_TOP, POS_RIGHT
 };
+
+/* Determine trick winner, copy trick visuals into pile, start pile animation.
+ * Shared by FLOW_TRICK_DISPLAY and FLOW_FOG_REVEAL transitions. */
+static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
+                                     RenderState *rs, Phase2State *p2,
+                                     PlayPhaseState *pps, float anim_mult)
+{
+    int winner;
+    if (p2->enabled && trick_is_complete(&gs->current_trick)) {
+        winner = transmute_trick_get_winner(&gs->current_trick,
+                                            &pps->current_tti, p2);
+    } else {
+        winner = trick_get_winner(&gs->current_trick);
+    }
+
+    if (winner >= 0 && rs->trick_visual_count > 0) {
+        const LayoutConfig *cfg = &rs->layout;
+
+        /* Parasite: redirect pile to the player who played the Parasite card */
+        int pile_player = winner;
+        if (p2->enabled) {
+            for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                if (pps->current_tti.resolved_effects[i] ==
+                    TEFFECT_PARASITE_REDIRECT_POINTS) {
+                    int pp = gs->current_trick.player_ids[i];
+                    if (pp >= 0 && pp < NUM_PLAYERS) {
+                        pile_player = pp;
+                        break; /* First Parasite gets pile visuals */
+                    }
+                }
+            }
+        }
+
+        /* Bounty: detect so Q♠ cards go to their player's pile */
+        bool has_bounty = false;
+        /* Inversion: detect so heart cards get inverted visual */
+        bool has_inversion = false;
+        if (p2->enabled) {
+            for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                if (pps->current_tti.resolved_effects[i] ==
+                    TEFFECT_BOUNTY_REDIRECT_QOS)
+                    has_bounty = true;
+                if (pps->current_tti.resolved_effects[i] ==
+                    TEFFECT_INVERSION_NEGATE_POINTS)
+                    has_inversion = true;
+            }
+        }
+
+        for (int i = 0; i < rs->trick_visual_count; i++) {
+            int src_idx = rs->trick_visuals[i];
+            if (src_idx < 0 || src_idx >= rs->card_count) continue;
+            if (rs->pile_card_count >= MAX_PILE_CARDS) break;
+
+            /* Per-card pile owner: Bounty redirects Q♠ to its player */
+            int card_pile_player = pile_player;
+            if (has_bounty && i < gs->current_trick.num_played &&
+                gs->current_trick.cards[i].suit == SUIT_SPADES &&
+                gs->current_trick.cards[i].rank == RANK_Q) {
+                int qp = gs->current_trick.player_ids[i];
+                if (qp >= 0 && qp < NUM_PLAYERS)
+                    card_pile_player = qp;
+            }
+
+            PlayerPosition card_spos = pos_map[card_pile_player];
+            Vector2 card_pile_pos = layout_pile_position(card_spos, cfg);
+
+            int pi = rs->pile_card_count;
+            CardVisual *pv = &rs->pile_cards[pi];
+
+            *pv = rs->cards[src_idx];
+            pv->pile_owner = card_pile_player;
+            if (p2->enabled)
+                pv->transmute_id = pps->current_tti.transmutation_ids[i];
+            pv->face_up = false;
+            pv->fog_mode = 0;
+            pv->fog_reveal_t = 0.0f;
+            pv->selected = false;
+            pv->hovered = false;
+            pv->hover_t = 0.0f;
+            pv->use_bezier = false;
+            pv->shielded = (p2->enabled && card_pile_player >= 0 &&
+                            p2->shield_tricks_remaining[card_pile_player] > 0);
+            /* Down arrow on hearts only (QoS also negated but no arrow by design) */
+            pv->inverted = (has_inversion &&
+                            i < gs->current_trick.num_played &&
+                            gs->current_trick.cards[i].suit == SUIT_HEARTS);
+
+            pv->start = pv->position;
+            pv->start_rotation = pv->rotation;
+
+            float scatter_x = ((float)(rand() % 7) - 3.0f) * cfg->scale;
+            float scatter_y = ((float)(rand() % 7) - 3.0f) * cfg->scale;
+            pv->target = (Vector2){
+                card_pile_pos.x + scatter_x,
+                card_pile_pos.y + scatter_y
+            };
+            float base_rot = (card_spos == POS_LEFT || card_spos == POS_RIGHT)
+                             ? 0.0f : 90.0f;
+            pv->target_rotation = base_rot + (float)(rand() % 11 - 5);
+            pv->scale = 0.7f * cfg->scale;
+            pv->origin = (Vector2){
+                CARD_WIDTH_REF * pv->scale * 0.5f,
+                CARD_HEIGHT_REF * pv->scale * 0.5f
+            };
+            pv->z_order = 50 + pi;
+            pv->opacity = 1.0f;
+
+            anim_start(pv, pv->target, pv->target_rotation,
+                       ANIM_PILE_COLLECT_DURATION, EASE_OUT_QUAD);
+            pv->anim_delay = (float)i * ANIM_PILE_STAGGER * anim_mult;
+
+            rs->pile_card_count++;
+        }
+
+        for (int i = 0; i < rs->trick_visual_count; i++) {
+            int idx = rs->trick_visuals[i];
+            if (idx >= 0 && idx < rs->card_count)
+                rs->cards[idx].opacity = 0.0f;
+        }
+    }
+
+    rs->pile_anim_in_progress = true;
+    flow->step = FLOW_TRICK_PILE_ANIM;
+    flow->timer = FLOW_PILE_ANIM_TIME * anim_mult;
+}
 
 /* INVARIANT: Do NOT set sync_needed between FLOW_ROGUE_CHOOSING and
  * FLOW_ROGUE_ANIM_BACK, or between FLOW_DUEL_PICK_OPPONENT and
@@ -169,14 +292,6 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             flow->step = FLOW_TRICK_DISPLAY;
             flow->timer = FLOW_TRICK_DISPLAY_TIME * anim_mult;
             rs->last_trick_winner = -1;
-            /* Clear fog on trick cards to reveal identity */
-            for (int i = 0; i < rs->trick_visual_count; i++) {
-                int idx = rs->trick_visuals[i];
-                if (idx >= 0 && idx < rs->card_count) {
-                    rs->cards[idx].fog_mode = 0;
-                    rs->cards[idx].fog_reveal_t = 0.0f;
-                }
-            }
             return;
         }
 
@@ -248,85 +363,72 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
     case FLOW_TRICK_DISPLAY: {
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
         if (flow->timer <= 0.0f) {
-            /* Determine winner before transitioning (trick data still valid) */
-            int winner;
-            if (p2->enabled && trick_is_complete(&gs->current_trick)) {
-                winner = transmute_trick_get_winner(&gs->current_trick,
-                                                    &pps->current_tti);
-            } else {
-                winner = trick_get_winner(&gs->current_trick);
-            }
-
-            /* Copy trick card visuals into pile_cards[] */
-            if (winner >= 0 && rs->trick_visual_count > 0) {
-                const LayoutConfig *cfg = &rs->layout;
-                /* Must match player_screen_pos() in render.c */
-
-                PlayerPosition winner_spos = pos_map[winner];
-                Vector2 pile_pos = layout_pile_position(winner_spos, cfg);
-
-                for (int i = 0; i < rs->trick_visual_count; i++) {
-                    int src_idx = rs->trick_visuals[i];
-                    if (src_idx < 0 || src_idx >= rs->card_count) continue;
-                    if (rs->pile_card_count >= MAX_PILE_CARDS) break;
-
-                    int pi = rs->pile_card_count;
-                    CardVisual *pv = &rs->pile_cards[pi];
-
-                    /* Copy card identity and current position from trick visual */
-                    *pv = rs->cards[src_idx];
-                    pv->pile_owner = winner;
-                    /* Carry transmutation ID for scoring display */
-                    if (p2->enabled)
-                        pv->transmute_id = pps->current_tti.transmutation_ids[i];
-                    pv->face_up = false;  /* instant flip; hides transmute border */
-                    pv->fog_mode = 0;
-                    pv->fog_reveal_t = 0.0f;
-                    pv->selected = false;
-                    pv->hovered = false;
-                    pv->hover_t = 0.0f;
-                    pv->use_bezier = false;
-
-                    /* Start from current trick position */
-                    pv->start = pv->position;
-                    pv->start_rotation = pv->rotation;
-
-                    /* Target: pile position with small random scatter */
-                    float scatter_x = ((float)(rand() % 7) - 3.0f) * cfg->scale;
-                    float scatter_y = ((float)(rand() % 7) - 3.0f) * cfg->scale;
-                    pv->target = (Vector2){
-                        pile_pos.x + scatter_x,
-                        pile_pos.y + scatter_y
-                    };
-                    float base_rot = (winner_spos == POS_LEFT || winner_spos == POS_RIGHT)
-                                     ? 0.0f : 90.0f;
-                    pv->target_rotation = base_rot + (float)(rand() % 11 - 5);
-                    pv->scale = 0.7f * cfg->scale;
-                    pv->origin = (Vector2){
-                        CARD_WIDTH_REF * pv->scale * 0.5f,
-                        CARD_HEIGHT_REF * pv->scale * 0.5f
-                    };
-                    pv->z_order = 50 + pi;
-                    pv->opacity = 1.0f;
-
-                    anim_start(pv, pv->target, pv->target_rotation,
-                               ANIM_PILE_COLLECT_DURATION, EASE_OUT_QUAD);
-                    pv->anim_delay = (float)i * ANIM_PILE_STAGGER * anim_mult;
-
-                    rs->pile_card_count++;
-                }
-
-                /* Hide trick visuals so they don't double-render */
-                for (int i = 0; i < rs->trick_visual_count; i++) {
-                    int idx = rs->trick_visuals[i];
-                    if (idx >= 0 && idx < rs->card_count)
-                        rs->cards[idx].opacity = 0.0f;
+            /* Check if any trick cards have fog — reveal first */
+            bool has_fog = false;
+            for (int i = 0; i < rs->trick_visual_count; i++) {
+                int idx = rs->trick_visuals[i];
+                if (idx >= 0 && idx < rs->card_count &&
+                    rs->cards[idx].fog_mode > 0) {
+                    has_fog = true;
+                    break;
                 }
             }
+            if (has_fog) {
+                flow->step = FLOW_FOG_REVEAL;
+                flow->timer = FLOW_FOG_REVEAL_TIME * anim_mult;
+                break;
+            }
 
-            rs->pile_anim_in_progress = true;
-            flow->step = FLOW_TRICK_PILE_ANIM;
-            flow->timer = FLOW_PILE_ANIM_TIME * anim_mult;
+            trick_to_pile_transition(flow, gs, rs, p2, pps, anim_mult);
+        }
+        break;
+    }
+
+    case FLOW_FOG_REVEAL: {
+        float anim_mult = settings_anim_multiplier(settings->anim_speed);
+        float total_time = FLOW_FOG_REVEAL_TIME * anim_mult;
+        float dissolve_time = FLOW_FOG_DISSOLVE_TIME * anim_mult;
+        float elapsed = total_time - flow->timer;
+
+        /* Animate fog_reveal_t from 1.0 to 0.0 over dissolve_time */
+        if (elapsed < dissolve_time) {
+            float t = elapsed / dissolve_time;
+            float reveal = 1.0f - (t > 1.0f ? 1.0f : t);
+            for (int i = 0; i < rs->trick_visual_count; i++) {
+                int idx = rs->trick_visuals[i];
+                if (idx >= 0 && idx < rs->card_count &&
+                    rs->cards[idx].fog_mode > 0) {
+                    rs->cards[idx].fog_reveal_t = reveal;
+                }
+            }
+        } else {
+            /* After dissolve: ensure fog fully cleared */
+            for (int i = 0; i < rs->trick_visual_count; i++) {
+                int idx = rs->trick_visuals[i];
+                if (idx >= 0 && idx < rs->card_count) {
+                    rs->cards[idx].fog_mode = 0;
+                    rs->cards[idx].fog_reveal_t = 0.0f;
+                }
+            }
+        }
+
+        if (flow->timer <= 0.0f) {
+            /* Announce hidden transmutation effects after fog reveal */
+            for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                if (pps->current_tti.fogged[i] &&
+                    pps->current_tti.transmutation_ids[i] >= 0) {
+                    int tid = pps->current_tti.transmutation_ids[i];
+                    const TransmutationDef *tdef = phase2_get_transmutation(tid);
+                    /* Skip pure fog (no hidden effect to reveal) */
+                    if (tdef && tdef->effect != TEFFECT_FOG_HIDDEN) {
+                        char tmsg[CHAT_MSG_LEN];
+                        snprintf(tmsg, sizeof(tmsg), "[%s] Revealed!",
+                                 tdef->name);
+                        render_chat_log_push_color(rs, tmsg, VIOLET);
+                    }
+                }
+            }
+            trick_to_pile_transition(flow, gs, rs, p2, pps, anim_mult);
         }
         break;
     }
@@ -346,9 +448,118 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             if (p2->enabled && trick_is_complete(&gs->current_trick)) {
                 Trick saved_trick = gs->current_trick;
                 TrickTransmuteInfo saved_tti = pps->current_tti;
-                int winner = transmute_trick_get_winner(&saved_trick, &saved_tti);
+                int winner = transmute_trick_get_winner(&saved_trick, &saved_tti, p2);
                 int points = transmute_trick_count_points(&saved_trick, &saved_tti);
-                if (!game_state_complete_trick_with(gs, winner, points)) break;
+
+                /* Bounty: redirect Q♠ points to the player who played Q♠.
+                 * Remaining (heart) points stay for winner/Parasite. */
+                bool has_bounty = false;
+                for (int bi = 0; bi < CARDS_PER_TRICK; bi++) {
+                    if (saved_tti.resolved_effects[bi] ==
+                        TEFFECT_BOUNTY_REDIRECT_QOS) {
+                        has_bounty = true;
+                        break;
+                    }
+                }
+                if (has_bounty) {
+                    bool has_trap = false;
+                    bool has_inversion = false;
+                    for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
+                        if (saved_tti.resolved_effects[ti] ==
+                            TEFFECT_TRAP_DOUBLE_WITH_QOS)
+                            has_trap = true;
+                        if (saved_tti.resolved_effects[ti] ==
+                            TEFFECT_INVERSION_NEGATE_POINTS)
+                            has_inversion = true;
+                    }
+                    /* Handles multiple Q♠ (e.g. Shadow Queen) — each redirected independently */
+                    for (int qi = 0; qi < CARDS_PER_TRICK; qi++) {
+                        if (saved_trick.cards[qi].suit == SUIT_SPADES &&
+                            saved_trick.cards[qi].rank == RANK_Q) {
+                            int qos_pts;
+                            if (saved_tti.transmutation_ids[qi] >= 0) {
+                                const TransmutationDef *td =
+                                    phase2_get_transmutation(
+                                        saved_tti.transmutation_ids[qi]);
+                                qos_pts = (td && td->custom_points >= 0)
+                                              ? td->custom_points
+                                              : card_points(saved_trick.cards[qi]);
+                            } else {
+                                qos_pts = card_points(saved_trick.cards[qi]);
+                            }
+                            if (has_trap) qos_pts *= 2;
+                            if (has_inversion) qos_pts = -qos_pts;
+
+                            int qp = saved_trick.player_ids[qi];
+                            if (qp >= 0 && qp < NUM_PLAYERS) {
+                                if (p2->shield_tricks_remaining[qp] > 0) {
+                                    TraceLog(LOG_INFO,
+                                             "TRANSMUTE: Shield absorbed Bounty "
+                                             "QoS for player %d", qp);
+                                    qos_pts = 0;
+                                }
+                                gs->players[qp].round_points += qos_pts;
+                                points -= qos_pts;
+                                TraceLog(LOG_INFO,
+                                         "TRANSMUTE: Bounty redirected %d QoS "
+                                         "points to player %d", qos_pts, qp);
+                            }
+                        }
+                    }
+                }
+
+                /* Parasite: redirect points to card player(s).
+                 * Points are added to round_points directly. Multiple
+                 * Parasites each get full points (duplication by design).
+                 * Shoot-the-moon: if a Parasite player accumulates 26,
+                 * it triggers legitimately (they absorbed all points).
+                 * Note: if Bounty is active, Q♠ points are already
+                 * extracted — Parasite only gets remaining heart points. */
+                bool has_parasite = false;
+                for (int pi = 0; pi < CARDS_PER_TRICK; pi++) {
+                    if (saved_tti.resolved_effects[pi] ==
+                        TEFFECT_PARASITE_REDIRECT_POINTS) {
+                        has_parasite = true;
+                        int pp = saved_trick.player_ids[pi];
+                        int pp_points = points;
+                        if (pp >= 0 && p2->shield_tricks_remaining[pp] > 0) {
+                            pp_points = 0;
+                            TraceLog(LOG_INFO,
+                                     "TRANSMUTE: Shield absorbed Parasite "
+                                     "redirect for player %d", pp);
+                        }
+                        gs->players[pp].round_points += pp_points;
+                        TraceLog(LOG_INFO,
+                                 "TRANSMUTE: Parasite redirected %d points "
+                                 "to player %d", pp_points, pp);
+                    }
+                }
+
+                if (has_parasite) {
+                    /* Shield decrement still happens for all players */
+                    for (int si = 0; si < NUM_PLAYERS; si++) {
+                        if (p2->shield_tricks_remaining[si] > 0)
+                            p2->shield_tricks_remaining[si]--;
+                    }
+                    /* Winner gets 0 points but still leads */
+                    if (!game_state_complete_trick_with(gs, winner, 0)) break;
+                } else {
+                    /* Shield: zero points if winner has active shield */
+                    if (winner >= 0 &&
+                        p2->shield_tricks_remaining[winner] > 0) {
+                        points = 0;
+                        TraceLog(LOG_INFO,
+                                 "TRANSMUTE: Shield absorbed trick for "
+                                 "player %d", winner);
+                    }
+                    /* Decrement all active shield counters each trick */
+                    for (int si = 0; si < NUM_PLAYERS; si++) {
+                        if (p2->shield_tricks_remaining[si] > 0)
+                            p2->shield_tricks_remaining[si]--;
+                    }
+                    if (!game_state_complete_trick_with(gs, winner, points))
+                        break;
+                }
                 if (winner >= 0) {
                     char msg[CHAT_MSG_LEN];
                     snprintf(msg, sizeof(msg), "%s took trick %d",
@@ -362,12 +573,23 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                                                flow->hearts_broken_at_trick_start);
                     transmute_on_trick_complete(p2, &saved_trick, winner,
                                                 &saved_tti);
+                    /* Binding: consume ALL active binding flags (not just
+                     * winner's). A bound player who lost still used their
+                     * "next trick". Chaining works because
+                     * transmute_on_trick_complete already re-set the flag. */
+                    for (int bi = 0; bi < NUM_PLAYERS; bi++) {
+                        if (p2->binding_auto_win[bi]) {
+                            p2->binding_auto_win[bi] = 0;
+                        }
+                    }
                 }
                 /* Reset trick transmute info for next trick */
                 for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
                     pps->current_tti.transmutation_ids[ti] = -1;
                     pps->current_tti.transmuter_player[ti] = -1;
                     pps->current_tti.resolved_effects[ti] = TEFFECT_NONE;
+                    pps->current_tti.fogged[ti] = false;
+                    pps->current_tti.fog_transmuter[ti] = -1;
                 }
             } else {
                 int winner = trick_get_winner(&gs->current_trick);

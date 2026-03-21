@@ -34,13 +34,6 @@ bool game_state_start_game(GameState *gs)
 
     game_state_new_round(gs);
 
-#ifdef DEBUG
-    /* Debug cheat: start everyone near game-over threshold */
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        gs->players[i].total_score = GAME_OVER_SCORE - 1;
-    }
-#endif
-
     return true;
 }
 
@@ -244,7 +237,10 @@ bool game_state_complete_trick_with(GameState *gs, int winner, int points)
     gs->tricks_played++;
 
     if (gs->tricks_played >= TRICKS_PER_ROUND) {
-        /* Shoot-the-moon check */
+        /* Shoot-the-moon check.
+         * NOTE: Inversion (Phase 2) negates point cards per-trick, making
+         * it effectively impossible to reach exactly 26. This is by design —
+         * Inversion blocks moon-shooting as a natural consequence. */
         for (int i = 0; i < NUM_PLAYERS; i++) {
             if (gs->players[i].round_points == ALL_POINTS) {
                 gs->players[i].round_points = 0;

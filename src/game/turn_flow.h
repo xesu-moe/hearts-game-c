@@ -2,17 +2,17 @@
 #define TURN_FLOW_H
 
 /* ============================================================
- * @deps-exports: FlowStep enum (FLOW_ROGUE_ANIM_TO_CENTER, FLOW_ROGUE_ANIM_BACK,
- *                FLOW_DUEL_ANIM_TO_CENTER, FLOW_DUEL_ANIM_EXCHANGE,
- *                FLOW_DUEL_ANIM_RETURN), TurnFlow struct (rogue_staged_cv_idx,
- *                duel_staged_cv_idx, duel_own_cv_idx, duel_ai_decided),
- *                flow_init(), flow_update(), FLOW_DUEL_CHOOSE_TIME
+ * @deps-exports: enum FlowStep (FLOW_TRICK_DISPLAY, FLOW_FOG_REVEAL,
+ *                FLOW_TRICK_PILE_ANIM, FLOW_ROGUE_ANIM_TO_CENTER,
+ *                FLOW_ROGUE_ANIM_BACK, FLOW_DUEL_ANIM_TO_CENTER,
+ *                FLOW_DUEL_ANIM_EXCHANGE, FLOW_DUEL_ANIM_RETURN),
+ *                struct TurnFlow, FLOW_FOG_REVEAL_TIME, FLOW_FOG_DISSOLVE_TIME
  * @deps-requires: core/game_state.h (GameState, CARDS_PER_TRICK),
  *                 core/settings.h (GameSettings), phase2/phase2_state.h,
  *                 play_phase.h (PlayPhaseState)
  * @deps-used-by: turn_flow.c, process_input.c, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-20 — Added 5 new FlowStep animation states,
- *                     4 new TurnFlow card staging fields for duel/rogue
+ * @deps-last-changed: 2026-03-21 — Added FLOW_FOG_REVEAL enum value and
+ *                     timing constants for fog reveal transition
  * ============================================================ */
 
 #include "core/game_state.h"
@@ -29,6 +29,7 @@ typedef enum FlowStep {
     FLOW_AI_THINKING,
     FLOW_CARD_ANIMATING,
     FLOW_TRICK_DISPLAY,
+    FLOW_FOG_REVEAL,
     FLOW_TRICK_PILE_ANIM,
     FLOW_TRICK_COLLECTING,
     FLOW_ROGUE_CHOOSING,
@@ -71,6 +72,8 @@ typedef struct TurnFlow {
 #define FLOW_PILE_ANIM_TIME     0.4f
 #define FLOW_TRICK_COLLECT_TIME 0.3f
 #define FLOW_BETWEEN_TRICKS_TIME 0.2f
+#define FLOW_FOG_REVEAL_TIME    2.0f
+#define FLOW_FOG_DISSOLVE_TIME  0.5f
 #define FLOW_ROGUE_CHOOSE_TIME  10.0f
 #define FLOW_ROGUE_REVEAL_TIME  2.0f
 #define FLOW_DUEL_CHOOSE_TIME  10.0f

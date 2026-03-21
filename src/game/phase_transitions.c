@@ -6,9 +6,10 @@
  *                 render/anim.h (CardVisual, anim_start, ANIM_SCORING_*,
  *                 EASE_OUT_QUAD), render/particle.h, game/pass_phase.h,
  *                 game/play_phase.h, game/turn_flow.h, phase2/phase2_state.h,
- *                 phase2/contract_logic.h, phase2/transmutation_logic.h
- *                 (transmute_effect_affects_score), phase2/vendetta_logic.h, stdio.h
- * @deps-last-changed: 2026-03-20 — Added transmute_effect_affects_score() call
+ *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/transmutation.h (TrickTransmuteInfo.fogged/fog_transmuter),
+ *                 phase2/vendetta_logic.h, stdio.h
+ * @deps-last-changed: 2026-03-21 — Fog stacking: reset fogged/fog_transmuter in TTI
  * ============================================================ */
 
 #include "phase_transitions.h"
@@ -115,8 +116,13 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         flow_init(flow);
         render_clear_piles(rs);
         rs->sync_needed = true;
-        for (int ti = 0; ti < CARDS_PER_TRICK; ti++)
+        for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
             pls->current_tti.transmutation_ids[ti] = -1;
+            pls->current_tti.transmuter_player[ti] = -1;
+            pls->current_tti.resolved_effects[ti] = TEFFECT_NONE;
+            pls->current_tti.fogged[ti] = false;
+            pls->current_tti.fog_transmuter[ti] = -1;
+        }
     }
 
     /* Set up Phase 2 subphases when entering PHASE_PASSING */

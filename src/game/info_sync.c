@@ -1,9 +1,10 @@
 /* ============================================================
  * @deps-implements: info_sync.h
- * @deps-requires: info_sync.h, core/game_state.h, render/render.h (RenderState.trick_transmute_ids),
- *                 phase2/phase2_state.h, phase2/phase2_defs.h,
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h
- * @deps-last-changed: 2026-03-20 — Mirror: use transmute_is_effective_fog(), resolved_effects[]
+ * @deps-requires: info_sync.h, core/game_state.h, render/render.h,
+ *                 phase2/phase2_state.h (curse_force_hearts[], anchor_force_suit[]), phase2/phase2_defs.h,
+ *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h (transmute_curse_is_valid_lead, transmute_anchor_is_valid_lead, transmute_is_fog, transmute_get_transmuter),
+ *                 phase2/transmutation.h (TrickTransmuteInfo.fogged/fog_transmuter), stdio.h
+ * @deps-last-changed: 2026-03-21 — Added Anchor transmutation: check force lead suit in playability
  * ============================================================ */
 
 #include "info_sync.h"
@@ -55,6 +56,11 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
             rs->info_vendetta_active = false;
         }
 
+        /* Shield state */
+        for (int i = 0; i < NUM_PLAYERS; i++) {
+            rs->shield_remaining[i] = p2->shield_tricks_remaining[i];
+        }
+
         /* Bonuses (persistent effects) */
         rs->info_bonus_count = 0;
         for (int i = 0;
@@ -95,7 +101,9 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                         : -1;
                 if (i < gs->players[0].hand.count &&
                     transmute_is_effective_fog(hts, i, p2)) {
-                    int tp = transmute_get_transmuter(hts, i);
+                    int tp = (hts->slots[i].fogged)
+                        ? hts->slots[i].fog_transmuter
+                        : transmute_get_transmuter(hts, i);
                     rs->hand_fog_mode[i] = (tp == 0) ? 1 : 2;
                 } else {
                     rs->hand_fog_mode[i] = 0;
@@ -108,7 +116,10 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     pls->current_tti.transmutation_ids[i];
                 int ttid = pls->current_tti.transmutation_ids[i];
                 if (ttid >= 0) {
-                    if (pls->current_tti.resolved_effects[i] == TEFFECT_FOG_HIDDEN) {
+                    if (pls->current_tti.fogged[i]) {
+                        int fog_tp = pls->current_tti.fog_transmuter[i];
+                        rs->trick_fog_mode[i] = (fog_tp == 0) ? 1 : 2;
+                    } else if (pls->current_tti.resolved_effects[i] == TEFFECT_FOG_HIDDEN) {
                         int ttp = pls->current_tti.transmuter_player[i];
                         rs->trick_fog_mode[i] = (ttp == 0) ? 1 : 2;
                     } else {
@@ -206,10 +217,27 @@ void info_sync_playability(GameState *gs, RenderState *rs, Phase2State *p2)
         bool is_human_turn = (game_state_current_player(gs) == 0);
         for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
             if (p2->enabled) {
+                bool leading = (gs->current_trick.num_played == 0);
+                bool cursed = p2->curse_force_hearts[0];
+                bool anchored = p2->anchor_force_suit[0] >= 0;
+                /* Curse bypasses hearts-broken restriction */
+                bool hb = gs->hearts_broken || (leading && cursed);
                 rs->card_playable[i] = transmute_is_valid_play(
                     &gs->current_trick, hhand,
                     &p2->players[0].hand_transmutes, i,
-                    hhand->cards[i], gs->hearts_broken, ft);
+                    hhand->cards[i], hb, ft);
+                /* Curse: only hearts allowed when leading */
+                if (leading && cursed && rs->card_playable[i]) {
+                    rs->card_playable[i] =
+                        transmute_curse_is_valid_lead(hhand, hhand->cards[i]);
+                }
+                /* Anchor: only forced suit when leading (if not cursed) */
+                if (leading && !cursed && anchored && rs->card_playable[i]) {
+                    rs->card_playable[i] =
+                        transmute_anchor_is_valid_lead(
+                            hhand, hhand->cards[i],
+                            p2->anchor_force_suit[0]);
+                }
             } else {
                 rs->card_playable[i] = game_state_is_valid_play(
                     gs, 0, hhand->cards[i]);

@@ -2,6 +2,8 @@
 
 A deck-building Hearts modification, built in C with Raylib. Players select designed characters as the figures in their deck, unlocking unique Contracts, Vendettas, and Transmutation Cards.
 
+**THIS GAME IS AIMED TO BE PLAYED BY 4 HUMANS. NETWORKING WILL BE ADDED IN THE FUTURE. DO NOT CODE AI LOGIC AS A PRIORITY WHILE NEGLECTING 4-HUMAN INTERACTION LOGIC.**
+
 ## Game Vision & Roadmap
 
 ### Phase 1: Vanilla Hearts (current)
