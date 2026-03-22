@@ -8,7 +8,7 @@
  *                pass_start_toss_anim, pass_toss_animations_done,
  *                pass_start_receive_anim, pass_receive_animations_done,
  *                pass_subphase_update, setup_draft_ui,
- *                draft_finish_round, setup_vendetta_ui,
+ *                draft_finish_round,
  *                pass_subphase_time_limit
  * @deps-requires: core/game_state.h (GameState, PassSubphase),
  *                 core/settings.h (GameSettings - forward decl),
@@ -26,18 +26,38 @@
 typedef struct RenderState RenderState;
 typedef struct GameSettings GameSettings;
 
-#define PASS_VENDETTA_TIME       10.0f
+#define PASS_DEALER_TIME         30.0f
 #define PASS_CONTRACT_TIME       30.0f  /* must match DRAFT_TIMER_SECONDS */
 #define PASS_CARD_PASS_TIME      60.0f
-#define PASS_AI_VENDETTA_DISPLAY 1.2f
 #define PASS_REVEAL_DURATION     2.0f   /* show received cards face-up in staging */
+#define PASS_AI_DEALER_DISPLAY   1.2f   /* brief delay for AI dealer choice */
+#define PASS_DEALER_ANNOUNCE     1.0f   /* show dealer choice message before contracts */
+
+/* Valid dealer amounts */
+static const int DEALER_AMOUNTS[] = {0, 2, 3, 4};
+#define DEALER_AMOUNT_COUNT 4
 
 typedef struct PassPhaseState {
     PassSubphase subphase;
     float        timer;
-    bool         ai_vendetta_pending;
-    bool         vendetta_ui_active;
+    bool         dealer_ui_active;
+    bool         ai_dealer_pending;
+    bool         dealer_announced;  /* true = showing announcement, waiting */
+    float        dealer_announce_timer;
+    /* Dealer selection state */
+    int          dealer_dir;   /* PassDirection: 0=left, 1=right, 2=across */
+    int          dealer_amt;   /* 0, 2, 3, or 4 */
 } PassPhaseState;
+
+/* Determine dealer: player with highest prev_round_points.
+ * Returns -1 if round_number <= 1. Breaks ties by total score, then lowest id. */
+int dealer_determine_player(const int prev_round_points[NUM_PLAYERS],
+                            const GameState *gs);
+
+void setup_dealer_ui(PassPhaseState *pps, RenderState *rs, int dealer_player_id);
+
+/* Show dealer choice announcement and push to chat log. */
+void dealer_announce(PassPhaseState *pps, RenderState *rs);
 
 void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
                            RenderState *rs, Phase2State *p2,
@@ -74,9 +94,6 @@ void setup_draft_ui(RenderState *rs, Phase2State *p2);
 /* Advance draft to next round or finalize. Called after all players pick. */
 void draft_finish_round(PassPhaseState *pps, GameState *gs,
                         RenderState *rs, Phase2State *p2);
-
-void setup_vendetta_ui(RenderState *rs, Phase2State *p2,
-                       int timing_filter);
 
 float pass_subphase_time_limit(PassSubphase sub);
 

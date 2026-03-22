@@ -23,13 +23,14 @@
 void ai_select_pass(GameState *gs, int player_id)
 {
     Hand *hand = &gs->players[player_id].hand;
-    Card pass_cards[PASS_CARD_COUNT];
+    int pc = gs->pass_card_count;
+    Card pass_cards[MAX_PASS_CARD_COUNT];
     int pass_count = 0;
 
     /* Simple heuristic: pick cards with highest point value, then highest rank */
     bool used[MAX_HAND_SIZE] = {false};
 
-    for (int p = 0; p < PASS_CARD_COUNT; p++) {
+    for (int p = 0; p < pc; p++) {
         int best = -1;
         int best_points = -1;
         int best_rank = -1;
@@ -49,8 +50,8 @@ void ai_select_pass(GameState *gs, int player_id)
         }
     }
 
-    if (pass_count == PASS_CARD_COUNT) {
-        game_state_select_pass(gs, player_id, pass_cards);
+    if (pass_count == pc) {
+        game_state_select_pass(gs, player_id, pass_cards, pc);
     }
 }
 

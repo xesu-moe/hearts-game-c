@@ -191,13 +191,38 @@ void process_input(GameState *gs, RenderState *rs,
             break;
 
         case PHASE_PASSING: {
-            if (pps->subphase == PASS_SUB_VENDETTA && pps->vendetta_ui_active) {
-                int hit = render_hit_test_contract(rs, mouse);
-                if (hit >= 0) {
+            if (pps->subphase == PASS_SUB_DEALER && rs->dealer_ui_active) {
+                /* Direction buttons */
+                static const int dir_values[] = {PASS_LEFT, PASS_ACROSS, PASS_RIGHT};
+                for (int i = 0; i < DEALER_DIR_BTN_COUNT; i++) {
+                    if (rs->dealer_dir_btns[i].visible &&
+                        CheckCollisionPointRec(mouse, rs->dealer_dir_btns[i].bounds)) {
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_DEALER_DIR,
+                            .source_player = 0,
+                            .dealer_dir = { .direction = dir_values[i] },
+                        });
+                        break;
+                    }
+                }
+                /* Amount buttons */
+                for (int i = 0; i < DEALER_AMT_BTN_COUNT; i++) {
+                    if (rs->dealer_amt_btns[i].visible &&
+                        CheckCollisionPointRec(mouse, rs->dealer_amt_btns[i].bounds)) {
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_DEALER_AMT,
+                            .source_player = 0,
+                            .dealer_amt = { .amount = DEALER_AMOUNTS[i] },
+                        });
+                        break;
+                    }
+                }
+                /* Confirm button */
+                if (rs->dealer_confirm_btn.visible &&
+                    CheckCollisionPointRec(mouse, rs->dealer_confirm_btn.bounds)) {
                     input_cmd_push((InputCmd){
-                        .type = INPUT_CMD_SELECT_VENDETTA,
+                        .type = INPUT_CMD_DEALER_CONFIRM,
                         .source_player = 0,
-                        .vendetta = { .vendetta_id = rs->contract_option_ids[hit] },
                     });
                 }
             } else if (pps->subphase == PASS_SUB_CONTRACT) {
@@ -350,34 +375,6 @@ void process_input(GameState *gs, RenderState *rs,
                     }
                 }
                 break;
-            }
-            /* Vendetta panel buttons */
-            if (flow_step == FLOW_WAITING_FOR_HUMAN &&
-                rs->vendetta_available && rs->vendetta_interactive) {
-                bool vendetta_hit = false;
-                for (int i = 0; i < rs->vendetta_count; i++) {
-                    if (render_hit_test_button(&rs->vendetta_btns[i],
-                                               mouse)) {
-                        input_cmd_push((InputCmd){
-                            .type = INPUT_CMD_SELECT_VENDETTA,
-                            .source_player = 0,
-                            .vendetta = {
-                                .vendetta_id = rs->vendetta_ids[i]},
-                        });
-                        vendetta_hit = true;
-                        break;
-                    }
-                }
-                if (!vendetta_hit &&
-                    render_hit_test_button(&rs->vendetta_skip_btn,
-                                           mouse)) {
-                    input_cmd_push((InputCmd){
-                        .type = INPUT_CMD_SKIP_VENDETTA,
-                        .source_player = 0,
-                    });
-                    vendetta_hit = true;
-                }
-                if (vendetta_hit) break;
             }
             /* Transmutation inventory buttons */
             if (p2->enabled && flow_step == FLOW_WAITING_FOR_HUMAN) {

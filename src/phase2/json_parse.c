@@ -113,11 +113,6 @@ static const EnumMapping FIGURE_TYPE_MAP[] = {
     {"FIGURE_KING",  FIGURE_KING},
 };
 
-static const EnumMapping VENDETTA_TIMING_MAP[] = {
-    {"VENDETTA_TIMING_PASSING", VENDETTA_TIMING_PASSING},
-    {"VENDETTA_TIMING_PLAYING", VENDETTA_TIMING_PLAYING},
-};
-
 /* ----------------------------------------------------------------
  * Enum lookup
  * ---------------------------------------------------------------- */
@@ -345,74 +340,6 @@ bool json_load_contracts(const char *path, ContractDef *defs,
 }
 
 /* ----------------------------------------------------------------
- * Vendetta loader
- * ---------------------------------------------------------------- */
-
-bool json_load_vendettas(const char *path, VendettaDef *defs,
-                         int max_defs, int *out_count)
-{
-    *out_count = 0;
-    char *file_text = NULL;
-    cJSON *root = load_json_file(path, &file_text);
-    if (!root) return false;
-
-    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "vendettas");
-    if (!cJSON_IsArray(arr)) {
-        TraceLog(LOG_ERROR, "JSON: \"vendettas\" array not found in %s", path);
-        cJSON_Delete(root);
-        UnloadFileText(file_text);
-        return false;
-    }
-
-    int count = 0;
-    const cJSON *item = NULL;
-    cJSON_ArrayForEach(item, arr)
-    {
-        if (count >= max_defs) {
-            TraceLog(LOG_WARNING, "JSON: Vendetta limit %d reached", max_defs);
-            break;
-        }
-
-        VendettaDef *d = &defs[count];
-        memset(d, 0, sizeof(*d));
-
-        d->id = json_get_int(item, "id", count);
-        json_strcpy(d->name, sizeof(d->name),
-                    cJSON_GetObjectItemCaseSensitive(item, "name"));
-        json_strcpy(d->description, sizeof(d->description),
-                    cJSON_GetObjectItemCaseSensitive(item, "description"));
-
-        d->scope = (EffectScope)enum_from_string(
-            EFFECT_SCOPE_MAP, ARRAY_LEN(EFFECT_SCOPE_MAP),
-            json_get_str(item, "scope"), EFFECT_SCOPE_ALL);
-
-        d->timing = (VendettaTiming)enum_from_string(
-            VENDETTA_TIMING_MAP, ARRAY_LEN(VENDETTA_TIMING_MAP),
-            json_get_str(item, "timing"), VENDETTA_TIMING_PASSING);
-
-        const cJSON *effects = cJSON_GetObjectItemCaseSensitive(item, "effects");
-        if (cJSON_IsArray(effects)) {
-            int ei = 0;
-            const cJSON *eitem = NULL;
-            cJSON_ArrayForEach(eitem, effects)
-            {
-                if (ei >= MAX_VENDETTA_EFFECTS) break;
-                d->effects[ei] = parse_effect(eitem);
-                ei++;
-            }
-            d->num_effects = ei;
-        }
-
-        count++;
-    }
-
-    *out_count = count;
-    cJSON_Delete(root);
-    UnloadFileText(file_text);
-    return true;
-}
-
-/* ----------------------------------------------------------------
  * Transmutation loader
  * ---------------------------------------------------------------- */
 
@@ -565,26 +492,10 @@ bool json_load_characters(const char *path, CharacterDef *defs,
                 }
                 break;
             }
-            case FIGURE_QUEEN: {
-                const cJSON *queen = cJSON_GetObjectItemCaseSensitive(mech, "queen");
-                if (cJSON_IsObject(queen)) {
-                    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(queen, "vendetta_ids");
-                    if (cJSON_IsArray(ids)) {
-                        int n = 0;
-                        int arr_size = cJSON_GetArraySize(ids);
-                        for (int i = 0; i < arr_size && i < MAX_CHAR_VENDETTAS; i++) {
-                            const cJSON *v = cJSON_GetArrayItem(ids, i);
-                            int val = cJSON_IsNumber(v) ? v->valueint : -1;
-                            if (val >= 0) {
-                                d->mechanics.queen.vendetta_ids[n] = val;
-                                n++;
-                            }
-                        }
-                        d->mechanics.queen.num_vendettas = n;
-                    }
-                }
+            case FIGURE_QUEEN:
+                /* Queen mechanics reserved for future use */
+                d->mechanics.queen._reserved = 0;
                 break;
-            }
             case FIGURE_JACK:
                 /* Jack mechanics reserved for future use */
                 d->mechanics.jack._reserved = 0;

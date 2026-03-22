@@ -4,7 +4,7 @@
  *                 contract_result_*, RenderState fields),
  *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to,
  *                 CardVisual.inverted), layout.h (layout_scoring_*, layout_wipe_boundary_x),
- *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
+ *                 card_render.h, phase2/phase2_defs.h,
  *                 core/game_state.h (GamePhase, PHASE_SCORING),
  *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
  * @deps-last-changed: 2026-03-22 — Uses SETTINGS_ROW_COUNT and SETTINGS_ACTIVE_COUNT (now 9)
@@ -21,7 +21,6 @@
 #include "core/hand.h"
 #include "phase2/phase2_state.h"
 #include "phase2/phase2_defs.h"
-#include "phase2/vendetta.h"
 #include "rlgl.h"
 
 /* ---- Internal constants ---- */
@@ -338,11 +337,43 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
     } else if (rs->contract_ui_active) {
         rs->btn_confirm_pass.visible =
             (gs->phase == PHASE_PASSING &&
-             rs->selected_count == PASS_CARD_COUNT &&
+             rs->selected_count == gs->pass_card_count &&
              rs->selected_contract_idx >= 0);
     } else {
         rs->btn_confirm_pass.visible =
-            (gs->phase == PHASE_PASSING && rs->selected_count == PASS_CARD_COUNT);
+            (gs->phase == PHASE_PASSING && rs->selected_count == gs->pass_card_count);
+    }
+
+    /* Dealer button layout */
+    if (gs->phase == PHASE_PASSING && rs->dealer_ui_active) {
+        float btn_w = 90.0f * s;
+        float btn_h = 36.0f * s;
+        float gap = 10.0f * s;
+        float total_w = 3.0f * btn_w + 2.0f * gap;
+        float dir_y = bc.y - 60.0f * s;
+        for (int i = 0; i < DEALER_DIR_BTN_COUNT; i++) {
+            float bx2 = bc.x - total_w * 0.5f + (float)i * (btn_w + gap);
+            rs->dealer_dir_btns[i].bounds = (Rectangle){bx2, dir_y, btn_w, btn_h};
+            rs->dealer_dir_btns[i].visible = true;
+        }
+        float amt_w = 60.0f * s;
+        float amt_total = 4.0f * amt_w + 3.0f * gap;
+        float amt_y = bc.y + 10.0f * s;
+        for (int i = 0; i < DEALER_AMT_BTN_COUNT; i++) {
+            float bx2 = bc.x - amt_total * 0.5f + (float)i * (amt_w + gap);
+            rs->dealer_amt_btns[i].bounds = (Rectangle){bx2, amt_y, amt_w, btn_h};
+            rs->dealer_amt_btns[i].visible = true;
+        }
+        float cfm_w = 120.0f * s;
+        float cfm_y = bc.y + 80.0f * s;
+        rs->dealer_confirm_btn.bounds = (Rectangle){bc.x - cfm_w * 0.5f, cfm_y, cfm_w, btn_h};
+        rs->dealer_confirm_btn.visible = true;
+    } else {
+        for (int i = 0; i < DEALER_DIR_BTN_COUNT; i++)
+            rs->dealer_dir_btns[i].visible = false;
+        for (int i = 0; i < DEALER_AMT_BTN_COUNT; i++)
+            rs->dealer_amt_btns[i].visible = false;
+        rs->dealer_confirm_btn.visible = false;
     }
 
     if (gs->phase == PHASE_GAME_OVER) {
@@ -367,32 +398,13 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         rs->btn_continue.visible = false;
     }
 
-    /* ---- Info panel vendetta buttons ---- */
-    {
-        Rectangle lp = layout_left_panel_lower(cfg);
-        float btn_w = lp.width - 16.0f * s;
-        float btn_h = 32.0f * s;
-        float gap2 = 5.0f * s;
-        int cnt = rs->vendetta_count;
-        /* Stack buttons from bottom of info panel upwards */
-        float bot = lp.y + lp.height - 8.0f * s;
-        rs->vendetta_skip_btn.bounds = (Rectangle){
-            lp.x + 8.0f * s, bot - btn_h, btn_w, btn_h};
-        bot -= btn_h + gap2;
-        for (int i = cnt - 1; i >= 0; i--) {
-            rs->vendetta_btns[i].bounds = (Rectangle){
-                lp.x + 8.0f * s, bot - btn_h, btn_w, btn_h};
-            bot -= btn_h + gap2;
-        }
-    }
-
     /* ---- Transmutation inventory buttons ---- */
     {
         Rectangle lp = layout_left_panel_lower(cfg);
         float btn_w = lp.width - 16.0f * s;
         float btn_h = 28.0f * s;
         float btn_gap = 4.0f * s;
-        /* Position after Contract + Vendetta + Bonuses sections.
+        /* Position after Contract + Bonuses sections.
          * Worst case: ~100px headers + 8 bonus lines * 14px = ~210px at 720p. */
         float y_start = lp.y + 260.0f * s;
 
@@ -595,6 +607,7 @@ void render_init(RenderState *rs)
     rs->drag.rearrange_count = 0;
     rs->last_trick_winner = -1;
     rs->current_phase = PHASE_MENU;
+    rs->pass_card_limit = DEFAULT_PASS_CARD_COUNT;
     rs->layout_dirty = true;
     rs->sync_needed = true;
     rs->anim_play_player = -1;
@@ -602,7 +615,7 @@ void render_init(RenderState *rs)
     /* Initialize mutable layout with defaults */
     layout_recalculate(&rs->layout, 1280, 720);
 
-    for (int i = 0; i < PASS_CARD_COUNT; i++) {
+    for (int i = 0; i < MAX_PASS_CARD_COUNT; i++) {
         rs->selected_indices[i] = -1;
     }
 
@@ -676,6 +689,8 @@ void render_reset_to_menu(RenderState *rs)
 
 void render_update(const GameState *gs, RenderState *rs, float dt)
 {
+    rs->pass_card_limit = gs->pass_card_count;
+
     /* Detect phase change */
     if (gs->phase != rs->current_phase) {
         rs->phase_just_changed = true;
@@ -727,7 +742,7 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             rs->drag.has_release_pos = false;
         }
         /* Save selected card identities before resync */
-        Card saved_selected[PASS_CARD_COUNT];
+        Card saved_selected[MAX_PASS_CARD_COUNT];
         int saved_count = 0;
         for (int i = 0; i < rs->selected_count; i++) {
             int idx = rs->selected_indices[i];
@@ -1180,23 +1195,6 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                     cv->hover_t = hover_target;
                 }
             }
-        }
-    }
-
-    /* Update vendetta info panel button hover state */
-    if (gs->phase == PHASE_PLAYING || gs->phase == PHASE_PASSING) {
-        Vector2 mouse = GetMousePosition();
-        if (rs->vendetta_available && rs->vendetta_interactive) {
-            for (int i = 0; i < rs->vendetta_count; i++) {
-                rs->vendetta_btns[i].hovered =
-                    rs->vendetta_btns[i].visible &&
-                    CheckCollisionPointRec(mouse,
-                                           rs->vendetta_btns[i].bounds);
-            }
-            rs->vendetta_skip_btn.hovered =
-                rs->vendetta_skip_btn.visible &&
-                CheckCollisionPointRec(mouse,
-                                       rs->vendetta_skip_btn.bounds);
         }
     }
 
@@ -1702,24 +1700,94 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
 
     /* Subphase-specific content */
     switch (rs->pass_subphase) {
-    case PASS_SUB_VENDETTA:
-        /* Status text centered on board */
+    case PASS_SUB_DEALER: {
+        /* Status text */
         if (rs->pass_status_text) {
             int st_size = (int)(22.0f * s);
             int st_w = MeasureText(rs->pass_status_text, st_size);
-            float label_y = (rs->contract_option_count > 0)
-                                ? rs->contract_options[0].bounds.y - 32.0f * s
-                                : bc.y - 140.0f * s;
             DrawText(rs->pass_status_text,
                      (int)(bc.x - (float)st_w * 0.5f),
-                     (int)label_y, st_size, LIGHTGRAY);
+                     (int)(bc.y - 120.0f * s), st_size, LIGHTGRAY);
         }
-        /* Reuse contract option buttons for host action choices */
-        if (rs->contract_ui_active) {
-            draw_contract_buttons(rs, s);
+        if (rs->dealer_ui_active) {
+            static const char *dir_labels[] = {"Left", "Front", "Right"};
+            static const int dir_values[] = {PASS_LEFT, PASS_ACROSS, PASS_RIGHT};
+            static const char *amt_labels[] = {"0", "2", "3", "4"};
+            float btn_w = 90.0f * s;
+            float btn_h = 36.0f * s;
+            float gap = 10.0f * s;
+            float total_w = 3.0f * btn_w + 2.0f * gap;
+            float dir_y = bc.y - 60.0f * s;
+
+            /* Direction label */
+            const char *dir_lbl = "Direction:";
+            int dlbl_size = (int)(16.0f * s);
+            int dlbl_w = MeasureText(dir_lbl, dlbl_size);
+            DrawText(dir_lbl, (int)(bc.x - (float)dlbl_w * 0.5f),
+                     (int)(dir_y - 22.0f * s), dlbl_size, GRAY);
+
+            for (int i = 0; i < DEALER_DIR_BTN_COUNT; i++) {
+                float bx2 = bc.x - total_w * 0.5f + (float)i * (btn_w + gap);
+                Rectangle r = {bx2, dir_y, btn_w, btn_h};
+                bool selected = (rs->dealer_selected_dir == dir_values[i]);
+                Color bg = selected ? (Color){60, 120, 80, 255}
+                                    : (Color){40, 40, 50, 220};
+                Color border = selected ? GREEN : GRAY;
+                DrawRectangleRec(r, bg);
+                DrawRectangleLinesEx(r, 2.0f, border);
+                int lbl_size = (int)(18.0f * s);
+                int lw = MeasureText(dir_labels[i], lbl_size);
+                DrawText(dir_labels[i],
+                         (int)(bx2 + (btn_w - (float)lw) * 0.5f),
+                         (int)(dir_y + (btn_h - (float)lbl_size) * 0.5f),
+                         lbl_size, WHITE);
+            }
+
+            /* Amount buttons */
+            float amt_y = bc.y + 10.0f * s;
+            float amt_w = 60.0f * s;
+            float amt_total = 4.0f * amt_w + 3.0f * gap;
+
+            const char *amt_lbl = "Cards to pass:";
+            int albl_size = (int)(16.0f * s);
+            int albl_w = MeasureText(amt_lbl, albl_size);
+            DrawText(amt_lbl, (int)(bc.x - (float)albl_w * 0.5f),
+                     (int)(amt_y - 22.0f * s), albl_size, GRAY);
+
+            for (int i = 0; i < DEALER_AMT_BTN_COUNT; i++) {
+                float bx2 = bc.x - amt_total * 0.5f + (float)i * (amt_w + gap);
+                Rectangle r = {bx2, amt_y, amt_w, btn_h};
+                bool selected = (rs->dealer_selected_amt == i);
+                Color bg = selected ? (Color){60, 120, 80, 255}
+                                    : (Color){40, 40, 50, 220};
+                Color border = selected ? GREEN : GRAY;
+                DrawRectangleRec(r, bg);
+                DrawRectangleLinesEx(r, 2.0f, border);
+                int lbl_size = (int)(18.0f * s);
+                int lw = MeasureText(amt_labels[i], lbl_size);
+                DrawText(amt_labels[i],
+                         (int)(bx2 + (amt_w - (float)lw) * 0.5f),
+                         (int)(amt_y + (btn_h - (float)lbl_size) * 0.5f),
+                         lbl_size, WHITE);
+            }
+
+            /* Confirm button */
+            float cfm_w = 120.0f * s;
+            float cfm_y = bc.y + 80.0f * s;
+            Rectangle cfm_r = {bc.x - cfm_w * 0.5f, cfm_y, cfm_w, btn_h};
+            DrawRectangleRec(cfm_r, (Color){60, 60, 100, 220});
+            DrawRectangleLinesEx(cfm_r, 2.0f, SKYBLUE);
+            const char *cfm_lbl = "Confirm";
+            int cfm_size = (int)(18.0f * s);
+            int cfm_lw = MeasureText(cfm_lbl, cfm_size);
+            DrawText(cfm_lbl,
+                     (int)(bc.x - (float)cfm_lw * 0.5f),
+                     (int)(cfm_y + (btn_h - (float)cfm_size) * 0.5f),
+                     cfm_size, WHITE);
         }
         draw_subphase_timer(rs, s);
         break;
+    }
 
     case PASS_SUB_CONTRACT:
         /* Label */
@@ -1751,7 +1819,7 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
         /* Selection count */
         char sel_text[32];
         snprintf(sel_text, sizeof(sel_text), "Selected: %d / %d",
-                 rs->selected_count, PASS_CARD_COUNT);
+                 rs->selected_count, gs->pass_card_count);
         int sel_size = (int)(20.0f * s);
         int sel_w = MeasureText(sel_text, sel_size);
         DrawText(sel_text, (int)(bc.x - (float)sel_w * 0.5f),
@@ -1862,36 +1930,6 @@ static void draw_left_panel_info(const RenderState *rs)
 
     y += 6.0f * s;
 
-    /* Vendetta section */
-    DrawText(VENDETTA_DISPLAY_NAME, (int)x, (int)y, header_fs, GOLD);
-    y += (float)header_fs + 4.0f * s;
-    if (rs->info_vendetta_active) {
-        y += draw_text_wrapped(rs->info_vendetta_name, x, y,
-                               body_fs, max_w, WHITE);
-        y += draw_text_wrapped(rs->info_vendetta_desc, x, y,
-                               body_fs, max_w, LIGHTGRAY);
-    } else {
-        DrawText("None", (int)x, (int)y, body_fs, GRAY);
-        y += (float)body_fs + 2.0f * s;
-    }
-
-    y += 6.0f * s;
-
-    /* Bonuses section */
-    DrawText("Bonuses", (int)x, (int)y, header_fs, GOLD);
-    y += (float)header_fs + 4.0f * s;
-    if (rs->info_bonus_count > 0) {
-        for (int i = 0; i < rs->info_bonus_count; i++) {
-            y += draw_text_wrapped(rs->info_bonus_text[i], x, y,
-                                   body_fs, max_w, GREEN);
-        }
-    } else {
-        DrawText("None", (int)x, (int)y, body_fs, GRAY);
-        y += (float)body_fs + 2.0f * s;
-    }
-
-    y += 6.0f * s;
-
     /* Transmutation inventory section */
     if (rs->transmute_btn_count > 0) {
         DrawText("Transmutations", (int)x, (int)y, header_fs, GOLD);
@@ -1923,19 +1961,6 @@ static void draw_left_panel_info(const RenderState *rs)
     }
 
     y += 6.0f * s;
-
-    /* Vendetta options section */
-    if (rs->vendetta_available) {
-        DrawText("Use " VENDETTA_DISPLAY_NAME, (int)x, (int)y, header_fs,
-                 MAROON);
-        y += (float)header_fs + 4.0f * s;
-        (void)y;
-
-        for (int i = 0; i < rs->vendetta_count; i++) {
-            draw_button(&rs->vendetta_btns[i], s);
-        }
-        draw_button(&rs->vendetta_skip_btn, s);
-    }
 
     EndScissorMode();
 }
@@ -2663,7 +2688,7 @@ int render_toggle_card_selection(RenderState *rs, int card_visual_index)
         }
     }
 
-    if (rs->selected_count < PASS_CARD_COUNT) {
+    if (rs->selected_count < rs->pass_card_limit) {
         rs->selected_indices[rs->selected_count++] = card_visual_index;
         rs->cards[card_visual_index].selected = true;
     }
@@ -2849,33 +2874,3 @@ void render_chat_log_push(RenderState *rs, const char *msg)
     render_chat_log_push_color(rs, msg, LIGHTGRAY);
 }
 
-const char *render_effect_label(const ActiveEffect *ae, char *buf, int buflen)
-{
-    static const char *suit_names[] = {"Clubs", "Diamonds", "Spades", "Hearts"};
-    const Effect *e = &ae->effect;
-    switch (e->type) {
-    case EFFECT_POINTS_PER_HEART:
-        snprintf(buf, buflen, "Hearts %+d pt", e->param.points_delta); break;
-    case EFFECT_POINTS_FOR_QOS:
-        snprintf(buf, buflen, "QoS %+d pt", e->param.points_delta); break;
-    case EFFECT_FLAT_SCORE_ADJUST:
-        snprintf(buf, buflen, "Score %+d", e->param.points_delta); break;
-    case EFFECT_HEARTS_BREAK_EARLY:
-        snprintf(buf, buflen, "Hearts pre-broken"); break;
-    case EFFECT_VOID_SUIT:
-        if (e->param.voided_suit >= 0 && e->param.voided_suit < 4)
-            snprintf(buf, buflen, "Void %s", suit_names[e->param.voided_suit]);
-        else
-            snprintf(buf, buflen, "Void suit");
-        break;
-    case EFFECT_REVEAL_HAND:
-        snprintf(buf, buflen, "Hand revealed"); break;
-    case EFFECT_REVEAL_CONTRACT:
-        snprintf(buf, buflen, "Contract revealed"); break;
-    case EFFECT_SWAP_CARD_POINTS:
-        snprintf(buf, buflen, "Swapped points"); break;
-    default:
-        snprintf(buf, buflen, "Effect"); break;
-    }
-    return buf;
-}

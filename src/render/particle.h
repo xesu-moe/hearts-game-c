@@ -35,6 +35,8 @@ typedef struct ParticleSystem {
 
 void particle_init(ParticleSystem *ps);
 void particle_spawn_burst(ParticleSystem *ps, Vector2 origin, int count);
+void particle_spawn_burst_color(ParticleSystem *ps, Vector2 origin,
+                                int count, Color base_color);
 void particle_update(ParticleSystem *ps, float dt);
 void particle_draw(const ParticleSystem *ps);
 bool particle_any_active(const ParticleSystem *ps);

@@ -8,7 +8,7 @@
  *                 phase2/contract_logic.h (draft_pick, draft_all_picked,
  *                   contract_evaluate_all, contract_apply_rewards_all),
  *                 phase2/phase2_state.h (DraftState, DraftPlayerState),
- *                 phase2/transmutation_logic.h, phase2/vendetta_logic.h,
+ *                 phase2/transmutation_logic.h,
  *                 phase2/phase2_defs.h
  * @deps-last-changed: 2026-03-21 — Added draft input handling, updated scoring to use contract_evaluate_all/contract_apply_rewards_all
  * ============================================================ */
@@ -21,7 +21,6 @@
 #include "render/render.h"
 #include "ai.h"
 #include "phase2/contract_logic.h"
-#include "phase2/vendetta_logic.h"
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
@@ -84,8 +83,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 sync_settings_values(sui, settings, rs);
                 input_cmd_queue_clear();
             } else if (cmd.type == INPUT_CMD_RETURN_TO_MENU) {
-                pps->vendetta_ui_active = false;
-                pps->subphase = PASS_SUB_VENDETTA;
+                pps->subphase = PASS_SUB_DEALER;
                 pls->pending_transmutation = -1;
                 for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
                     pls->current_tti.transmutation_ids[ti] = -1;
@@ -144,13 +142,6 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             break;
 
         case PHASE_PASSING:
-            if (cmd.type == INPUT_CMD_SELECT_VENDETTA && p2->enabled &&
-                pps->subphase == PASS_SUB_VENDETTA && pps->vendetta_ui_active) {
-                vendetta_select(p2, cmd.vendetta.vendetta_id);
-                vendetta_apply(p2);
-                pps->vendetta_ui_active = false;
-                advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
-            }
             if (cmd.type == INPUT_CMD_SELECT_CONTRACT && p2->enabled) {
                 int cid = cmd.contract.contract_id;
                 if (pps->subphase == PASS_SUB_CONTRACT &&
@@ -195,12 +186,27 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 rs->sync_needed = true;
                 pls->pending_transmutation = -1;
             }
+            /* Dealer input */
+            if (cmd.type == INPUT_CMD_DEALER_DIR &&
+                pps->subphase == PASS_SUB_DEALER && pps->dealer_ui_active) {
+                pps->dealer_dir = cmd.dealer_dir.direction;
+            }
+            if (cmd.type == INPUT_CMD_DEALER_AMT &&
+                pps->subphase == PASS_SUB_DEALER && pps->dealer_ui_active) {
+                pps->dealer_amt = cmd.dealer_amt.amount;
+            }
+            if (cmd.type == INPUT_CMD_DEALER_CONFIRM &&
+                pps->subphase == PASS_SUB_DEALER && pps->dealer_ui_active) {
+                gs->pass_direction = (PassDirection)pps->dealer_dir;
+                gs->pass_card_count = pps->dealer_amt;
+                dealer_announce(pps, rs);
+            }
             if (cmd.type == INPUT_CMD_CONFIRM &&
                 pps->subphase == PASS_SUB_CARD_PASS &&
-                rs->selected_count == PASS_CARD_COUNT) {
-                Card pass_cards[PASS_CARD_COUNT];
+                rs->selected_count == gs->pass_card_count) {
+                Card pass_cards[MAX_PASS_CARD_COUNT];
                 bool valid = true;
-                for (int i = 0; i < PASS_CARD_COUNT; i++) {
+                for (int i = 0; i < gs->pass_card_count; i++) {
                     int idx = rs->selected_indices[i];
                     if (idx < 0 || idx >= rs->card_count) {
                         valid = false;
@@ -209,7 +215,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     pass_cards[i] = rs->cards[idx].card;
                 }
                 if (!valid) break;
-                game_state_select_pass(gs, 0, pass_cards);
+                game_state_select_pass(gs, 0, pass_cards, gs->pass_card_count);
                 render_clear_selection(rs);
                 pass_start_toss_anim(pps, gs, rs, p2);
             }
@@ -267,21 +273,6 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             } else if (cmd.type == INPUT_CMD_DUEL_RETURN && flow &&
                        flow->step == FLOW_DUEL_PICK_OWN) {
                 flow->duel_returned = true;
-            } else if (cmd.type == INPUT_CMD_SKIP_VENDETTA) {
-                p2->round.vendetta_used = true;
-                p2->round.vendetta_chosen = true;
-            } else if (cmd.type == INPUT_CMD_SELECT_VENDETTA) {
-                vendetta_select(p2, cmd.vendetta.vendetta_id);
-                vendetta_apply(p2);
-                {
-                    const VendettaDef *vd =
-                        phase2_get_vendetta(cmd.vendetta.vendetta_id);
-                    char vmsg[CHAT_MSG_LEN];
-                    snprintf(vmsg, sizeof(vmsg), "%s: %s",
-                             VENDETTA_DISPLAY_NAME,
-                             vd ? vd->name : "???");
-                    render_chat_log_push(rs, vmsg);
-                }
             }
             break;
 
@@ -373,7 +364,6 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
 
         case PHASE_GAME_OVER:
             if (cmd.type == INPUT_CMD_CONFIRM) {
-                pps->vendetta_ui_active = false;
                 game_state_reset_to_menu(gs);
                 rs->sync_needed = true;
             }

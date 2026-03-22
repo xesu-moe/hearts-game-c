@@ -1,6 +1,6 @@
 # Hollow Hearts
 
-A deck-building Hearts modification, built in C with Raylib. Players select designed characters as the figures in their deck, unlocking unique Contracts, Vendettas, and Transmutation Cards.
+A Hearts modification, built in C with Raylib. Players engage with Contracts, Vendettas, and Transmutation Cards that add strategic depth to the classic trick-taking game.
 
 **THIS GAME IS AIMED TO BE PLAYED BY 4 HUMANS. NETWORKING WILL BE ADDED IN THE FUTURE. DO NOT CODE AI LOGIC AS A PRIORITY WHILE NEGLECTING 4-HUMAN INTERACTION LOGIC.**
 
@@ -14,16 +14,11 @@ Build a fully working standard Hearts game first. All engine systems must be des
 
 Once vanilla Hearts is done, integrate the following systems:
 
-#### Characters (Deck Building)
-
-Players select designed characters to be the figures (Jack, Queen, King) in their deck. Each character has unique art and determines which Contracts and Vendettas are available to the player. Character selection happens before the game starts.
-
 #### Contracts (Per-Round Secret Missions)
 
 - Each round, players secretly choose a Contract (e.g., "Don't score any heart", "Obtain 4 club cards")
 - Contracts are hidden from other players unless revealed
-- Completing a Contract grants a persistent benefit (e.g., "Score -1 heart every round") and/or Transmutation Cards
-- Available Contracts depend on the player's chosen character
+- Completing a Contract grants Transmutation Cards as rewards
 
 #### Transmutation Cards
 
@@ -34,15 +29,16 @@ Players select designed characters to be the figures (Jack, Queen, King) in thei
 - Custom point values override normal card scoring
 - Definitions loaded from `assets/defs/transmutations.json`
 
-#### Vendetta
+#### Dealer
 
-- The player who scored the most points in the previous round gets a special action during the current round
-- Actions include switching passing directions, revealing a player's contract, etc.
-- Vendetta options come from the player's Queen characters and can trigger during passing or playing phase
+- The player who scored the most points in the previous round becomes the Dealer
+- The Dealer chooses the pass direction (left, front/across, right) and pass amount (0, 2, 3, or 4 cards) for the current round
+- Amount 0 means no card passing (contract draft still happens)
+- Round 1 has no dealer (defaults: left, 3 cards)
 
 ### Engine Design Principle
 
-**Build vanilla, architect for mods.** Every system (input, game state, scoring, phases) must have clear extension points for Phase 2 mechanics. Use the Command Pattern for actions, keep game rules data-driven where possible, and ensure the phase FSM can accommodate new phases (character select, contract pick, vendetta, transmutation) without rewriting the core loop.
+**Build vanilla, architect for mods.** Every system (input, game state, scoring, phases) must have clear extension points for Phase 2 mechanics. Use the Command Pattern for actions, keep game rules data-driven where possible, and ensure the phase FSM can accommodate new phases (contract pick, vendetta, transmutation) without rewriting the core loop.
 
 ## Build
 
@@ -180,8 +176,7 @@ hollow-hearts/
 │   ├── phase2/            # Hollow Hearts modification systems
 │   │   ├── contract.h / contract_logic.c/h
 │   │   ├── transmutation.h / transmutation_logic.c/h
-│   │   ├── vendetta.h / vendetta_logic.c/h
-│   │   ├── character.h, effect.h, phase2_state.h
+│   │   ├── effect.h, phase2_state.h
 │   │   ├── phase2_defs.c/h # Definition loading
 │   │   └── json_parse.c/h  # JSON parser wrapper
 │   └── vendor/

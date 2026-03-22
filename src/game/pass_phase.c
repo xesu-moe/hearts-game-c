@@ -4,7 +4,7 @@
  *                 ai.h, render/anim.h (anim_start_scaled, anim_get_speed, ANIM_PASS_HAND_SLIDE_DURATION, ANIM_PASS_RECEIVE_GAP_DELAY),
  *                 render/layout.h (layout_pass_preview_positions, layout_board_center, LayoutConfig),
  *                 render/render.h, phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/phase2_defs.h, phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/phase2_defs.h, phase2/transmutation_logic.h,
  *                 phase2/transmutation.h, assert.h, stdio.h
  * @deps-last-changed: 2026-03-22 — Hand slide timing: use ANIM_PASS_HAND_SLIDE_DURATION in pass_start_toss_anim/pass_start_receive_anim, ANIM_PASS_RECEIVE_GAP_DELAY in pass_start_receive_anim
  * ============================================================ */
@@ -21,14 +21,13 @@
 #include "render/layout.h"
 #include "render/render.h"
 #include "phase2/contract_logic.h"
-#include "phase2/vendetta_logic.h"
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
 float pass_subphase_time_limit(PassSubphase sub)
 {
     switch (sub) {
-    case PASS_SUB_VENDETTA:  return PASS_VENDETTA_TIME;
+    case PASS_SUB_DEALER:    return PASS_DEALER_TIME;
     case PASS_SUB_CONTRACT:  return PASS_CONTRACT_TIME;
     case PASS_SUB_CARD_PASS: return PASS_CARD_PASS_TIME;
     case PASS_SUB_TOSS_ANIM: return 0.0f;  /* driven by animation completion */
@@ -37,6 +36,86 @@ float pass_subphase_time_limit(PassSubphase sub)
     case PASS_SUB_RECEIVE:   return 0.0f;  /* driven by animation completion */
     }
     return 0.0f;
+}
+
+/* ---- Dealer determination ---- */
+
+int dealer_determine_player(const int prev_round_points[NUM_PLAYERS],
+                            const GameState *gs)
+{
+#ifdef DEBUG
+    /* In debug builds, human is always dealer from round 1 */
+    if (gs->round_number <= 1) return 0;
+#else
+    if (gs->round_number <= 1) return -1;
+#endif
+
+    int best = -1;
+    int best_pts = -1;
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        if (prev_round_points[i] > best_pts) {
+            best_pts = prev_round_points[i];
+            best = i;
+        } else if (prev_round_points[i] == best_pts && best >= 0) {
+            /* Break tie by total score, then lowest id */
+            int ti = gs->players[i].total_score;
+            int tb = gs->players[best].total_score;
+            if (ti > tb || (ti == tb && i < best))
+                best = i;
+        }
+    }
+    return best;
+}
+
+void setup_dealer_ui(PassPhaseState *pps, RenderState *rs, int dealer_player_id)
+{
+    (void)dealer_player_id;
+    rs->dealer_ui_active = true;
+    rs->dealer_selected_dir = pps->dealer_dir;
+    /* Map amount to button index */
+    rs->dealer_selected_amt = -1;
+    for (int i = 0; i < DEALER_AMOUNT_COUNT; i++) {
+        if (DEALER_AMOUNTS[i] == pps->dealer_amt) {
+            rs->dealer_selected_amt = i;
+            break;
+        }
+    }
+}
+
+static void dealer_ai_choose(PassPhaseState *pps)
+{
+    /* Random direction: 0=left, 1=right, 2=across */
+    static const int dirs[] = {PASS_LEFT, PASS_RIGHT, PASS_ACROSS};
+    pps->dealer_dir = dirs[GetRandomValue(0, 2)];
+    /* Random amount from {0, 2, 3, 4} */
+    pps->dealer_amt = DEALER_AMOUNTS[GetRandomValue(0, DEALER_AMOUNT_COUNT - 1)];
+}
+
+static char s_dealer_announce[64];
+
+void dealer_announce(PassPhaseState *pps, RenderState *rs)
+{
+    int amt = pps->dealer_amt;
+    if (amt == 0) {
+        snprintf(s_dealer_announce, sizeof(s_dealer_announce),
+                 "No passing this round!");
+    } else {
+        const char *dir_name = "left";
+        switch (pps->dealer_dir) {
+        case PASS_LEFT:   dir_name = "the left";  break;
+        case PASS_RIGHT:  dir_name = "the right"; break;
+        case PASS_ACROSS: dir_name = "the front"; break;
+        default: break;
+        }
+        snprintf(s_dealer_announce, sizeof(s_dealer_announce),
+                 "Pass %d card%s to %s!", amt, amt == 1 ? "" : "s", dir_name);
+    }
+    rs->pass_status_text = s_dealer_announce;
+    rs->dealer_ui_active = false;
+    render_chat_log_push(rs, s_dealer_announce);
+    pps->dealer_ui_active = false;
+    pps->dealer_announced = true;
+    pps->dealer_announce_timer = 0.0f;
 }
 
 /* Draft status text buffers (static to keep pointer valid for pass_status_text) */
@@ -107,31 +186,6 @@ void setup_draft_ui(RenderState *rs, Phase2State *p2)
     render_set_contract_options(rs, ids, count, names, descs);
 }
 
-void setup_vendetta_ui(RenderState *rs, Phase2State *p2, int timing_filter)
-{
-    int player = p2->round.vendetta_player_id;
-    if (player < 0) return;
-
-    int ids[MAX_VENDETTA_OPTIONS];
-    int count = vendetta_get_available(p2, player, timing_filter, ids);
-
-    const char *names[MAX_VENDETTA_OPTIONS];
-    const char *descs[MAX_VENDETTA_OPTIONS];
-
-    for (int i = 0; i < count; i++) {
-        const VendettaDef *vd = phase2_get_vendetta(ids[i]);
-        if (vd) {
-            names[i] = vd->name;
-            descs[i] = vd->description;
-        } else {
-            names[i] = "Unknown";
-            descs[i] = "";
-        }
-    }
-
-    render_set_contract_options(rs, ids, count, names, descs);
-}
-
 void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
                            RenderState *rs, Phase2State *p2,
                            PassSubphase next)
@@ -148,19 +202,17 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_REVEAL:
     case PASS_SUB_RECEIVE:
         break;  /* animation subphases don't need setup here */
-    case PASS_SUB_VENDETTA:
-        if (p2->round.vendetta_player_id == 0) {
-            pps->vendetta_ui_active = true;
-            setup_vendetta_ui(rs, p2, VENDETTA_TIMING_PASSING);
-            rs->pass_status_text = "Choose a " VENDETTA_DISPLAY_NAME ":";
-        } else if (p2->round.vendetta_player_id > 0) {
-            pps->ai_vendetta_pending = true;
-            rs->pass_status_text = VENDETTA_DISPLAY_NAME " player is choosing...";
-        }
+    case PASS_SUB_DEALER: {
+        int dp = gs->players[0].total_score; /* dummy — actual dealer id from phase_transitions */
+        (void)dp;
+        pps->dealer_dir = PASS_LEFT;
+        pps->dealer_amt = DEFAULT_PASS_CARD_COUNT;
+        pps->dealer_ui_active = false;
+        pps->ai_dealer_pending = false;
+        /* Actual UI setup done by phase_transitions after calling advance */
         break;
+    }
     case PASS_SUB_CONTRACT:
-        pps->vendetta_ui_active = false;
-        pps->ai_vendetta_pending = false;
         /* Generate draft pool on first entry */
         if (!p2->round.draft.active) {
             draft_generate_pool(&p2->round.draft);
@@ -173,6 +225,14 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_CARD_PASS:
         rs->contract_ui_active = false;
         rs->pass_status_text = NULL;
+        /* Skip card pass if dealer chose amount=0 */
+        if (gs->pass_card_count == 0) {
+            gs->lead_player = game_state_find_two_of_clubs(gs);
+            trick_init(&gs->current_trick, gs->lead_player);
+            gs->phase = PHASE_PLAYING;
+            rs->sync_needed = true;
+            return;
+        }
         /* AI players apply transmutations at card pass start */
         if (p2->enabled) {
             for (int p = 1; p < NUM_PLAYERS; p++) {
@@ -188,12 +248,12 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
 void auto_select_human_pass(GameState *gs, RenderState *rs)
 {
     const Hand *hand = &gs->players[0].hand;
-    assert(hand->count >= PASS_CARD_COUNT);
-    Card pass_cards[PASS_CARD_COUNT];
-    for (int i = 0; i < PASS_CARD_COUNT; i++) {
+    assert(hand->count >= gs->pass_card_count);
+    Card pass_cards[MAX_PASS_CARD_COUNT];
+    for (int i = 0; i < gs->pass_card_count; i++) {
         pass_cards[i] = hand->cards[i];
     }
-    game_state_select_pass(gs, 0, pass_cards);
+    game_state_select_pass(gs, 0, pass_cards, gs->pass_card_count);
     render_clear_selection(rs);
 }
 
@@ -240,7 +300,7 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
                     saved[pl][si].fogged = hts->slots[k].fogged;
                     saved[pl][si].fog_transmuter = hts->slots[k].fog_transmuter;
                     saved[pl][si].is_passed = false;
-                    for (int j = 0; j < PASS_CARD_COUNT; j++) {
+                    for (int j = 0; j < gs->pass_card_count; j++) {
                         if (card_equals(hand->cards[k],
                                         gs->pass_selections[pl][j])) {
                             saved[pl][si].is_passed = true;
@@ -257,7 +317,7 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
                 int dest = (p + pass_offset) % NUM_PLAYERS;
                 contract_record_received_cards(p2, dest,
                                                gs->pass_selections[p],
-                                               PASS_CARD_COUNT);
+                                               gs->pass_card_count);
             }
         }
 
@@ -335,8 +395,8 @@ void pass_start_toss_anim(PassPhaseState *pps, GameState *gs,
 
         /* For human: save per-card start positions from selected cards.
          * For AI: compute a single start from hand midpoint. */
-        Vector2 human_starts[PASS_CARD_COUNT];
-        float   human_rots[PASS_CARD_COUNT];
+        Vector2 human_starts[MAX_PASS_CARD_COUNT];
+        float   human_rots[MAX_PASS_CARD_COUNT];
         Vector2 ai_start = layout_board_center(cfg);
         float   ai_start_rot = 0.0f;
 
@@ -344,7 +404,7 @@ void pass_start_toss_anim(PassPhaseState *pps, GameState *gs,
             /* Human: each card starts from its own hand position.
              * Selection was already cleared, so match pass_selections
              * against hand visuals to find positions. */
-            for (int j = 0; j < PASS_CARD_COUNT; j++) {
+            for (int j = 0; j < gs->pass_card_count; j++) {
                 human_starts[j] = layout_board_center(cfg);
                 human_rots[j] = 0.0f;
                 for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
@@ -372,13 +432,13 @@ void pass_start_toss_anim(PassPhaseState *pps, GameState *gs,
             }
         }
 
-        /* Toss each of this player's 3 passed cards */
-        for (int j = 0; j < PASS_CARD_COUNT; j++) {
+        /* Toss each of this player's passed cards */
+        for (int j = 0; j < gs->pass_card_count; j++) {
             Vector2 start_pos = (p == 0) ? human_starts[j] : ai_start;
             float   start_rot = (p == 0) ? human_rots[j]   : ai_start_rot;
 
             Vector2 target = layout_pass_staging_position(
-                dest_spos, j, PASS_CARD_COUNT, cfg);
+                dest_spos, j, gs->pass_card_count, cfg);
 
             float delay = (float)p * PASS_PLAYER_STAGGER +
                           (float)j * PASS_TOSS_STAGGER;
@@ -412,7 +472,7 @@ void pass_start_toss_anim(PassPhaseState *pps, GameState *gs,
 
     /* Remove tossed cards from hand visuals (visual only) */
     for (int p = 0; p < NUM_PLAYERS; p++) {
-        for (int j = 0; j < PASS_CARD_COUNT; j++) {
+        for (int j = 0; j < gs->pass_card_count; j++) {
             Card pass_card = gs->pass_selections[p][j];
             for (int i = 0; i < rs->hand_visual_counts[p]; i++) {
                 int idx = rs->hand_visuals[p][i];
@@ -506,7 +566,7 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
                 saved[pl][si].fogged = hts->slots[k].fogged;
                 saved[pl][si].fog_transmuter = hts->slots[k].fog_transmuter;
                 saved[pl][si].is_passed = false;
-                for (int j = 0; j < PASS_CARD_COUNT; j++) {
+                for (int j = 0; j < gs->pass_card_count; j++) {
                     if (card_equals(hand->cards[k],
                                     gs->pass_selections[pl][j])) {
                         saved[pl][si].is_passed = true;
@@ -523,7 +583,7 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
             int dest = (p + pass_offset) % NUM_PLAYERS;
             contract_record_received_cards(p2, dest,
                                            gs->pass_selections[p],
-                                           PASS_CARD_COUNT);
+                                           gs->pass_card_count);
         }
     }
 
@@ -576,10 +636,10 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
         int full_count = hhand->count; /* 13 after execute_pass */
 
         /* Identify which slots in the 13-card layout hold received cards */
-        Card received[PASS_CARD_COUNT];
+        Card received[MAX_PASS_CARD_COUNT];
         int recv_count = 0;
         for (int i = 0; i < rs->pass_staged_count; i++) {
-            if (rs->pass_staged[i].to_player == 0 && recv_count < PASS_CARD_COUNT)
+            if (rs->pass_staged[i].to_player == 0 && recv_count < MAX_PASS_CARD_COUNT)
                 received[recv_count++] = rs->pass_staged[i].card;
         }
 
@@ -587,7 +647,7 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
         if (settings->auto_sort_received) {
             /* Sorted hand: find indices of received cards.
              * Use 'used' flags to handle duplicate cards (transmutations). */
-            bool used[PASS_CARD_COUNT] = {false};
+            bool used[MAX_PASS_CARD_COUNT] = {false};
             for (int k = 0; k < full_count; k++) {
                 for (int r = 0; r < recv_count; r++) {
                     if (!used[r] && card_equals(hhand->cards[k], received[r])) {
@@ -635,9 +695,9 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
         /* ---- Animate staged cards into gap slots ---- */
         int human_recv_idx = 0;
         /* Build ordered list of gap slot indices */
-        int gap_slots[PASS_CARD_COUNT];
+        int gap_slots[MAX_PASS_CARD_COUNT];
         int gap_count = 0;
-        for (int k = 0; k < count13 && gap_count < PASS_CARD_COUNT; k++) {
+        for (int k = 0; k < count13 && gap_count < MAX_PASS_CARD_COUNT; k++) {
             if (is_gap[k]) gap_slots[gap_count++] = k;
         }
 
@@ -699,14 +759,15 @@ bool pass_receive_animations_done(const RenderState *rs)
 
 /* ---- Reveal: animate human-destined cards to preview row ---- */
 
-static void pass_start_reveal(PassPhaseState *pps, RenderState *rs)
+static void pass_start_reveal(PassPhaseState *pps, GameState *gs,
+                              RenderState *rs)
 {
     const LayoutConfig *cfg = &rs->layout;
     float human_scale = cfg->scale; /* full-size (rel_scale = 1.0) */
 
     /* Compute preview row positions for human-destined cards */
-    Vector2 preview_pos[PASS_CARD_COUNT];
-    layout_pass_preview_positions(PASS_CARD_COUNT, cfg, preview_pos);
+    Vector2 preview_pos[MAX_PASS_CARD_COUNT];
+    layout_pass_preview_positions(gs->pass_card_count, cfg, preview_pos);
 
     /* Human hand origin: bottom-center at full scale */
     float cw_s = cfg->card_width;
@@ -760,27 +821,6 @@ static bool pass_reveal_animations_done(const RenderState *rs)
 }
 
 /* ---- Subphase handlers ---- */
-
-static void handle_vendetta_subphase(PassPhaseState *pps, GameState *gs,
-                                     RenderState *rs, Phase2State *p2,
-                                     float dt)
-{
-    pps->timer += dt;
-
-    if (pps->ai_vendetta_pending) {
-        if (pps->timer >= PASS_AI_VENDETTA_DISPLAY) {
-            vendetta_ai_activate(p2, VENDETTA_TIMING_PASSING);
-            advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
-        }
-    } else if (pps->vendetta_ui_active) {
-        if (pps->timer >= pass_subphase_time_limit(PASS_SUB_VENDETTA)) {
-            pps->vendetta_ui_active = false;
-            advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
-        }
-    } else {
-        advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
-    }
-}
 
 void draft_finish_round(PassPhaseState *pps, GameState *gs,
                                RenderState *rs, Phase2State *p2)
@@ -857,8 +897,39 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
     rs->pass_subphase = pps->subphase;
 
     switch (pps->subphase) {
-    case PASS_SUB_VENDETTA:
-        if (p2->enabled) handle_vendetta_subphase(pps, gs, rs, p2, dt);
+    case PASS_SUB_DEALER:
+        pps->timer += dt;
+        if (pps->dealer_announced) {
+            /* Showing announcement — wait, then advance to contracts */
+            pps->dealer_announce_timer += dt;
+            if (pps->dealer_announce_timer >= PASS_DEALER_ANNOUNCE) {
+                advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
+            }
+        } else if (pps->ai_dealer_pending) {
+            if (pps->timer >= PASS_AI_DEALER_DISPLAY) {
+                dealer_ai_choose(pps);
+                gs->pass_direction = (PassDirection)pps->dealer_dir;
+                gs->pass_card_count = pps->dealer_amt;
+                pps->ai_dealer_pending = false;
+                dealer_announce(pps, rs);
+            }
+        } else if (pps->dealer_ui_active) {
+            /* Sync highlight state to render */
+            rs->dealer_selected_dir = pps->dealer_dir;
+            rs->dealer_selected_amt = -1;
+            for (int i = 0; i < DEALER_AMOUNT_COUNT; i++) {
+                if (DEALER_AMOUNTS[i] == pps->dealer_amt) {
+                    rs->dealer_selected_amt = i;
+                    break;
+                }
+            }
+            /* Timeout: auto-confirm with current selection */
+            if (pps->timer >= PASS_DEALER_TIME) {
+                gs->pass_direction = (PassDirection)pps->dealer_dir;
+                gs->pass_card_count = pps->dealer_amt;
+                dealer_announce(pps, rs);
+            }
+        }
         break;
     case PASS_SUB_CONTRACT:
         if (p2->enabled) handle_contract_subphase(pps, gs, rs, p2, dt);
@@ -877,7 +948,7 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_TOSS_WAIT:
         rs->pass_wait_timer += dt;
         if (rs->pass_wait_timer >= pass_subphase_time_limit(PASS_SUB_TOSS_WAIT)) {
-            pass_start_reveal(pps, rs);
+            pass_start_reveal(pps, gs, rs);
         }
         break;
     case PASS_SUB_REVEAL:

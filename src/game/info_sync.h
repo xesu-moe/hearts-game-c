@@ -16,7 +16,7 @@
 /* Forward declarations */
 typedef struct RenderState RenderState;
 
-/* Sync info panel (contract, vendetta, bonuses, transmutations, vendetta options). */
+/* Sync info panel (contract, bonuses, transmutations). */
 void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                       PlayPhaseState *pls);
 

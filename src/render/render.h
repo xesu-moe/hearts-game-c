@@ -88,7 +88,7 @@ typedef enum ScoringSubphase {
 
 /* ---- Pass staging ---- */
 
-#define MAX_PASS_STAGED (NUM_PLAYERS * PASS_CARD_COUNT)  /* 12 */
+#define MAX_PASS_STAGED (NUM_PLAYERS * MAX_PASS_CARD_COUNT)  /* 16 */
 
 typedef struct PassStagedCard {
     int  card_visual_idx;  /* index into cards[] */
@@ -147,8 +147,9 @@ typedef struct RenderState {
     /* Interaction state */
     int hover_card_index;  /* -1 = none */
     DragState drag;
-    int selected_indices[PASS_CARD_COUNT]; /* indices into cards[] */
+    int selected_indices[MAX_PASS_CARD_COUNT]; /* indices into cards[] */
     int selected_count;
+    int pass_card_limit;  /* max selectable cards (synced from gs->pass_card_count) */
 
     /* Phase tracking */
     GamePhase current_phase;
@@ -206,29 +207,20 @@ typedef struct RenderState {
     int  chat_count;  /* number of messages stored (0..CHAT_LOG_MAX) */
     Color chat_colors[CHAT_LOG_MAX]; /* per-message color, parallel to chat_msgs */
 
+    /* Dealer phase UI */
+#define DEALER_DIR_BTN_COUNT 3
+#define DEALER_AMT_BTN_COUNT 4
+    UIButton dealer_dir_btns[DEALER_DIR_BTN_COUNT];  /* Left, Front, Right */
+    UIButton dealer_amt_btns[DEALER_AMT_BTN_COUNT];  /* 0, 2, 3, 4 */
+    UIButton dealer_confirm_btn;
+    int      dealer_selected_dir;   /* 0=left, 1=across, 2=right; -1=none */
+    int      dealer_selected_amt;   /* index into amounts; -1=none */
+    bool     dealer_ui_active;
+
     /* Info panel: contracts (player 0, up to 3) */
     char info_contract_name[3][32];
     char info_contract_desc[3][128];
     int  info_contract_count;
-
-    /* Info panel: vendetta action */
-    char info_vendetta_name[32];
-    char info_vendetta_desc[128];
-    bool info_vendetta_active;
-
-    /* Info panel: obtained bonuses (persistent effects, player 0) */
-#define INFO_BONUS_MAX 8
-    char info_bonus_text[INFO_BONUS_MAX][48];
-    int  info_bonus_count;
-
-    /* Info panel: vendetta options */
-#define MAX_VENDETTA_BTNS 4
-    bool     vendetta_available;
-    UIButton vendetta_btns[MAX_VENDETTA_BTNS];
-    int      vendetta_ids[MAX_VENDETTA_BTNS];
-    int      vendetta_count;
-    UIButton vendetta_skip_btn;
-    bool     vendetta_interactive;
 
     /* Transmutation inventory UI */
 #define MAX_TRANSMUTE_BTNS 8  /* matches MAX_TRANSMUTE_INVENTORY */
@@ -399,8 +391,6 @@ void render_chat_log_push(RenderState *rs, const char *msg);
 /* Push a colored message into the chat log ring buffer. */
 void render_chat_log_push_color(RenderState *rs, const char *msg, Color color);
 
-/* Convert an ActiveEffect to a short human-readable label. */
-const char *render_effect_label(const ActiveEffect *ae, char *buf, int buflen);
 
 /* Reset render state for returning to main menu mid-game.
  * Clears card visuals, piles, pass staging, and pause state. */

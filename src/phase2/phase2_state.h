@@ -67,18 +67,8 @@ typedef struct PlayerPhase2 {
 /* --- Per-Round Phase 2 State --- */
 
 typedef struct RoundPhase2 {
-    /* Vendetta system (merged host action + revenge) */
-    int  vendetta_player_id;   /* -1 = none (round 1 or no vendetta) */
-    int  chosen_vendetta;      /* Index into g_vendetta_defs, -1 = none */
-    bool vendetta_used;        /* true after vendetta action is spent */
-    bool vendetta_chosen;      /* true after player has selected */
-
     /* Snapshot of previous round's scores (saved before new_round zeroes them) */
     int  prev_round_points[NUM_PLAYERS];
-
-    /* Round-scoped effects from Vendetta + Contracts */
-    ActiveEffect round_effects[MAX_ACTIVE_EFFECTS];
-    int          num_round_effects;
 
     bool contracts_chosen;
 

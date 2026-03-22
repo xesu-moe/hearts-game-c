@@ -8,16 +8,13 @@
 /* ============================================================
  * @deps-implements: phase2_defs.h
  * @deps-requires: phase2_defs.h, transmutation.h, json_parse.h, raylib.h
- * @deps-last-changed: 2026-03-18 — Added transmutation table and loader
+ * @deps-last-changed: 2026-03-22 — Removed vendetta defs
  * ============================================================ */
 
 /* --- Global Definition Tables --- */
 
 ContractDef  g_contract_defs[MAX_CONTRACT_DEFS];
 int          g_contract_def_count = 0;
-
-VendettaDef  g_vendetta_defs[MAX_VENDETTA_DEFS];
-int          g_vendetta_def_count = 0;
 
 TransmutationDef g_transmutation_defs[MAX_TRANSMUTATION_DEFS];
 int              g_transmutation_def_count = 0;
@@ -31,11 +28,9 @@ void phase2_defs_init(void)
 {
     /* Zero all tables and counts */
     memset(g_contract_defs,  0, sizeof(g_contract_defs));
-    memset(g_vendetta_defs,  0, sizeof(g_vendetta_defs));
     memset(g_transmutation_defs, 0, sizeof(g_transmutation_defs));
     memset(g_character_defs, 0, sizeof(g_character_defs));
     g_contract_def_count      = 0;
-    g_vendetta_def_count      = 0;
     g_transmutation_def_count = 0;
     g_character_def_count     = 0;
 
@@ -43,10 +38,6 @@ void phase2_defs_init(void)
     json_load_contracts("assets/defs/contracts.json",
                         g_contract_defs, MAX_CONTRACT_DEFS,
                         &g_contract_def_count);
-
-    json_load_vendettas("assets/defs/vendettas.json",
-                        g_vendetta_defs, MAX_VENDETTA_DEFS,
-                        &g_vendetta_def_count);
 
     json_load_transmutations("assets/defs/transmutations.json",
                              g_transmutation_defs, MAX_TRANSMUTATION_DEFS,
@@ -56,9 +47,9 @@ void phase2_defs_init(void)
                          g_character_defs, MAX_CHARACTER_DEFS,
                          &g_character_def_count);
 
-    TraceLog(LOG_INFO, "PHASE2: Loaded %d contracts, %d vendettas, "
+    TraceLog(LOG_INFO, "PHASE2: Loaded %d contracts, "
              "%d transmutations, %d characters",
-             g_contract_def_count, g_vendetta_def_count,
+             g_contract_def_count,
              g_transmutation_def_count, g_character_def_count);
 }
 
@@ -69,16 +60,6 @@ const ContractDef *phase2_get_contract(int id)
     for (int i = 0; i < g_contract_def_count; i++) {
         if (g_contract_defs[i].id == id) {
             return &g_contract_defs[i];
-        }
-    }
-    return NULL;
-}
-
-const VendettaDef *phase2_get_vendetta(int id)
-{
-    for (int i = 0; i < g_vendetta_def_count; i++) {
-        if (g_vendetta_defs[i].id == id) {
-            return &g_vendetta_defs[i];
         }
     }
     return NULL;

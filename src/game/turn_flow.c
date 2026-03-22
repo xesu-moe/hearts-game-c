@@ -6,7 +6,7 @@
  *                 render/layout.h (layout_board_center, layout_pile_position),
  *                 render/anim.h (ANIM_EFFECT_FLIGHT_DURATION, ANIM_DUEL_EXCHANGE_DURATION, CardVisual.inverted), game/play_phase.h,
  *                 phase2/transmutation_logic.h (transmute_trick_get_winner, transmute_trick_count_points, transmute_on_trick_complete, transmute_apply_round_end, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS),
- *                 phase2/contract_logic.h, phase2/vendetta_logic.h, phase2/phase2_defs.h,
+ *                 phase2/contract_logic.h, phase2/phase2_defs.h,
  *                 phase2/phase2_state.h (shield_tricks_remaining[], binding_auto_win[])
  * @deps-last-changed: 2026-03-21 — Added Inversion effect: mark heart pile with inverted flag, negate QoS points
  * ============================================================ */
@@ -22,7 +22,6 @@
 #include "render/render.h"
 #include "render/layout.h"
 #include "phase2/contract_logic.h"
-#include "phase2/vendetta_logic.h"
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
@@ -338,10 +337,6 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
         if (flow->timer <= 0.0f) {
             int current = game_state_current_player(gs);
             if (current > 0) {
-                if (p2->enabled && current == p2->round.vendetta_player_id &&
-                    !p2->round.vendetta_used) {
-                    vendetta_ai_activate(p2, VENDETTA_TIMING_PLAYING);
-                }
                 ai_play_card(gs, rs, p2, pps, current);
                 rs->sync_needed = true;
                 rs->anim_play_player = current;

@@ -50,7 +50,7 @@ typedef enum PassDirection {
 } PassDirection;
 
 typedef enum PassSubphase {
-    PASS_SUB_VENDETTA   = 0,
+    PASS_SUB_DEALER     = 0,  /* dealer picks direction + amount */
     PASS_SUB_CONTRACT   = 1,
     PASS_SUB_CARD_PASS  = 2,
     PASS_SUB_TOSS_ANIM  = 3,  /* cards flying to staging area */
@@ -59,7 +59,9 @@ typedef enum PassSubphase {
     PASS_SUB_RECEIVE    = 6,  /* staged cards animate into hands */
 } PassSubphase;
 
-#define PASS_CARD_COUNT  3
+#define DEFAULT_PASS_CARD_COUNT 3
+#define MAX_PASS_CARD_COUNT     4
+#define PASS_CARD_COUNT         DEFAULT_PASS_CARD_COUNT /* backwards compat */
 #define GAME_OVER_SCORE 100
 
 typedef struct GameState {
@@ -69,7 +71,8 @@ typedef struct GameState {
 
     /* Round tracking */
     int           round_number;   /* completed rounds (incremented at end of new_round) */
-    PassDirection pass_direction;  /* derived: round_number % PASS_COUNT */
+    PassDirection pass_direction;  /* set by dealer or default */
+    int           pass_card_count; /* 0, 2, 3, or 4 (set by dealer) */
     int           lead_player;    /* who leads current trick */
     bool          hearts_broken;  /* has a heart been played this round */
 
@@ -78,7 +81,7 @@ typedef struct GameState {
     int           tricks_played;  /* 0..12 within a round */
 
     /* Passing state */
-    Card          pass_selections[NUM_PLAYERS][PASS_CARD_COUNT];
+    Card          pass_selections[NUM_PLAYERS][MAX_PASS_CARD_COUNT];
     bool          pass_ready[NUM_PLAYERS];
     bool          skip_human_pass_sort; /* when true, don't sort human hand after pass */
 } GameState;
@@ -101,9 +104,9 @@ void game_state_new_round(GameState *gs);
 /* Find which player holds 2♣. Returns 0-3, or -1 if not found. */
 int game_state_find_two_of_clubs(const GameState *gs);
 
-/* Submit 3-card pass selection for a player. Returns true on success. */
+/* Submit pass selection for a player. Returns true on success. */
 bool game_state_select_pass(GameState *gs, int player_id,
-                            const Card cards[PASS_CARD_COUNT]);
+                            const Card cards[], int card_count);
 
 /* Check if all 4 players have confirmed their pass selections. */
 bool game_state_all_passes_ready(const GameState *gs);

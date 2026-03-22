@@ -110,7 +110,7 @@ typedef struct ContractInstance {
     bool     played_card_first_of_suit;
 
     /* Passed-card tracking */
-    Card     received_in_pass[PASS_CARD_COUNT];
+    Card     received_in_pass[MAX_PASS_CARD_COUNT];
     int      num_received;
     bool     won_with_passed_card;
     bool     hit_with_passed_card;

@@ -5,7 +5,7 @@
  *                   PlayerPhase2.num_active_contracts, curse_force_hearts[],
  *                   anchor_force_suit[]),
  *                 phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation),
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/transmutation_logic.h,
  *                 phase2/transmutation.h, stdio.h
  * @deps-last-changed: 2026-03-21 — Updated for multi-contract info panel sync (info_contract_count)
  * ============================================================ */
@@ -16,7 +16,6 @@
 
 #include "render/render.h"
 #include "phase2/phase2_defs.h"
-#include "phase2/vendetta_logic.h"
 #include "phase2/transmutation_logic.h"
 
 void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
@@ -44,39 +43,9 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
             }
         }
 
-        /* Vendetta action */
-        if (p2->round.chosen_vendetta >= 0) {
-            const VendettaDef *vd =
-                phase2_get_vendetta(p2->round.chosen_vendetta);
-            if (vd) {
-                rs->info_vendetta_active = true;
-                snprintf(rs->info_vendetta_name,
-                         sizeof(rs->info_vendetta_name), "%s", vd->name);
-                snprintf(rs->info_vendetta_desc,
-                         sizeof(rs->info_vendetta_desc), "%s",
-                         vd->description);
-            } else {
-                rs->info_vendetta_active = false;
-            }
-        } else {
-            rs->info_vendetta_active = false;
-        }
-
         /* Shield state */
         for (int i = 0; i < NUM_PLAYERS; i++) {
             rs->shield_remaining[i] = p2->shield_tricks_remaining[i];
-        }
-
-        /* Bonuses (persistent effects) */
-        rs->info_bonus_count = 0;
-        for (int i = 0;
-             i < p2->players[0].num_persistent && i < INFO_BONUS_MAX;
-             i++) {
-            if (!p2->players[0].persistent_effects[i].active) continue;
-            render_effect_label(
-                &p2->players[0].persistent_effects[i],
-                rs->info_bonus_text[rs->info_bonus_count], 48);
-            rs->info_bonus_count++;
         }
 
         /* Transmutation inventory + hand flags */
@@ -160,47 +129,8 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
             }
         }
 
-        /* Vendetta options for human player during PLAYING phase */
-        if (p2->round.vendetta_player_id == 0 &&
-            !p2->round.vendetta_used &&
-            gs->phase == PHASE_PLAYING) {
-            int ids[MAX_VENDETTA_OPTIONS];
-            int cnt = vendetta_get_available(p2, 0,
-                VENDETTA_TIMING_PLAYING, ids);
-            if (cnt > 0) {
-                rs->vendetta_available = true;
-                rs->vendetta_count = cnt;
-                for (int i = 0; i < cnt; i++) {
-                    rs->vendetta_ids[i] = ids[i];
-                    const VendettaDef *vd = phase2_get_vendetta(ids[i]);
-                    rs->vendetta_btns[i].label =
-                        vd ? vd->name : "???";
-                    rs->vendetta_btns[i].subtitle =
-                        vd ? vd->description : "";
-                    rs->vendetta_btns[i].visible = true;
-                    rs->vendetta_btns[i].disabled =
-                        !rs->vendetta_interactive;
-                }
-                rs->vendetta_skip_btn.label = "Save for later";
-                rs->vendetta_skip_btn.visible = true;
-                rs->vendetta_skip_btn.disabled =
-                    !rs->vendetta_interactive;
-            } else {
-                rs->vendetta_available = false;
-                rs->vendetta_count = 0;
-                rs->vendetta_skip_btn.visible = false;
-            }
-        } else {
-            rs->vendetta_available = false;
-            rs->vendetta_count = 0;
-            rs->vendetta_skip_btn.visible = false;
-        }
     } else {
         rs->info_contract_count = 0;
-        rs->info_vendetta_active = false;
-        rs->info_bonus_count = 0;
-        rs->vendetta_available = false;
-        rs->vendetta_count = 0;
         rs->transmute_btn_count = 0;
         rs->pending_transmutation_id = -1;
         rs->transmute_info_count = 0;

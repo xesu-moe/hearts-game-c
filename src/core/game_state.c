@@ -71,7 +71,8 @@ void game_state_new_round(GameState *gs)
         hand_sort(&gs->players[i].hand);
     }
 
-    gs->pass_direction = gs->round_number % PASS_COUNT;
+    gs->pass_direction = PASS_LEFT;  /* default, dealer overrides later */
+    gs->pass_card_count = DEFAULT_PASS_CARD_COUNT;
     gs->hearts_broken = false;
     gs->tricks_played = 0;
 
@@ -89,7 +90,7 @@ void game_state_new_round(GameState *gs)
     /* Clear pass state */
     gs->skip_human_pass_sort = false;
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        for (int j = 0; j < PASS_CARD_COUNT; j++) {
+        for (int j = 0; j < MAX_PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
         }
         gs->pass_ready[i] = false;
@@ -100,7 +101,7 @@ void game_state_new_round(GameState *gs)
 }
 
 bool game_state_select_pass(GameState *gs, int player_id,
-                            const Card cards[PASS_CARD_COUNT])
+                            const Card cards[], int card_count)
 {
     if (gs->phase != PHASE_PASSING) {
         return false;
@@ -112,15 +113,15 @@ bool game_state_select_pass(GameState *gs, int player_id,
     const Hand *hand = &gs->players[player_id].hand;
 
     /* Verify all cards are in hand */
-    for (int i = 0; i < PASS_CARD_COUNT; i++) {
+    for (int i = 0; i < card_count; i++) {
         if (!hand_contains(hand, cards[i])) {
             return false;
         }
     }
 
     /* Check no duplicates */
-    for (int i = 0; i < PASS_CARD_COUNT; i++) {
-        for (int j = i + 1; j < PASS_CARD_COUNT; j++) {
+    for (int i = 0; i < card_count; i++) {
+        for (int j = i + 1; j < card_count; j++) {
             if (card_equals(cards[i], cards[j])) {
                 return false;
             }
@@ -128,7 +129,7 @@ bool game_state_select_pass(GameState *gs, int player_id,
     }
 
     /* Store selection */
-    for (int i = 0; i < PASS_CARD_COUNT; i++) {
+    for (int i = 0; i < card_count; i++) {
         gs->pass_selections[player_id][i] = cards[i];
     }
     gs->pass_ready[player_id] = true;
@@ -156,10 +157,12 @@ bool game_state_execute_pass(GameState *gs)
     _Static_assert(PASS_COUNT == 4, "Update offsets array if PassDirection changes");
     int offset = offsets[gs->pass_direction];
 
+    int pc = gs->pass_card_count;
+
     /* Phase 1: Remove selected cards from each player's hand */
-    Card outgoing[NUM_PLAYERS][PASS_CARD_COUNT];
+    Card outgoing[NUM_PLAYERS][MAX_PASS_CARD_COUNT];
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        for (int j = 0; j < PASS_CARD_COUNT; j++) {
+        for (int j = 0; j < pc; j++) {
             outgoing[i][j] = gs->pass_selections[i][j];
             hand_remove_card(&gs->players[i].hand, outgoing[i][j]);
         }
@@ -168,7 +171,7 @@ bool game_state_execute_pass(GameState *gs)
     /* Phase 2: Add cards to target players */
     for (int i = 0; i < NUM_PLAYERS; i++) {
         int target = (i + offset) % NUM_PLAYERS;
-        for (int j = 0; j < PASS_CARD_COUNT; j++) {
+        for (int j = 0; j < pc; j++) {
             hand_add_card(&gs->players[target].hand, outgoing[i][j]);
         }
     }
@@ -178,7 +181,7 @@ bool game_state_execute_pass(GameState *gs)
         if (!(i == 0 && gs->skip_human_pass_sort))
             hand_sort(&gs->players[i].hand);
         gs->pass_ready[i] = false;
-        for (int j = 0; j < PASS_CARD_COUNT; j++) {
+        for (int j = 0; j < MAX_PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
         }
     }

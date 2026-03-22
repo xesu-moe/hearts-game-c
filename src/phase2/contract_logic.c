@@ -36,7 +36,7 @@ static void contract_instance_reset(ContractInstance *ci)
     ci->broke_hearts = false;
     ci->led_qs_trick = false;
     ci->played_card_first_of_suit = false;
-    for (int j = 0; j < PASS_CARD_COUNT; j++)
+    for (int j = 0; j < MAX_PASS_CARD_COUNT; j++)
         ci->received_in_pass[j] = CARD_NONE;
     ci->num_received = 0;
     ci->won_with_passed_card = false;
@@ -70,10 +70,6 @@ void contract_state_init(Phase2State *p2)
         transmute_hand_init(&p2->players[i].hand_transmutes);
     }
 
-    p2->round.vendetta_player_id = -1;
-    p2->round.chosen_vendetta = -1;
-    p2->round.vendetta_used = false;
-    p2->round.vendetta_chosen = false;
     p2->round.contracts_chosen = false;
 
     p2->last_played_transmute_id = -1;
@@ -95,7 +91,6 @@ void contract_round_reset(Phase2State *p2)
     }
 
     p2->round.contracts_chosen = false;
-    p2->round.num_round_effects = 0;
     memset(p2->round.suit_seen, 0, sizeof(p2->round.suit_seen));
     transmute_round_state_init(&p2->round.transmute_round);
     memset(p2->curse_force_hearts, 0, sizeof(p2->curse_force_hearts));
@@ -328,7 +323,7 @@ void contract_record_received_cards(Phase2State *p2, int player_id,
 {
     if (player_id < 0 || player_id >= NUM_PLAYERS) return;
     PlayerPhase2 *pp = &p2->players[player_id];
-    int n = count < PASS_CARD_COUNT ? count : PASS_CARD_COUNT;
+    int n = count < MAX_PASS_CARD_COUNT ? count : MAX_PASS_CARD_COUNT;
 
     for (int c = 0; c < pp->num_active_contracts; c++) {
         ContractInstance *ci = &pp->contracts[c];

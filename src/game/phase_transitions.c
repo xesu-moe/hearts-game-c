@@ -8,7 +8,7 @@
  *                 game/play_phase.h, game/turn_flow.h, phase2/phase2_state.h,
  *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
  *                 phase2/transmutation.h (TrickTransmuteInfo.fogged/fog_transmuter),
- *                 phase2/vendetta_logic.h, stdio.h
+ *                 stdio.h
  * @deps-last-changed: 2026-03-21 — Fog stacking: reset fogged/fog_transmuter in TTI
  * ============================================================ */
 
@@ -22,7 +22,6 @@
 #include "render/particle.h"
 #include "phase2/contract_logic.h"
 #include "phase2/transmutation_logic.h"
-#include "phase2/vendetta_logic.h"
 
 void phase_transition_update(GameState *gs, RenderState *rs,
                              Phase2State *p2, PassPhaseState *pps,
@@ -103,10 +102,9 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         render_clear_piles(rs);
     }
 
-    /* Deal animation complete — advance to next phase */
+    /* Deal animation complete — advance to passing phase */
     if (gs->phase == PHASE_DEALING && rs->deal_complete) {
-        gs->phase = (gs->pass_direction == PASS_NONE)
-                       ? PHASE_PLAYING : PHASE_PASSING;
+        gs->phase = PHASE_PASSING;
         rs->sync_needed = true;
         rs->deal_complete = false;
     }
@@ -128,34 +126,43 @@ void phase_transition_update(GameState *gs, RenderState *rs,
     /* Set up Phase 2 subphases when entering PHASE_PASSING */
     if (gs->phase == PHASE_PASSING && *prev_phase != PHASE_PASSING) {
         pps->timer = 0.0f;
-        pps->ai_vendetta_pending = false;
-        pps->vendetta_ui_active = false;
+        pps->dealer_ui_active = false;
+        pps->ai_dealer_pending = false;
+        pps->dealer_announced = false;
 
         if (p2->enabled) {
             contract_round_reset(p2);
-            vendetta_round_reset(p2);
-            p2->round.vendetta_player_id =
-                vendetta_determine_player(p2->round.prev_round_points,
-                                          gs->round_number);
 
-            int vid = p2->round.vendetta_player_id;
-            if (vid >= 0 &&
-                vendetta_has_options(p2, VENDETTA_TIMING_PASSING)) {
-                advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_VENDETTA);
+            /* Determine dealer (loser of previous round) */
+            int dealer = dealer_determine_player(
+                p2->round.prev_round_points, gs);
+
+            if (dealer >= 0) {
+                advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_DEALER);
+                pps->dealer_dir = PASS_LEFT;
+                pps->dealer_amt = DEFAULT_PASS_CARD_COUNT;
+                if (dealer == 0) {
+                    /* Human is dealer */
+                    pps->dealer_ui_active = true;
+                    setup_dealer_ui(pps, rs, dealer);
+                    rs->pass_status_text =
+                        "Dealer: Choose pass direction and amount";
+                } else {
+                    /* AI dealer */
+                    pps->ai_dealer_pending = true;
+                    rs->pass_status_text = "Dealer is choosing...";
+                }
             } else {
+                /* Round 1: no dealer, use defaults */
                 advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
             }
         } else {
+            /* Phase 2 disabled: use defaults, skip to card pass */
             pps->subphase = PASS_SUB_CARD_PASS;
             rs->pass_subphase = PASS_SUB_CARD_PASS;
             rs->pass_subphase_remaining = PASS_CARD_PASS_TIME;
             rs->pass_status_text = NULL;
             rs->contract_ui_active = false;
-
-            if (gs->pass_direction == PASS_NONE) {
-                gs->phase = PHASE_PLAYING;
-                rs->sync_needed = true;
-            }
         }
     }
 
@@ -194,4 +201,26 @@ void phase_transition_post_render(GameState *gs, RenderState *rs,
         }
     }
     *prev_hearts_broken = gs->hearts_broken;
+
+    /* Particle burst: queen played (dark burst on any queen entering the trick) */
+    static int s_prev_trick_count = 0;
+    if (rs->trick_visual_count > s_prev_trick_count) {
+        /* A new card was added to the trick — check if it's a queen */
+        int idx = rs->trick_visuals[rs->trick_visual_count - 1];
+        if (idx >= 0 && idx < rs->card_count) {
+            Card c = rs->cards[idx].card;
+            /* Queen of Spades (or Shadow Queen transmutation) */
+            if (c.suit == SUIT_SPADES && c.rank == RANK_Q) {
+                CardVisual *cv = &rs->cards[idx];
+                Vector2 pos = cv->animating ? cv->target : cv->position;
+                Vector2 center = {
+                    pos.x + rs->layout.card_width * 0.5f,
+                    pos.y + rs->layout.card_height * 0.5f
+                };
+                particle_spawn_burst_color(&rs->particles, center, 36,
+                                           (Color){20, 10, 30, 255});
+            }
+        }
+    }
+    s_prev_trick_count = rs->trick_visual_count;
 }

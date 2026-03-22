@@ -42,11 +42,6 @@ typedef enum InputCmdType {
     /* Phase 2: Contract selection */
     INPUT_CMD_SELECT_CONTRACT, /* select a contract during passing phase */
 
-    /* Phase 2: Vendetta */
-    INPUT_CMD_SELECT_VENDETTA,   /* select which vendetta action to use */
-    INPUT_CMD_ACTIVATE_VENDETTA, /* confirm vendetta activation */
-    INPUT_CMD_SKIP_VENDETTA,     /* decline to use vendetta this timing */
-
     /* Phase 2: Transmutation */
     INPUT_CMD_SELECT_TRANSMUTATION,  /* Player clicked a transmutation inventory button */
     INPUT_CMD_APPLY_TRANSMUTATION,   /* Player clicked a hand card to apply selected transmutation */
@@ -64,6 +59,11 @@ typedef enum InputCmdType {
     INPUT_CMD_DUEL_PICK,             /* pick an opponent's card (Duel step 1) */
     INPUT_CMD_DUEL_GIVE,             /* pick own card to give (Duel step 2) */
     INPUT_CMD_DUEL_RETURN,           /* return opponent's card (cancel swap) */
+
+    /* Dealer phase */
+    INPUT_CMD_DEALER_DIR,            /* select pass direction */
+    INPUT_CMD_DEALER_AMT,            /* select pass amount */
+    INPUT_CMD_DEALER_CONFIRM,        /* confirm dealer choices */
 
     /* Pause menu */
     INPUT_CMD_RETURN_TO_MENU,        /* return to main menu from pause */
@@ -90,9 +90,6 @@ typedef struct InputCmd {
         /* INPUT_CMD_SELECT_CONTRACT: */
         struct { int contract_id; } contract;
 
-        /* INPUT_CMD_SELECT_VENDETTA, INPUT_CMD_ACTIVATE_VENDETTA: */
-        struct { int vendetta_id; } vendetta;
-
         /* INPUT_CMD_SELECT_TRANSMUTATION: */
         struct { int inv_slot; } transmute_select;
 
@@ -110,6 +107,12 @@ typedef struct InputCmd {
 
         /* INPUT_CMD_SETTING_PREV, INPUT_CMD_SETTING_NEXT: */
         struct { int setting_id; } setting; /* which setting row (0-based) */
+
+        /* INPUT_CMD_DEALER_DIR: */
+        struct { int direction; } dealer_dir; /* 0=left, 1=across, 2=right */
+
+        /* INPUT_CMD_DEALER_AMT: */
+        struct { int amount; } dealer_amt; /* 0, 2, 3, or 4 */
     };
 } InputCmd;
 

@@ -95,10 +95,8 @@ int main(void)
     flow_init(&flow);
 
     PassPhaseState pps = {
-        .subphase = PASS_SUB_VENDETTA,
+        .subphase = PASS_SUB_DEALER,
         .timer = 0.0f,
-        .ai_vendetta_pending = false,
-        .vendetta_ui_active = false,
     };
 
     PlayPhaseState pls = {
@@ -186,7 +184,7 @@ int main(void)
             rs.turn_time_remaining = flow.turn_timer;
 
             /* Set interactive flag after flow_update */
-            rs.vendetta_interactive = (flow.step == FLOW_WAITING_FOR_HUMAN);
+            (void)0; /* placeholder: future dealer interactive state */
         }
 
         /* Music: single background track for all phases */
