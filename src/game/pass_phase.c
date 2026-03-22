@@ -1,12 +1,12 @@
 /* ============================================================
  * @deps-implements: pass_phase.h
- * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, ai.h,
- *                 render/anim.h, render/layout.h, render/render.h,
- *                 phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
- *                 phase2/transmutation.h (TransmuteSlot.fogged/fog_transmuter),
- *                 phase2/phase2_defs.h, assert.h, stdio.h
- * @deps-last-changed: 2026-03-21 — Fog stacking: save/restore fogged/fog_transmuter in SavedTransmute
+ * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, core/settings.h,
+ *                 ai.h, render/anim.h (anim_start_scaled, anim_get_speed, ANIM_PASS_HAND_SLIDE_DURATION, ANIM_PASS_RECEIVE_GAP_DELAY),
+ *                 render/layout.h (layout_pass_preview_positions, layout_board_center, LayoutConfig),
+ *                 render/render.h, phase2/phase2_state.h, phase2/contract_logic.h,
+ *                 phase2/phase2_defs.h, phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/transmutation.h, assert.h, stdio.h
+ * @deps-last-changed: 2026-03-22 — Hand slide timing: use ANIM_PASS_HAND_SLIDE_DURATION in pass_start_toss_anim/pass_start_receive_anim, ANIM_PASS_RECEIVE_GAP_DELAY in pass_start_receive_anim
  * ============================================================ */
 
 #include "pass_phase.h"
@@ -16,6 +16,7 @@
 
 #include "ai.h"
 #include "core/hand.h"
+#include "core/settings.h"
 #include "render/anim.h"
 #include "render/layout.h"
 #include "render/render.h"
@@ -32,29 +33,76 @@ float pass_subphase_time_limit(PassSubphase sub)
     case PASS_SUB_CARD_PASS: return PASS_CARD_PASS_TIME;
     case PASS_SUB_TOSS_ANIM: return 0.0f;  /* driven by animation completion */
     case PASS_SUB_TOSS_WAIT: return ANIM_PASS_WAIT_DURATION * anim_get_speed();
+    case PASS_SUB_REVEAL:    return PASS_REVEAL_DURATION * anim_get_speed();
     case PASS_SUB_RECEIVE:   return 0.0f;  /* driven by animation completion */
     }
     return 0.0f;
 }
 
-void setup_contract_ui(RenderState *rs, Phase2State *p2)
-{
-    int ids[MAX_CONTRACT_OPTIONS];
-    int count = contract_get_available(p2, 0, ids);
+/* Draft status text buffers (static to keep pointer valid for pass_status_text) */
+static char s_draft_status[96];
 
-    const char *names[MAX_CONTRACT_OPTIONS];
-    const char *descs[MAX_CONTRACT_OPTIONS];
+void setup_draft_ui(RenderState *rs, Phase2State *p2)
+{
+    DraftState *draft = &p2->round.draft;
+    DraftPlayerState *ps = &draft->players[0]; /* human player */
+
+    int count = ps->available_count;
+    if (count > DRAFT_GROUP_SIZE) count = DRAFT_GROUP_SIZE;
+
+    int ids[DRAFT_GROUP_SIZE];
+    const char *names[DRAFT_GROUP_SIZE];
+    const char *descs[DRAFT_GROUP_SIZE];
 
     for (int i = 0; i < count; i++) {
-        const ContractDef *cd = phase2_get_contract(ids[i]);
+        int cid = ps->available[i].contract_id;
+        int tid = ps->available[i].transmutation_id;
+        ids[i] = cid;
+        rs->draft_transmute_ids[i] = tid;
+
+        const ContractDef *cd = phase2_get_contract(cid);
+        const TransmutationDef *td = (tid >= 0) ? phase2_get_transmutation(tid) : NULL;
+
+        /* Label = contract condition description (not name) */
         if (cd) {
-            names[i] = cd->name;
-            descs[i] = cd->description;
+            snprintf(rs->draft_btn_labels[i], sizeof(rs->draft_btn_labels[i]),
+                     "%s", cd->description);
         } else {
-            names[i] = "Unknown";
-            descs[i] = "";
+            snprintf(rs->draft_btn_labels[i], sizeof(rs->draft_btn_labels[i]),
+                     "Unknown");
         }
+
+        /* Subtitle = transmutation name + description */
+        if (td) {
+            snprintf(rs->draft_btn_subtitles[i], sizeof(rs->draft_btn_subtitles[i]),
+                     "%s\n%s", td->name, td->description);
+        } else {
+            rs->draft_btn_subtitles[i][0] = '\0';
+        }
+
+        names[i] = rs->draft_btn_labels[i];
+        descs[i] = rs->draft_btn_subtitles[i];
     }
+    /* Clear unused slots */
+    for (int i = count; i < DRAFT_GROUP_SIZE; i++)
+        rs->draft_transmute_ids[i] = -1;
+
+    rs->draft_round_display = draft->current_round + 1;
+    rs->draft_picks_made = ps->pick_count;
+
+    /* Build status text with round info */
+    int round = draft->current_round + 1;
+    int pass_count = count - 1;
+    if (round < DRAFT_ROUNDS) {
+        snprintf(s_draft_status, sizeof(s_draft_status),
+                 "Draft Round %d/3 - Pick 1, pass %d to the left",
+                 round, pass_count);
+    } else {
+        snprintf(s_draft_status, sizeof(s_draft_status),
+                 "Draft Round %d/3 - Pick 1, discard the last",
+                 round);
+    }
+    rs->pass_status_text = s_draft_status;
 
     render_set_contract_options(rs, ids, count, names, descs);
 }
@@ -88,7 +136,6 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
                            RenderState *rs, Phase2State *p2,
                            PassSubphase next)
 {
-    (void)gs;
     pps->subphase = next;
     pps->timer = 0.0f;
     rs->pass_subphase = next;
@@ -98,6 +145,7 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     switch (next) {
     case PASS_SUB_TOSS_ANIM:
     case PASS_SUB_TOSS_WAIT:
+    case PASS_SUB_REVEAL:
     case PASS_SUB_RECEIVE:
         break;  /* animation subphases don't need setup here */
     case PASS_SUB_VENDETTA:
@@ -113,8 +161,14 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_CONTRACT:
         pps->vendetta_ui_active = false;
         pps->ai_vendetta_pending = false;
-        setup_contract_ui(rs, p2);
-        rs->pass_status_text = "Choose a Contract:";
+        /* Generate draft pool on first entry */
+        if (!p2->round.draft.active) {
+            draft_generate_pool(&p2->round.draft);
+            /* AI players pick instantly for round 0 */
+            for (int p = 1; p < NUM_PLAYERS; p++)
+                draft_ai_pick(&p2->round.draft, p);
+        }
+        setup_draft_ui(rs, p2);
         break;
     case PASS_SUB_CARD_PASS:
         rs->contract_ui_active = false;
@@ -207,6 +261,7 @@ void finalize_card_pass(PassPhaseState *pps, GameState *gs,
             }
         }
 
+        gs->skip_human_pass_sort = false; /* legacy path: always sort */
         game_state_execute_pass(gs);
 
         if (p2->enabled) {
@@ -369,6 +424,28 @@ void pass_start_toss_anim(PassPhaseState *pps, GameState *gs,
         }
     }
 
+    /* Human hand: smoothly slide remaining cards to close gaps */
+    {
+        int remaining[MAX_HAND_SIZE];
+        int remain_count = 0;
+        for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+            int idx = rs->hand_visuals[0][i];
+            if (rs->cards[idx].opacity > 0.0f) {
+                remaining[remain_count++] = idx;
+            }
+        }
+        Vector2 positions[MAX_HAND_SIZE];
+        float rotations[MAX_HAND_SIZE];
+        int count = 0;
+        layout_hand_positions(POS_BOTTOM, remain_count, cfg,
+                              positions, rotations, &count);
+        for (int i = 0; i < remain_count; i++) {
+            CardVisual *cv = &rs->cards[remaining[i]];
+            anim_start(cv, positions[i], rotations[i],
+                       ANIM_PASS_HAND_SLIDE_DURATION, EASE_OUT_QUAD);
+        }
+    }
+
     /* Advance to toss animation subphase */
     pps->subphase = PASS_SUB_TOSS_ANIM;
     pps->timer = 0.0f;
@@ -389,8 +466,12 @@ bool pass_toss_animations_done(const RenderState *rs)
 }
 
 void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
-                             RenderState *rs, Phase2State *p2)
+                             RenderState *rs, Phase2State *p2,
+                             const GameSettings *settings)
 {
+    /* Set sort flag based on setting */
+    gs->skip_human_pass_sort = !settings->auto_sort_received;
+
     /* Save transmutation state before execute_pass modifies hands */
     typedef struct {
         int  tid;
@@ -487,16 +568,103 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
     /* Keep pass_anim_in_progress = true during RECEIVE so sync doesn't
      * destroy staged visuals mid-flight. Cleared when RECEIVE completes. */
 
-    /* Animate staged cards toward the recipient's hand center */
     const LayoutConfig *cfg = &rs->layout;
+
+    /* ---- Human hand: slide existing cards to open gaps ---- */
+    {
+        const Hand *hhand = &gs->players[0].hand;
+        int full_count = hhand->count; /* 13 after execute_pass */
+
+        /* Identify which slots in the 13-card layout hold received cards */
+        Card received[PASS_CARD_COUNT];
+        int recv_count = 0;
+        for (int i = 0; i < rs->pass_staged_count; i++) {
+            if (rs->pass_staged[i].to_player == 0 && recv_count < PASS_CARD_COUNT)
+                received[recv_count++] = rs->pass_staged[i].card;
+        }
+
+        bool is_gap[MAX_HAND_SIZE] = {false};
+        if (settings->auto_sort_received) {
+            /* Sorted hand: find indices of received cards.
+             * Use 'used' flags to handle duplicate cards (transmutations). */
+            bool used[PASS_CARD_COUNT] = {false};
+            for (int k = 0; k < full_count; k++) {
+                for (int r = 0; r < recv_count; r++) {
+                    if (!used[r] && card_equals(hhand->cards[k], received[r])) {
+                        is_gap[k] = true;
+                        used[r] = true;
+                        break;
+                    }
+                }
+            }
+        } else {
+            /* Unsorted: received cards are at the end */
+            for (int k = full_count - recv_count; k < full_count; k++)
+                is_gap[k] = true;
+        }
+
+        /* Compute 13-card layout positions */
+        Vector2 positions13[MAX_HAND_SIZE];
+        float rotations13[MAX_HAND_SIZE];
+        int count13 = 0;
+        layout_hand_positions(POS_BOTTOM, full_count, cfg,
+                              positions13, rotations13, &count13);
+
+        /* The 10 existing hand cards are still visible from the toss slide.
+         * Find them and animate to their new 13-card-layout slots. */
+        int existing_vis[MAX_HAND_SIZE];
+        int existing_count = 0;
+        for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+            int idx = rs->hand_visuals[0][i];
+            if (idx >= 0 && idx < rs->card_count &&
+                rs->cards[idx].opacity > 0.0f) {
+                existing_vis[existing_count++] = idx;
+            }
+        }
+
+        /* Map existing visuals to non-gap slots */
+        int vis_i = 0;
+        for (int slot = 0; slot < count13 && vis_i < existing_count; slot++) {
+            if (is_gap[slot]) continue;
+            CardVisual *cv = &rs->cards[existing_vis[vis_i]];
+            anim_start(cv, positions13[slot], rotations13[slot],
+                       ANIM_PASS_HAND_SLIDE_DURATION, EASE_OUT_QUAD);
+            vis_i++;
+        }
+
+        /* ---- Animate staged cards into gap slots ---- */
+        int human_recv_idx = 0;
+        /* Build ordered list of gap slot indices */
+        int gap_slots[PASS_CARD_COUNT];
+        int gap_count = 0;
+        for (int k = 0; k < count13 && gap_count < PASS_CARD_COUNT; k++) {
+            if (is_gap[k]) gap_slots[gap_count++] = k;
+        }
+
+        for (int i = 0; i < rs->pass_staged_count; i++) {
+            PassStagedCard *sc = &rs->pass_staged[i];
+            if (sc->to_player != 0) continue;
+            int idx = sc->card_visual_idx;
+            if (idx < 0 || idx >= rs->card_count) continue;
+
+            CardVisual *cv = &rs->cards[idx];
+            int slot = (human_recv_idx < gap_count)
+                           ? gap_slots[human_recv_idx] : count13 - 1;
+            anim_start(cv, positions13[slot], rotations13[slot],
+                       ANIM_PASS_RECEIVE_DURATION, EASE_OUT_BACK);
+            cv->anim_delay = ANIM_PASS_RECEIVE_GAP_DELAY * anim_get_speed();
+            human_recv_idx++;
+        }
+    }
+
+    /* ---- AI staged cards: fly to hand center (no gap animation) ---- */
     for (int i = 0; i < rs->pass_staged_count; i++) {
         PassStagedCard *sc = &rs->pass_staged[i];
+        if (sc->to_player == 0) continue;
         int idx = sc->card_visual_idx;
         if (idx < 0 || idx >= rs->card_count) continue;
 
         CardVisual *cv = &rs->cards[idx];
-
-        /* Target: center of recipient's hand area */
         PlayerPosition dest_spos = (PlayerPosition)sc->to_player;
         int hand_count = gs->players[sc->to_player].hand.count;
         if (hand_count < 1) hand_count = 13;
@@ -506,15 +674,7 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
         layout_hand_positions(dest_spos, hand_count, cfg,
                               positions, rotations, &count);
         int mid = count / 2;
-        Vector2 hand_center = positions[mid];
-        float target_rot = rotations[mid];
-
-        /* Human's received cards flip face-up */
-        if (sc->to_player == 0) {
-            cv->face_up = true;
-        }
-
-        anim_start(cv, hand_center, target_rot,
+        anim_start(cv, positions[mid], rotations[mid],
                    ANIM_PASS_RECEIVE_DURATION, EASE_OUT_BACK);
     }
 
@@ -529,6 +689,68 @@ void pass_start_receive_anim(PassPhaseState *pps, GameState *gs,
 bool pass_receive_animations_done(const RenderState *rs)
 {
     for (int i = 0; i < rs->pass_staged_count; i++) {
+        int idx = rs->pass_staged[i].card_visual_idx;
+        if (idx >= 0 && idx < rs->card_count && rs->cards[idx].animating) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* ---- Reveal: animate human-destined cards to preview row ---- */
+
+static void pass_start_reveal(PassPhaseState *pps, RenderState *rs)
+{
+    const LayoutConfig *cfg = &rs->layout;
+    float human_scale = cfg->scale; /* full-size (rel_scale = 1.0) */
+
+    /* Compute preview row positions for human-destined cards */
+    Vector2 preview_pos[PASS_CARD_COUNT];
+    layout_pass_preview_positions(PASS_CARD_COUNT, cfg, preview_pos);
+
+    /* Human hand origin: bottom-center at full scale */
+    float cw_s = cfg->card_width;
+    float ch_s = cfg->card_height;
+    Vector2 hand_origin = {cw_s * 0.5f, ch_s};
+
+    int human_idx = 0;
+    for (int i = 0; i < rs->pass_staged_count; i++) {
+        PassStagedCard *sc = &rs->pass_staged[i];
+        if (sc->to_player != 0) continue;
+        int idx = sc->card_visual_idx;
+        if (idx < 0 || idx >= rs->card_count) continue;
+
+        CardVisual *cv = &rs->cards[idx];
+        cv->face_up = true;
+        cv->z_order = 300 + human_idx;
+
+        /* Compensate position for origin change (center → bottom-center)
+         * so the card doesn't visually jump when origin is set.
+         * Old origin was center-pivot at current scale. */
+        Vector2 old_origin = cv->origin;
+        Vector2 delta = {hand_origin.x - old_origin.x,
+                         hand_origin.y - old_origin.y};
+        cv->position.x -= delta.x;
+        cv->position.y -= delta.y;
+        cv->origin = hand_origin;
+
+        anim_start_scaled(cv, preview_pos[human_idx], 0.0f,
+                          human_scale, ANIM_PASS_REVEAL_FLY_DURATION,
+                          EASE_OUT_BACK);
+        human_idx++;
+    }
+
+    pps->subphase = PASS_SUB_REVEAL;
+    pps->timer = 0.0f;
+    rs->pass_subphase = PASS_SUB_REVEAL;
+    rs->pass_subphase_remaining = pass_subphase_time_limit(PASS_SUB_REVEAL);
+    rs->pass_status_text = NULL;
+}
+
+static bool pass_reveal_animations_done(const RenderState *rs)
+{
+    for (int i = 0; i < rs->pass_staged_count; i++) {
+        if (rs->pass_staged[i].to_player != 0) continue;
         int idx = rs->pass_staged[i].card_visual_idx;
         if (idx >= 0 && idx < rs->card_count && rs->cards[idx].animating) {
             return false;
@@ -560,25 +782,15 @@ static void handle_vendetta_subphase(PassPhaseState *pps, GameState *gs,
     }
 }
 
-static void handle_contract_subphase(PassPhaseState *pps, GameState *gs,
-                                     RenderState *rs, Phase2State *p2,
-                                     float dt)
+void draft_finish_round(PassPhaseState *pps, GameState *gs,
+                               RenderState *rs, Phase2State *p2)
 {
-    pps->timer += dt;
-    float limit = pass_subphase_time_limit(PASS_SUB_CONTRACT);
+    DraftState *draft = &p2->round.draft;
 
-    if (pps->timer >= limit) {
-        if (p2->players[0].contract.contract_id < 0 &&
-            rs->contract_option_count > 0) {
-            contract_select(p2, 0, rs->contract_option_ids[0]);
-            rs->selected_contract_idx = 0;
-        }
-        for (int p = 1; p < NUM_PLAYERS; p++) {
-            if (p2->players[p].contract.contract_id < 0) {
-                contract_ai_select(p2, p);
-            }
-        }
-        p2->round.contracts_chosen = contract_all_chosen(p2);
+    draft_advance_round(draft);
+
+    if (draft_is_complete(draft)) {
+        draft_finalize(draft, p2);
         rs->contract_ui_active = false;
 
         if (gs->pass_direction == PASS_NONE) {
@@ -587,6 +799,35 @@ static void handle_contract_subphase(PassPhaseState *pps, GameState *gs,
         } else {
             advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CARD_PASS);
         }
+    } else {
+        /* AI picks for the new round */
+        for (int p = 1; p < NUM_PLAYERS; p++)
+            draft_ai_pick(draft, p);
+
+        setup_draft_ui(rs, p2);
+        pps->timer = 0.0f;
+        rs->pass_subphase_remaining = PASS_CONTRACT_TIME;
+    }
+}
+
+static void handle_contract_subphase(PassPhaseState *pps, GameState *gs,
+                                     RenderState *rs, Phase2State *p2,
+                                     float dt)
+{
+    DraftState *draft = &p2->round.draft;
+    if (!draft->active) return;
+
+    pps->timer += dt;
+    draft->timer -= dt;
+    if (draft->timer < 0.0f) draft->timer = 0.0f;
+
+    /* Timeout: auto-pick for human */
+    if (pps->timer >= PASS_CONTRACT_TIME) {
+        if (!draft->players[0].has_picked_this_round)
+            draft_auto_pick(draft, 0);
+
+        if (draft_all_picked(draft))
+            draft_finish_round(pps, gs, rs, p2);
     }
 }
 
@@ -604,7 +845,8 @@ static void handle_card_pass_subphase(PassPhaseState *pps, GameState *gs,
 }
 
 void pass_subphase_update(PassPhaseState *pps, GameState *gs,
-                          RenderState *rs, Phase2State *p2, float dt)
+                          RenderState *rs, Phase2State *p2,
+                          const GameSettings *settings, float dt)
 {
     if (gs->phase != PHASE_PASSING) return;
 
@@ -635,7 +877,16 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_TOSS_WAIT:
         rs->pass_wait_timer += dt;
         if (rs->pass_wait_timer >= pass_subphase_time_limit(PASS_SUB_TOSS_WAIT)) {
-            pass_start_receive_anim(pps, gs, rs, p2);
+            pass_start_reveal(pps, rs);
+        }
+        break;
+    case PASS_SUB_REVEAL:
+        /* Wait for fly-in animations to finish before starting hold timer */
+        if (pass_reveal_animations_done(rs)) {
+            pps->timer += dt;
+            if (pps->timer >= pass_subphase_time_limit(PASS_SUB_REVEAL)) {
+                pass_start_receive_anim(pps, gs, rs, p2, settings);
+            }
         }
         break;
     case PASS_SUB_RECEIVE:

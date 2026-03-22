@@ -2,17 +2,18 @@
 #define SETTINGS_H
 
 /* ============================================================
- * @deps-exports: WindowMode, AnimSpeed, AISpeed, Resolution,
- *                GameSettings, RESOLUTIONS[], FPS_OPTIONS[],
- *                settings_default(), settings_load(), settings_save(),
- *                settings_apply(), settings_anim_multiplier(),
- *                settings_ai_think_time(), settings_window_mode_name(),
- *                settings_resolution_name(), settings_fps_name(),
- *                settings_anim_speed_name(), settings_ai_speed_name()
+ * @deps-exports: WindowMode, AnimSpeed, AISpeed, Resolution, GameSettings,
+ *                RESOLUTIONS[], FPS_OPTIONS[], settings_default(),
+ *                settings_load(), settings_save(), settings_apply(),
+ *                settings_anim_multiplier(), settings_ai_think_time(),
+ *                settings_window_mode_name(), settings_resolution_name(),
+ *                settings_fps_name(), settings_anim_speed_name(),
+ *                settings_ai_speed_name()
  * @deps-requires: (none)
- * @deps-used-by: settings.c, render.c, turn_flow.h, turn_flow.c, update.h, update.c,
- *                settings_ui.h, settings_ui.c, main.c
- * @deps-last-changed: 2026-03-20 — Removed LayoutConfig dependency; callers handle layout_recalculate()
+ * @deps-used-by: settings.c, render.c, turn_flow.h, turn_flow.c, update.h,
+ *                update.c, settings_ui.h, settings_ui.c, pass_phase.h,
+ *                pass_phase.c, main.c, audio/audio.h
+ * @deps-last-changed: 2026-03-22 — Added auto_sort_received field to GameSettings
  * ============================================================ */
 
 #include <stdbool.h>
@@ -57,6 +58,7 @@ typedef struct GameSettings {
 
     AnimSpeed  anim_speed;
     AISpeed    ai_speed;
+    bool       auto_sort_received; /* sort received cards into hand after pass */
 
     /* Audio (reserved, zeroed) */
     float      master_volume;    /* 0.0-1.0 */

@@ -3,19 +3,18 @@
 
 /* ============================================================
  * @deps-exports: enum GamePhase, enum PassDirection, enum PassSubphase,
- *                struct GameState,
- *                game_state_init(), game_state_start_game(),
+ *                struct GameState, game_state_init(), game_state_start_game(),
  *                game_state_reset_to_menu(), game_state_new_round(),
  *                game_state_current_player(), game_state_play_card(),
  *                game_state_complete_trick(), game_state_complete_trick_with(),
  *                game_state_is_valid_play(), game_state_is_game_over(),
  *                game_state_advance_scoring(), game_state_get_winners()
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: game_state.c, render.h, render.c, ai.h, play_phase.h, play_phase.c,
+ * @deps-used-by: game_state.c, render.h, render.c, ai.h, play_phase.h,
  *                pass_phase.h, pass_phase.c, turn_flow.h, turn_flow.c,
  *                process_input.h, process_input.c, update.h, update.c,
- *                info_sync.h, info_sync.c, phase_transitions.h, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-20 — Added game_state_complete_trick_with() for Phase 2 transmutation overrides
+ *                info_sync.h, info_sync.c, phase_transitions.h, main.c
+ * @deps-last-changed: 2026-03-22 — Added PASS_SUB_REVEAL to PassSubphase, skip_human_pass_sort to GameState
  * ============================================================ */
 
 #include <stdbool.h>
@@ -56,7 +55,8 @@ typedef enum PassSubphase {
     PASS_SUB_CARD_PASS  = 2,
     PASS_SUB_TOSS_ANIM  = 3,  /* cards flying to staging area */
     PASS_SUB_TOSS_WAIT  = 4,  /* cards landed, brief hold */
-    PASS_SUB_RECEIVE    = 5,  /* staged cards animate into hands */
+    PASS_SUB_REVEAL     = 5,  /* received cards shown face-up in staging */
+    PASS_SUB_RECEIVE    = 6,  /* staged cards animate into hands */
 } PassSubphase;
 
 #define PASS_CARD_COUNT  3
@@ -80,6 +80,7 @@ typedef struct GameState {
     /* Passing state */
     Card          pass_selections[NUM_PLAYERS][PASS_CARD_COUNT];
     bool          pass_ready[NUM_PLAYERS];
+    bool          skip_human_pass_sort; /* when true, don't sort human hand after pass */
 } GameState;
 
 /* Initialize game: set up 4 players (player 0 = human), phase = PHASE_MENU */

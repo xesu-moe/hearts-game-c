@@ -2,14 +2,14 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: struct RenderState (fog_shader, fog_loc_time, fog_loc_opacity,
- *                fog_shader_loaded, hand_fog_mode[], trick_fog_mode[])
- * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/card.h,
- *                 core/game_state.h, phase2/effect.h
- * @deps-used-by: render.c, info_sync.c, main.c
- * @deps-last-changed: 2026-03-20 — Fog Transmutation: added fog shader fields
- *                     (fog_shader, fog_loc_time, fog_loc_opacity,
- *                     fog_shader_loaded) and fog mode arrays to RenderState
+ * @deps-exports: struct RenderState (draft_btn_labels[][], draft_btn_subtitles[][],
+ *                draft_round_display, draft_picks_made, contract_result_*[],
+ *                info_contract_*[][], info_contract_count, fog_shader,
+ *                fog_loc_time, fog_loc_opacity, hand_fog_mode[], trick_fog_mode[])
+ * @deps-requires: raylib.h (Shader), anim.h (CardVisual), layout.h,
+ *                 core/card.h, core/game_state.h, phase2/effect.h
+ * @deps-used-by: render.c, pass_phase.c, info_sync.c, main.c
+ * @deps-last-changed: 2026-03-22 — SETTINGS_ROW_COUNT and SETTINGS_ACTIVE_COUNT increased from 8 to 9
  * ============================================================ */
 
 #include <stdbool.h>
@@ -55,8 +55,8 @@ typedef struct UIButton {
     bool        disabled;  /* grayed out and non-interactive */
 } UIButton;
 
-#define SETTINGS_ROW_COUNT     8  /* 3 display + 2 gameplay + 3 audio */
-#define SETTINGS_ACTIVE_COUNT  8
+#define SETTINGS_ROW_COUNT     9  /* 3 display + 3 gameplay + 3 audio */
+#define SETTINGS_ACTIVE_COUNT  9
 #define SETTINGS_TAB_COUNT     3
 
 typedef enum SettingsTab {
@@ -174,19 +174,28 @@ typedef struct RenderState {
     UIButton btn_confirm_pass;
     UIButton btn_continue;
 
-    /* Contract selection UI */
+    /* Contract draft UI */
     UIButton contract_options[4];
     int      contract_option_count;
-    int      contract_option_ids[4];
-    int      selected_contract_idx;  /* -1 = none */
+    int      contract_option_ids[4];     /* contract IDs for hit-testing */
+    int      selected_contract_idx;      /* -1 = none */
     bool     contract_ui_active;
+    char     draft_btn_labels[4][128];   /* Contract condition description */
+    char     draft_btn_subtitles[4][320]; /* "desc\nReward: tmute - desc" */
+    int      draft_transmute_ids[4];     /* paired transmutation ID per button, -1 = none */
+    int      draft_round_display;        /* 1-3 for UI */
+    int      draft_picks_made;           /* 0-3 */
 
-    /* Contract scoring display */
-    char     contract_result_text[NUM_PLAYERS][64];
-    char     contract_result_name[NUM_PLAYERS][32];
-    char     contract_result_desc[NUM_PLAYERS][128];
-    bool     contract_result_success[NUM_PLAYERS];
+    /* Contract scoring display (3 contracts per player = 12 max) */
+#define MAX_CONTRACT_RESULTS 12
+    char     contract_result_text[MAX_CONTRACT_RESULTS][64];   /* player name */
+    char     contract_result_name[MAX_CONTRACT_RESULTS][32];   /* transmutation name */
+    char     contract_result_desc[MAX_CONTRACT_RESULTS][128];  /* contract condition */
+    char     contract_result_tdesc[MAX_CONTRACT_RESULTS][128]; /* transmutation desc */
+    bool     contract_result_success[MAX_CONTRACT_RESULTS];
+    int      contract_result_count;
     bool     show_contract_results;
+    float    contract_scroll_y;  /* scroll offset for rewards panel */
 
 
     /* Chat log (ring buffer) */
@@ -197,10 +206,10 @@ typedef struct RenderState {
     int  chat_count;  /* number of messages stored (0..CHAT_LOG_MAX) */
     Color chat_colors[CHAT_LOG_MAX]; /* per-message color, parallel to chat_msgs */
 
-    /* Info panel: contract (player 0) */
-    char info_contract_name[32];
-    char info_contract_desc[128];
-    bool info_contract_active;
+    /* Info panel: contracts (player 0, up to 3) */
+    char info_contract_name[3][32];
+    char info_contract_desc[3][128];
+    int  info_contract_count;
 
     /* Info panel: vendetta action */
     char info_vendetta_name[32];
@@ -260,7 +269,7 @@ typedef struct RenderState {
     int             score_countup_round[NUM_PLAYERS];  /* remaining round pts to add */
     float           score_countup_timer;
     bool            score_tick_pending;     /* flag for main.c to play SFX */
-    int             contract_reveal_count;  /* how many rows revealed (0..NUM_PLAYERS) */
+    int             contract_reveal_count;  /* how many rows revealed (0..contract_result_count) */
     float           contract_reveal_timer;  /* countdown to next reveal */
 
     /* Trick pile visuals — separate from cards[], survives sync_hands() */

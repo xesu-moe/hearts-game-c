@@ -2,10 +2,10 @@
 #define ANIM_H
 
 /* ============================================================
- * @deps-exports: struct CardVisual (fog_mode, fog_reveal_t, shielded, inverted fields)
- * @deps-requires: easing.h, raylib.h, core/card.h, stdint.h
- * @deps-used-by: render.c, render.h, info_sync.c, game/update.c, game/turn_flow.c
- * @deps-last-changed: 2026-03-21 — Inversion effect: added inverted field to mark point-negation cards
+ * @deps-exports: struct CardVisual, anim_start_scaled(), ANIM_PASS_HAND_SLIDE_DURATION, ANIM_PASS_RECEIVE_GAP_DELAY
+ * @deps-requires: easing.h (EaseType), raylib.h (Vector2), core/card.h (Card), stdint.h
+ * @deps-used-by: render.c, anim.c, game/pass_phase.c, game/turn_flow.c, game/update.c
+ * @deps-last-changed: 2026-03-22 — Hand slide timing: added ANIM_PASS_HAND_SLIDE_DURATION and ANIM_PASS_RECEIVE_GAP_DELAY constants for hand card animation
  * ============================================================ */
 
 #include <stdbool.h>
@@ -38,9 +38,13 @@
 #define ANIM_PILE_STAGGER          0.06f  /* delay between each of the 4 cards */
 
 /* Pass animation timing */
-#define ANIM_PASS_TOSS_DURATION    0.45f
-#define ANIM_PASS_WAIT_DURATION    0.6f
-#define ANIM_PASS_RECEIVE_DURATION 0.35f
+#define ANIM_PASS_TOSS_DURATION       0.45f
+#define ANIM_PASS_WAIT_DURATION       0.6f
+#define ANIM_PASS_REVEAL_FLY_DURATION 0.4f
+#define ANIM_PASS_RECEIVE_DURATION    0.35f
+#define ANIM_PASS_HAND_SLIDE_DURATION 0.35f  /* hand cards sliding to close/open gaps
+                                              (must be <= ANIM_PASS_TOSS_DURATION) */
+#define ANIM_PASS_RECEIVE_GAP_DELAY   0.25f  /* delay before receive fly-in (gaps open first) */
 #define PASS_TOSS_STAGGER          0.06f  /* delay between cards per player */
 #define PASS_PLAYER_STAGGER        0.08f  /* delay between players */
 
@@ -86,6 +90,10 @@ typedef struct CardVisual {
     int      z_order;
     int      transmute_id;     /* transmutation def ID, -1 = not transmuted */
     float    hover_t;          /* 0.0 = not hovered, 1.0 = fully hovered */
+    /* Scale animation */
+    float    start_scale;
+    float    target_scale;
+    bool     anim_scale;      /* whether this animation interpolates scale */
     /* Toss flight (bezier curve animation) */
     bool     use_bezier;
     Vector2  bezier_control;
@@ -113,6 +121,10 @@ float anim_get_speed(void);
 /* Start a linear animation from current position to target. */
 void anim_start(CardVisual *cv, Vector2 target, float target_rot,
                 float duration, EaseType ease);
+
+/* Start animation with scale interpolation (position + rotation + scale). */
+void anim_start_scaled(CardVisual *cv, Vector2 target, float target_rot,
+                       float target_scale, float duration, EaseType ease);
 
 /* Advance animation by dt seconds. */
 void anim_update(CardVisual *cv, float dt);

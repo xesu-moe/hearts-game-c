@@ -1,9 +1,8 @@
 /* ============================================================
- * @deps-implements: layout.h
- * @deps-requires: layout.h (LayoutConfig, PlayerPosition, ScoringTableLayout),
- *                 card_dimens.h (CARD_WIDTH_REF, CARD_HEIGHT_REF, CARD_OVERLAP_REF),
- *                 raylib.h, math.h
- * @deps-last-changed: 2026-03-20 — Replaced render.h with card_dimens.h to break near-circular dep
+ * @deps-implements: layout.h (layout_pass_preview_positions)
+ * @deps-requires: layout.h (LayoutConfig, PlayerPosition), card_dimens.h (CARD_WIDTH_REF, CARD_HEIGHT_REF),
+ *                 raylib.h (Vector2), math.h
+ * @deps-last-changed: 2026-03-22 — Pass animation: implemented layout_pass_preview_positions() for preview row positioning
  * ============================================================ */
 
 #include "layout.h"
@@ -288,6 +287,35 @@ Vector2 layout_pass_staging_position(PlayerPosition dest_pos, int card_index,
     }
 }
 
+void layout_pass_preview_positions(int card_count, const LayoutConfig *cfg,
+                                   Vector2 out_positions[])
+{
+    float s = cfg->scale;
+    float bx = cfg->board_x;
+    float bsz = cfg->board_size;
+    float cx = bx + bsz * 0.5f;
+
+    /* Hand baseline for human player */
+    float hand_base_y = cfg->board_y + bsz - 30.0f * s;
+
+    /* Preview row sits above the hand, offset by card height + gap */
+    float card_h = CARD_HEIGHT_REF * s;
+    float preview_y = hand_base_y - card_h - 40.0f * s;
+
+    /* Cards spaced at card_width + small gap, centered horizontally */
+    float card_w = CARD_WIDTH_REF * s;
+    float gap = 12.0f * s;
+    float total_w = (float)card_count * card_w + (float)(card_count - 1) * gap;
+    float start_x = cx - total_w * 0.5f + card_w * 0.5f;
+
+    for (int i = 0; i < card_count; i++) {
+        out_positions[i] = (Vector2){
+            start_x + (float)i * (card_w + gap),
+            preview_y
+        };
+    }
+}
+
 Vector2 layout_pile_position(PlayerPosition pos, const LayoutConfig *cfg)
 {
     float s = cfg->scale;
@@ -370,24 +398,39 @@ void layout_contract_options(const LayoutConfig *cfg, int count,
                              Rectangle out_rects[])
 {
     float s = cfg->scale;
-    float btn_w = 260.0f * s;
-    float btn_h = 52.0f * s;
-    float btn_gap = 6.0f * s;
-    float total_h = (float)count * btn_h + (float)(count - 1) * btn_gap;
-
-    /* Get confirm button position to stack above it */
-    Rectangle confirm = layout_confirm_button(cfg);
-    float bottom_y = confirm.y - 20.0f * s;
-    float top_y = bottom_y - total_h;
+    float btn_sz = 200.0f * s;
+    float gap = 10.0f * s;
 
     float cx = cfg->board_x + cfg->board_size * 0.5f;
+    float cy = cfg->board_y + cfg->board_size * 0.5f;
 
-    for (int i = 0; i < count; i++) {
-        out_rects[i] = (Rectangle){
-            cx - btn_w * 0.5f,
-            top_y + (float)i * (btn_h + btn_gap),
-            btn_w,
-            btn_h
-        };
+    if (count == 4) {
+        /* 2x2 grid */
+        float grid_w = btn_sz * 2 + gap;
+        float grid_h = btn_sz * 2 + gap;
+        float x0 = cx - grid_w * 0.5f;
+        float y0 = cy - grid_h * 0.5f;
+        out_rects[0] = (Rectangle){x0, y0, btn_sz, btn_sz};
+        out_rects[1] = (Rectangle){x0 + btn_sz + gap, y0, btn_sz, btn_sz};
+        out_rects[2] = (Rectangle){x0, y0 + btn_sz + gap, btn_sz, btn_sz};
+        out_rects[3] = (Rectangle){x0 + btn_sz + gap, y0 + btn_sz + gap, btn_sz, btn_sz};
+    } else if (count == 3) {
+        /* 2 top + 1 bottom center */
+        float grid_w = btn_sz * 2 + gap;
+        float grid_h = btn_sz * 2 + gap;
+        float x0 = cx - grid_w * 0.5f;
+        float y0 = cy - grid_h * 0.5f;
+        out_rects[0] = (Rectangle){x0, y0, btn_sz, btn_sz};
+        out_rects[1] = (Rectangle){x0 + btn_sz + gap, y0, btn_sz, btn_sz};
+        out_rects[2] = (Rectangle){cx - btn_sz * 0.5f, y0 + btn_sz + gap, btn_sz, btn_sz};
+    } else if (count == 2) {
+        /* 2 side by side, centered */
+        float grid_w = btn_sz * 2 + gap;
+        float x0 = cx - grid_w * 0.5f;
+        float y0 = cy - btn_sz * 0.5f;
+        out_rects[0] = (Rectangle){x0, y0, btn_sz, btn_sz};
+        out_rects[1] = (Rectangle){x0 + btn_sz + gap, y0, btn_sz, btn_sz};
+    } else if (count == 1) {
+        out_rects[0] = (Rectangle){cx - btn_sz * 0.5f, cy - btn_sz * 0.5f, btn_sz, btn_sz};
     }
 }

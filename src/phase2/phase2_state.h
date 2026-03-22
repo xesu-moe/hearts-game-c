@@ -2,12 +2,13 @@
 #define PHASE2_STATE_H
 
 /* ============================================================
- * @deps-exports: struct Phase2State (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[], last_played_transmute_id, last_played_resolved_effect),
- *                struct PlayerPhase2, struct RoundPhase2, struct KingProgress
- * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT), contract.h (ContractInstance, CONTRACT_TIERS),
+ * @deps-exports: struct DraftPair, struct DraftPlayerState, struct DraftState,
+ *                struct PlayerPhase2, struct RoundPhase2, struct Phase2State,
+ *                MAX_ACTIVE_CONTRACTS, DRAFT_GROUP_SIZE, DRAFT_PICKS_PER_PLAYER
+ * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT), contract.h (ContractInstance),
  *                 effect.h (ActiveEffect), transmutation.h (TransmuteEffect, TransmuteInventory, HandTransmuteState, TransmuteRoundState)
- * @deps-used-by: transmutation_logic.c, turn_flow.c, contract_logic.c, play_phase.c, ai.c, info_sync.c, main.c
- * @deps-last-changed: 2026-03-21 — Added anchor_force_suit[], binding_auto_win[] for Anchor/Binding transmutation effects
+ * @deps-used-by: contract_logic.c, pass_phase.c, update.c, info_sync.c, turn_flow.c
+ * @deps-last-changed: 2026-03-21 — Added DraftState and draft in RoundPhase2, replaced king_ids with contracts[MAX_ACTIVE_CONTRACTS] array
  * ============================================================ */
 
 #include <stdbool.h>
@@ -17,26 +18,42 @@
 #include "effect.h"
 #include "transmutation.h"
 
-/* --- King Progress (per-King contract progression) --- */
+/* ---- Draft types ---- */
 
-typedef struct KingProgress {
-    int  current_tier;         /* 0=easy, 1=medium, 2=hard, 3=exhausted */
-    bool tier_completed[CONTRACT_TIERS]; /* true=completed, false=burned or unattempted */
-} KingProgress;
+#define DRAFT_GROUP_SIZE       4
+#define DRAFT_PICKS_PER_PLAYER 3
+#define MAX_ACTIVE_CONTRACTS   3
+
+typedef struct DraftPair {
+    int contract_id;      /* -1 = empty/discarded */
+    int transmutation_id; /* -1 = none */
+} DraftPair;
+
+typedef struct DraftPlayerState {
+    DraftPair available[DRAFT_GROUP_SIZE];
+    int       available_count;            /* 4, 3, 2 per round */
+    DraftPair picked[DRAFT_PICKS_PER_PLAYER];
+    int       pick_count;                 /* 0..3 */
+    bool      has_picked_this_round;
+} DraftPlayerState;
+
+typedef struct DraftState {
+    DraftPlayerState players[NUM_PLAYERS];
+    int              current_round;  /* 0, 1, 2 */
+    bool             active;
+    float            timer;
+} DraftState;
 
 /* --- Per-Player Phase 2 State --- */
 
 typedef struct PlayerPhase2 {
     /* Character assignments (character_id per suit) */
-    int king_ids[SUIT_COUNT];
     int queen_ids[SUIT_COUNT];
     int jack_ids[SUIT_COUNT];
 
-    /* Contract progression per suit's King */
-    KingProgress king_progress[SUIT_COUNT];
-
-    /* Current round's active contract */
-    ContractInstance contract;
+    /* Current round's active contracts (up to 3 from draft) */
+    ContractInstance contracts[MAX_ACTIVE_CONTRACTS];
+    int              num_active_contracts;
 
     /* Persistent effects from completed contracts */
     ActiveEffect persistent_effects[MAX_ACTIVE_EFFECTS];
@@ -70,6 +87,9 @@ typedef struct RoundPhase2 {
 
     /* Transmutation effect flags for this round */
     TransmuteRoundState transmute_round;
+
+    /* Draft state (managed by contract_logic.c) */
+    DraftState draft;
 } RoundPhase2;
 
 /* --- Top-Level Phase 2 State --- */

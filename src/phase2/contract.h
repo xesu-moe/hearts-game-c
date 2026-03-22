@@ -2,14 +2,12 @@
 #define CONTRACT_H
 
 /* ============================================================
- * @deps-exports: enum ConditionType (17 new), struct ConditionParam (trick_num),
- *                struct ContractInstance (11 new fields), struct ContractDef
+ * @deps-exports: enum ConditionType, struct ConditionParam, struct ContractDef,
+ *                struct ContractInstance (paired_transmutation_id)
  * @deps-requires: core/card.h (Card, Suit, SUIT_COUNT),
- *                 core/game_state.h (PASS_CARD_COUNT), effect.h (Effect),
- *                 transmutation.h (MAX_TRANSMUTE_INVENTORY)
- * @deps-used-by: character.h, phase2_state.h, phase2_defs.h, phase2_defs.c,
- *                contract_logic.c, json_parse.c
- * @deps-last-changed: 2026-03-20 — Added 17 new ConditionType values, expanded ContractInstance
+ *                 core/game_state.h (PASS_CARD_COUNT), effect.h (Effect)
+ * @deps-used-by: phase2_state.h, contract_logic.c, phase2_defs.c
+ * @deps-last-changed: 2026-03-21 — Added paired_transmutation_id to ContractInstance
  * ============================================================ */
 
 #include <stdbool.h>
@@ -125,6 +123,9 @@ typedef struct ContractInstance {
 
     /* Transmutation tracking */
     bool     hit_with_transmute;
+
+    /* Draft-paired transmutation reward */
+    int      paired_transmutation_id; /* -1 = none */
 } ContractInstance;
 
 #endif /* CONTRACT_H */

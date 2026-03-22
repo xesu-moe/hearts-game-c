@@ -1,11 +1,16 @@
 /* ============================================================
  * @deps-implements: update.h
- * @deps-requires: input.h (INPUT_CMD_DUEL_PICK/GIVE/RETURN), game_state.h,
- *                 settings.h, render.h (pause_state, settings_return_*,
+ * @deps-requires: input.h (INPUT_CMD_SELECT_CONTRACT, INPUT_CMD_DUEL_PICK/GIVE/RETURN),
+ *                 game_state.h, settings.h, render.h (pause_state, settings_return_*,
  *                 is_ingame_phase, sync_needed), anim.h,
- *                 pass_phase.h, play_phase.h, settings_ui.h, turn_flow.h,
- *                 phase2/contract_logic.h, transmutation_logic.h, phase2_defs.h
- * @deps-last-changed: 2026-03-20 — Added Duel input command handlers
+ *                 pass_phase.h (setup_draft_ui, draft_finish_round, PASS_CONTRACT_TIME),
+ *                 play_phase.h, settings_ui.h, turn_flow.h,
+ *                 phase2/contract_logic.h (draft_pick, draft_all_picked,
+ *                   contract_evaluate_all, contract_apply_rewards_all),
+ *                 phase2/phase2_state.h (DraftState, DraftPlayerState),
+ *                 phase2/transmutation_logic.h, phase2/vendetta_logic.h,
+ *                 phase2/phase2_defs.h
+ * @deps-last-changed: 2026-03-21 — Added draft input handling, updated scoring to use contract_evaluate_all/contract_apply_rewards_all
  * ============================================================ */
 
 #include "update.h"
@@ -14,6 +19,7 @@
 
 #include "core/input.h"
 #include "render/render.h"
+#include "ai.h"
 #include "phase2/contract_logic.h"
 #include "phase2/vendetta_logic.h"
 #include "phase2/transmutation_logic.h"
@@ -25,6 +31,28 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                  TurnFlow *flow, float dt, bool *quit_requested)
 {
     (void)dt;
+
+#ifdef DEBUG
+    /* F5: skip to last trick of the round */
+    if (gs->phase == PHASE_PLAYING && IsKeyPressed(KEY_F5)) {
+        while (gs->phase == PHASE_PLAYING && gs->tricks_played < 12) {
+            /* Fill current trick with AI plays */
+            while (gs->current_trick.num_played < NUM_PLAYERS &&
+                   gs->phase == PHASE_PLAYING) {
+                int p = game_state_current_player(gs);
+                if (p < 0) break;
+                ai_play_card(gs, rs, p2, pls, p);
+            }
+            /* Complete the trick */
+            if (gs->current_trick.num_played >= NUM_PLAYERS)
+                game_state_complete_trick(gs);
+        }
+        /* Reset flow for the last trick */
+        flow_init(flow);
+        rs->sync_needed = true;
+        input_cmd_queue_clear();
+    }
+#endif
 
     InputCmd cmd;
     for (int n = 0; n < INPUT_CMD_QUEUE_CAPACITY &&
@@ -125,28 +153,21 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             }
             if (cmd.type == INPUT_CMD_SELECT_CONTRACT && p2->enabled) {
                 int cid = cmd.contract.contract_id;
-                if (pps->subphase == PASS_SUB_CONTRACT) {
-                    for (int i = 0; i < rs->contract_option_count; i++) {
-                        if (rs->contract_option_ids[i] == cid) {
+                if (pps->subphase == PASS_SUB_CONTRACT &&
+                    p2->round.draft.active) {
+                    DraftState *draft = &p2->round.draft;
+                    DraftPlayerState *ps = &draft->players[0];
+
+                    /* Find the pair index matching the clicked contract */
+                    for (int i = 0; i < ps->available_count; i++) {
+                        if (ps->available[i].contract_id == cid) {
+                            draft_pick(draft, 0, i);
                             rs->selected_contract_idx = i;
-                            contract_select(p2, 0, cid);
 
-                            for (int p = 1; p < NUM_PLAYERS; p++) {
-                                if (p2->players[p].contract.contract_id < 0) {
-                                    contract_ai_select(p2, p);
-                                }
-                            }
-                            p2->round.contracts_chosen =
-                                contract_all_chosen(p2);
-                            rs->contract_ui_active = false;
-
-                            if (gs->pass_direction == PASS_NONE) {
-                                gs->phase = PHASE_PLAYING;
-                                rs->sync_needed = true;
-                            } else {
-                                advance_pass_subphase(pps, gs, rs, p2,
-                                                       PASS_SUB_CARD_PASS);
-                            }
+                            if (draft_all_picked(draft))
+                                draft_finish_round(pps, gs, rs, p2);
+                            else
+                                setup_draft_ui(rs, p2);
                             break;
                         }
                     }
@@ -274,47 +295,55 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 } else if (rs->score_subphase == SCORE_SUB_DONE) {
                     /* Advance to next round (show contracts if Phase 2) */
                     if (p2->enabled && !game_state_is_game_over(gs)) {
-                        /* Evaluate contracts and populate result fields */
+                        /* Evaluate all contracts and populate result fields
+                         * (only completed contracts are shown) */
+                        int result_idx = 0;
                         for (int i = 0; i < NUM_PLAYERS; i++) {
-                            contract_evaluate(p2, i);
-                            contract_apply_reward(p2, i);
+                            contract_evaluate_all(p2, i);
+                            contract_apply_rewards_all(p2, i);
 
-                            const ContractInstance *ci = &p2->players[i].contract;
-                            if (ci->contract_id >= 0) {
-                                const ContractDef *cd = phase2_get_contract(ci->contract_id);
-                                const char *name = cd ? cd->name : "Unknown";
-                                const char *desc = cd ? cd->description : "";
-                                const char *status = ci->completed ? "Completed!" : "Failed";
-                                snprintf(rs->contract_result_text[i],
-                                         sizeof(rs->contract_result_text[i]),
-                                         "%s: %s - %s",
-                                         p2_player_name(i), name, status);
-                                snprintf(rs->contract_result_name[i],
-                                         sizeof(rs->contract_result_name[i]),
-                                         "%s", name);
-                                snprintf(rs->contract_result_desc[i],
-                                         sizeof(rs->contract_result_desc[i]),
-                                         "%s", desc);
-                                rs->contract_result_success[i] = ci->completed;
-                            } else {
-                                rs->contract_result_text[i][0] = '\0';
-                                rs->contract_result_name[i][0] = '\0';
-                                rs->contract_result_desc[i][0] = '\0';
+                            PlayerPhase2 *pp = &p2->players[i];
+                            for (int c = 0; c < pp->num_active_contracts && result_idx < MAX_CONTRACT_RESULTS; c++) {
+                                const ContractInstance *ci = &pp->contracts[c];
+                                if (ci->contract_id >= 0 && ci->completed) {
+                                    const ContractDef *cd = phase2_get_contract(ci->contract_id);
+                                    const TransmutationDef *td = (ci->paired_transmutation_id >= 0)
+                                        ? phase2_get_transmutation(ci->paired_transmutation_id) : NULL;
+                                    const char *tmute_name = td ? td->name : (cd ? cd->name : "Unknown");
+                                    const char *desc = cd ? cd->description : "";
+
+                                    /* Player name in text field */
+                                    snprintf(rs->contract_result_text[result_idx],
+                                             sizeof(rs->contract_result_text[result_idx]),
+                                             "%s", p2_player_name(i));
+                                    snprintf(rs->contract_result_name[result_idx],
+                                             sizeof(rs->contract_result_name[result_idx]),
+                                             "%s", tmute_name);
+                                    snprintf(rs->contract_result_desc[result_idx],
+                                             sizeof(rs->contract_result_desc[result_idx]),
+                                             "%s", desc);
+                                    snprintf(rs->contract_result_tdesc[result_idx],
+                                             sizeof(rs->contract_result_tdesc[result_idx]),
+                                             "%s", td ? td->description : "");
+                                    rs->contract_result_success[result_idx] = true;
+                                    result_idx++;
+
+                                    /* Chat log */
+                                    char chat_msg[CHAT_MSG_LEN];
+                                    snprintf(chat_msg, sizeof(chat_msg),
+                                             "%s obtained %s",
+                                             p2_player_name(i), tmute_name);
+                                    render_chat_log_push(rs, chat_msg);
+                                }
                             }
                         }
+                        rs->contract_result_count = result_idx;
                         rs->show_contract_results = true;
-
-                        /* Push to chat log */
-                        for (int j = 0; j < NUM_PLAYERS; j++) {
-                            if (rs->contract_result_text[j][0] != '\0') {
-                                render_chat_log_push(rs,
-                                                     rs->contract_result_text[j]);
-                            }
-                        }
 
                         /* Switch to contracts panel with staggered reveal */
                         rs->score_subphase = SCORE_SUB_CONTRACTS;
                         rs->contract_reveal_count = 0;
+                        rs->contract_scroll_y = 0.0f;
                         rs->contract_reveal_timer =
                             ANIM_CONTRACT_REVEAL_STAGGER * anim_get_speed();
                         rs->btn_continue.visible = false;
@@ -325,7 +354,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     }
                 } else if (rs->score_subphase == SCORE_SUB_CONTRACTS) {
                     /* Block confirm until all rows revealed */
-                    if (rs->contract_reveal_count < NUM_PLAYERS) break;
+                    if (rs->contract_reveal_count < rs->contract_result_count) break;
                     /* Advance to next round */
                     rs->show_contract_results = false;
                     if (p2->enabled) {

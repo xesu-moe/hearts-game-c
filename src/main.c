@@ -1,12 +1,17 @@
 /* ============================================================
  * @deps-implements: (entry point)
- * @deps-requires: core/clock.h, core/game_state.h (game_state_advance_scoring),
- *                 core/input.h, core/settings.h, render/anim.h (anim_set_speed),
- *                 render/layout.h (layout_recalculate), render/render.h (pause_state, is_ingame_phase),
- *                 render/card_render.h, audio/audio.h, phase2/phase2_defs.h,
- *                 game modules (ai, play_phase, pass_phase, turn_flow, process_input, update,
- *                 settings_ui, info_sync, phase_transitions), raylib.h
- * @deps-last-changed: 2026-03-20 — Check pause_state and is_ingame_phase() in main loop timing
+ * @deps-requires: core/clock.h, core/game_state.h,
+ *                 core/input.h, core/settings.h (g_settings for all
+ *                 pass/settings functions), render/anim.h,
+ *                 render/layout.h, render/render.h, render/card_render.h,
+ *                 audio/audio.h, phase2/phase2_defs.h,
+ *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
+ *                 game/ai.h, game/play_phase.h, game/pass_phase.h
+ *                 (pass_subphase_update takes &g_settings),
+ *                 game/turn_flow.h, game/process_input.h, game/update.h,
+ *                 game/settings_ui.h, game/info_sync.h,
+ *                 game/phase_transitions.h, raylib.h
+ * @deps-last-changed: 2026-03-22 — Pass &g_settings to pass_subphase_update()
  * ============================================================ */
 
 #include <stdbool.h>
@@ -155,7 +160,7 @@ int main(void)
             info_sync_update(&gs, &rs, &p2, &pls);
 
             /* Pass subphase timers (real time, UI deadlines) */
-            pass_subphase_update(&pps, &gs, &rs, &p2, clk.raw_dt);
+            pass_subphase_update(&pps, &gs, &rs, &p2, &g_settings, clk.raw_dt);
 
             /* SFX: pass toss — one sound per card at stagger rate */
             if (pps.subphase == PASS_SUB_TOSS_ANIM &&

@@ -1,9 +1,9 @@
 /* ============================================================
  * @deps-implements: contract_logic.h
- * @deps-requires: contract_logic.h, phase2_state.h (anchor_force_suit[], binding_auto_win[]), phase2_defs.h,
+ * @deps-requires: contract_logic.h, phase2_state.h, phase2_defs.h,
  *                 transmutation_logic.h (transmute_round_state_init),
  *                 core/trick.h, core/card.h, raylib.h, string.h
- * @deps-last-changed: 2026-03-21 — Added Anchor/Binding: init and reset anchor_force_suit[] and binding_auto_win[]
+ * @deps-last-changed: 2026-03-21 — Replaced King-based selection with drafting system
  * ============================================================ */
 
 #include "contract_logic.h"
@@ -16,23 +16,56 @@
 #include "transmutation_logic.h"
 #include "core/card.h"
 
+/* ---- Helper: reset a single ContractInstance ---- */
+
+static void contract_instance_reset(ContractInstance *ci)
+{
+    ci->contract_id = -1;
+    ci->paired_transmutation_id = -1;
+    ci->revealed = false;
+    ci->completed = false;
+    ci->failed = false;
+    memset(ci->cards_collected, 0, sizeof(ci->cards_collected));
+    ci->tricks_won = 0;
+    ci->points_taken = 0;
+    ci->has_card = false;
+    ci->tricks_won_mask = 0;
+    ci->current_streak = 0;
+    ci->max_streak = 0;
+    memset(ci->led_with_suit, 0, sizeof(ci->led_with_suit));
+    ci->broke_hearts = false;
+    ci->led_qs_trick = false;
+    ci->played_card_first_of_suit = false;
+    for (int j = 0; j < PASS_CARD_COUNT; j++)
+        ci->received_in_pass[j] = CARD_NONE;
+    ci->num_received = 0;
+    ci->won_with_passed_card = false;
+    ci->hit_with_passed_card = false;
+    memset(ci->hits_dealt, 0, sizeof(ci->hits_dealt));
+    ci->prevented_moon = false;
+    ci->hit_with_transmute = false;
+}
+
+/* ================================================================
+ * State init / round reset
+ * ================================================================ */
+
 void contract_state_init(Phase2State *p2)
 {
     memset(p2, 0, sizeof(*p2));
     p2->enabled = false;
 
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        p2->players[i].contract.contract_id = -1;
+        for (int c = 0; c < MAX_ACTIVE_CONTRACTS; c++)
+            contract_instance_reset(&p2->players[i].contracts[c]);
+        p2->players[i].num_active_contracts = 0;
         p2->players[i].num_persistent = 0;
 
-        /* Mark kings as unassigned (-1) */
         for (int s = 0; s < SUIT_COUNT; s++) {
-            p2->players[i].king_ids[s] = -1;
             p2->players[i].queen_ids[s] = -1;
             p2->players[i].jack_ids[s] = -1;
         }
 
-        /* Transmutation system */
         transmute_inv_init(&p2->players[i].transmute_inv);
         transmute_hand_init(&p2->players[i].hand_transmutes);
     }
@@ -43,11 +76,9 @@ void contract_state_init(Phase2State *p2)
     p2->round.vendetta_chosen = false;
     p2->round.contracts_chosen = false;
 
-    /* Mirror history (game-scoped) */
     p2->last_played_transmute_id = -1;
     p2->last_played_resolved_effect = TEFFECT_NONE;
 
-    /* Anchor: -1 = inactive (memset set 0, need explicit -1) */
     for (int i = 0; i < NUM_PLAYERS; i++) {
         p2->anchor_force_suit[i] = -1;
     }
@@ -56,34 +87,10 @@ void contract_state_init(Phase2State *p2)
 void contract_round_reset(Phase2State *p2)
 {
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        ContractInstance *ci = &p2->players[i].contract;
-        ci->contract_id = -1;
-        ci->revealed = false;
-        ci->completed = false;
-        ci->failed = false;
-        memset(ci->cards_collected, 0, sizeof(ci->cards_collected));
-        ci->tricks_won = 0;
-        ci->points_taken = 0;
-        ci->has_card = false;
+        for (int c = 0; c < MAX_ACTIVE_CONTRACTS; c++)
+            contract_instance_reset(&p2->players[i].contracts[c]);
+        p2->players[i].num_active_contracts = 0;
 
-        /* New tracking fields */
-        ci->tricks_won_mask = 0;
-        ci->current_streak = 0;
-        ci->max_streak = 0;
-        memset(ci->led_with_suit, 0, sizeof(ci->led_with_suit));
-        ci->broke_hearts = false;
-        ci->led_qs_trick = false;
-        ci->played_card_first_of_suit = false;
-        for (int j = 0; j < PASS_CARD_COUNT; j++)
-            ci->received_in_pass[j] = CARD_NONE;
-        ci->num_received = 0;
-        ci->won_with_passed_card = false;
-        ci->hit_with_passed_card = false;
-        memset(ci->hits_dealt, 0, sizeof(ci->hits_dealt));
-        ci->prevented_moon = false;
-        ci->hit_with_transmute = false;
-
-        /* Reset hand transmute state (inventory persists) */
         transmute_hand_init(&p2->players[i].hand_transmutes);
     }
 
@@ -91,88 +98,244 @@ void contract_round_reset(Phase2State *p2)
     p2->round.num_round_effects = 0;
     memset(p2->round.suit_seen, 0, sizeof(p2->round.suit_seen));
     transmute_round_state_init(&p2->round.transmute_round);
-    /* Curse does not survive round boundaries */
     memset(p2->curse_force_hearts, 0, sizeof(p2->curse_force_hearts));
-    /* Anchor and Binding do not survive round boundaries */
     for (int i = 0; i < NUM_PLAYERS; i++) {
         p2->anchor_force_suit[i] = -1;
         p2->binding_auto_win[i] = 0;
     }
 }
 
-int contract_get_available(const Phase2State *p2, int player_id,
-                           int out_ids[MAX_CONTRACT_OPTIONS])
-{
-    if (player_id < 0 || player_id >= NUM_PLAYERS) return 0;
-
-    int count = 0;
-
-    /* Check if any kings are assigned for this player */
-    bool has_kings = false;
-    for (int s = 0; s < SUIT_COUNT; s++) {
-        if (p2->players[player_id].king_ids[s] >= 0) {
-            has_kings = true;
-            break;
-        }
-    }
-
-    if (!has_kings) {
-        /* Fallback: offer loaded contract defs directly (up to 4) */
-        int max = g_contract_def_count < MAX_CONTRACT_OPTIONS
-                      ? g_contract_def_count
-                      : MAX_CONTRACT_OPTIONS;
-        for (int i = 0; i < max; i++) {
-            out_ids[count++] = g_contract_defs[i].id;
-        }
-        return count;
-    }
-
-    /* Normal path: offer contracts from player's Kings at current tier */
-    for (int s = 0; s < SUIT_COUNT && count < MAX_CONTRACT_OPTIONS; s++) {
-        int king_id = p2->players[player_id].king_ids[s];
-        if (king_id < 0) continue;
-
-        int tier = p2->players[player_id].king_progress[s].current_tier;
-        if (tier >= CONTRACT_TIERS) continue; /* exhausted */
-
-        /* Find the character's contract for this tier */
-        const CharacterDef *ch = phase2_get_character(king_id);
-        if (!ch || ch->figure_type != FIGURE_KING) continue;
-
-        int cid = ch->mechanics.king.contract_ids[tier];
-        if (cid >= 0) {
-            out_ids[count++] = cid;
-        }
-    }
-
-    return count;
-}
-
-void contract_select(Phase2State *p2, int player_id, int contract_id)
-{
-    if (player_id < 0 || player_id >= NUM_PLAYERS) return;
-    p2->players[player_id].contract.contract_id = contract_id;
-}
-
 bool contract_all_chosen(const Phase2State *p2)
 {
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (p2->players[i].contract.contract_id < 0) {
+        if (p2->players[i].num_active_contracts < MAX_ACTIVE_CONTRACTS)
             return false;
-        }
     }
     return true;
 }
+
+/* ================================================================
+ * Draft system
+ * ================================================================ */
+
+void draft_generate_pool(DraftState *draft)
+{
+    memset(draft, 0, sizeof(*draft));
+    draft->active = true;
+    draft->current_round = 0;
+    draft->timer = DRAFT_TIMER_SECONDS;
+
+    /* --- Select 16 contracts weighted by tier --- */
+    /* Partition available contracts by tier */
+    int tier_ids[3][MAX_CONTRACT_DEFS];
+    int tier_counts[3] = {0, 0, 0};
+
+    for (int i = 0; i < g_contract_def_count; i++) {
+        int t = g_contract_defs[i].tier;
+        if (t >= 0 && t < 3)
+            tier_ids[t][tier_counts[t]++] = g_contract_defs[i].id;
+    }
+
+    /* Target: 10 easy (60%), 5 medium (30%), 1 hard (10%) */
+    int targets[3] = {10, 5, 1};
+
+    /* Clamp to available and redistribute surplus */
+    for (int t = 0; t < 3; t++) {
+        if (targets[t] > tier_counts[t]) {
+            int surplus = targets[t] - tier_counts[t];
+            targets[t] = tier_counts[t];
+            /* Give surplus to next tier, or previous if last */
+            int next = (t < 2) ? t + 1 : t - 1;
+            if (next >= 0 && next < 3)
+                targets[next] += surplus;
+        }
+    }
+
+    /* Shuffle each tier and take first N */
+    int selected_contracts[DRAFT_POOL_SIZE];
+    int sel_count = 0;
+
+    for (int t = 0; t < 3 && sel_count < DRAFT_POOL_SIZE; t++) {
+        /* Fisher-Yates shuffle */
+        for (int i = tier_counts[t] - 1; i > 0; i--) {
+            int j = GetRandomValue(0, i);
+            int tmp = tier_ids[t][i];
+            tier_ids[t][i] = tier_ids[t][j];
+            tier_ids[t][j] = tmp;
+        }
+        int take = targets[t];
+        if (take > tier_counts[t]) take = tier_counts[t];
+        if (sel_count + take > DRAFT_POOL_SIZE) take = DRAFT_POOL_SIZE - sel_count;
+        for (int i = 0; i < take; i++)
+            selected_contracts[sel_count++] = tier_ids[t][i];
+    }
+
+    /* Fill remaining if we don't have 16 (shouldn't happen with 29 contracts) */
+    if (sel_count > 0) {
+        int base = sel_count;
+        while (sel_count < DRAFT_POOL_SIZE) {
+            selected_contracts[sel_count] = selected_contracts[(sel_count - base) % base];
+            sel_count++;
+        }
+    }
+
+    /* --- Select 16 random transmutations (no duplication) --- */
+    /* Excluded IDs: transmutations not yet ready for the draft pool */
+    static const int EXCLUDED_TMUTE_IDS[] = { 11 /* The Echo */ };
+    static const int NUM_EXCLUDED = sizeof(EXCLUDED_TMUTE_IDS) / sizeof(EXCLUDED_TMUTE_IDS[0]);
+
+    int all_transmutes[MAX_TRANSMUTATION_DEFS];
+    int tmute_total = 0;
+    for (int i = 0; i < g_transmutation_def_count; i++) {
+        int id = g_transmutation_defs[i].id;
+        bool excluded = false;
+        for (int e = 0; e < NUM_EXCLUDED; e++) {
+            if (id == EXCLUDED_TMUTE_IDS[e]) { excluded = true; break; }
+        }
+        if (!excluded)
+            all_transmutes[tmute_total++] = id;
+    }
+
+    /* Fisher-Yates shuffle */
+    for (int i = tmute_total - 1; i > 0; i--) {
+        int j = GetRandomValue(0, i);
+        int tmp = all_transmutes[i];
+        all_transmutes[i] = all_transmutes[j];
+        all_transmutes[j] = tmp;
+    }
+
+    int tmute_count = tmute_total < DRAFT_POOL_SIZE ? tmute_total : DRAFT_POOL_SIZE;
+
+    /* --- Pair and distribute --- */
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        draft->players[p].available_count = DRAFT_GROUP_SIZE;
+        draft->players[p].pick_count = 0;
+        draft->players[p].has_picked_this_round = false;
+
+        for (int i = 0; i < DRAFT_GROUP_SIZE; i++) {
+            int idx = p * DRAFT_GROUP_SIZE + i;
+            draft->players[p].available[i].contract_id = selected_contracts[idx];
+            draft->players[p].available[i].transmutation_id =
+                (idx < tmute_count) ? all_transmutes[idx] : -1;
+        }
+    }
+}
+
+void draft_pick(DraftState *draft, int player_id, int pair_index)
+{
+    if (player_id < 0 || player_id >= NUM_PLAYERS) return;
+    DraftPlayerState *ps = &draft->players[player_id];
+    if (ps->has_picked_this_round) return;
+    if (pair_index < 0 || pair_index >= ps->available_count) return;
+    if (ps->pick_count >= DRAFT_PICKS_PER_PLAYER) return;
+
+    ps->picked[ps->pick_count++] = ps->available[pair_index];
+    ps->has_picked_this_round = true;
+
+    /* Remove picked pair by shifting */
+    for (int i = pair_index; i < ps->available_count - 1; i++)
+        ps->available[i] = ps->available[i + 1];
+    ps->available_count--;
+}
+
+void draft_auto_pick(DraftState *draft, int player_id)
+{
+    if (player_id < 0 || player_id >= NUM_PLAYERS) return;
+    DraftPlayerState *ps = &draft->players[player_id];
+    if (ps->has_picked_this_round || ps->available_count <= 0) return;
+    draft_pick(draft, player_id, 0);
+}
+
+void draft_ai_pick(DraftState *draft, int player_id)
+{
+    if (player_id < 0 || player_id >= NUM_PLAYERS) return;
+    DraftPlayerState *ps = &draft->players[player_id];
+    if (ps->has_picked_this_round || ps->available_count <= 0) return;
+
+    int idx = GetRandomValue(0, ps->available_count - 1);
+    draft_pick(draft, player_id, idx);
+}
+
+bool draft_all_picked(const DraftState *draft)
+{
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        if (!draft->players[p].has_picked_this_round)
+            return false;
+    }
+    return true;
+}
+
+void draft_advance_round(DraftState *draft)
+{
+    draft->current_round++;
+
+    if (draft->current_round >= DRAFT_ROUNDS) {
+        draft->active = false;
+        return;
+    }
+
+    /* Rotate remaining pairs clockwise: player p gets player (p-1)'s leftovers */
+    DraftPlayerState saved[NUM_PLAYERS];
+    for (int p = 0; p < NUM_PLAYERS; p++)
+        saved[p] = draft->players[p];
+
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        int src = (p + NUM_PLAYERS - 1) % NUM_PLAYERS; /* clockwise = receive from left */
+        draft->players[p].available_count = saved[src].available_count;
+        for (int i = 0; i < saved[src].available_count; i++)
+            draft->players[p].available[i] = saved[src].available[i];
+        draft->players[p].has_picked_this_round = false;
+        /* Preserve picked[] and pick_count */
+        draft->players[p].pick_count = saved[p].pick_count;
+        for (int i = 0; i < saved[p].pick_count; i++)
+            draft->players[p].picked[i] = saved[p].picked[i];
+    }
+
+    draft->timer = DRAFT_TIMER_SECONDS;
+}
+
+void draft_finalize(DraftState *draft, Phase2State *p2)
+{
+    for (int p = 0; p < NUM_PLAYERS; p++) {
+        DraftPlayerState *ps = &draft->players[p];
+        PlayerPhase2 *pp = &p2->players[p];
+
+        int n = ps->pick_count;
+        if (n > MAX_ACTIVE_CONTRACTS) n = MAX_ACTIVE_CONTRACTS;
+
+        for (int c = 0; c < n; c++) {
+            contract_instance_reset(&pp->contracts[c]);
+            pp->contracts[c].contract_id = ps->picked[c].contract_id;
+            pp->contracts[c].paired_transmutation_id = ps->picked[c].transmutation_id;
+        }
+        pp->num_active_contracts = n;
+    }
+    p2->round.contracts_chosen = true;
+    draft->active = false;
+}
+
+bool draft_is_complete(const DraftState *draft)
+{
+    return draft->current_round >= DRAFT_ROUNDS;
+}
+
+/* ================================================================
+ * Contract tracking (multi-contract)
+ * ================================================================ */
 
 void contract_record_received_cards(Phase2State *p2, int player_id,
                                     const Card cards[], int count)
 {
     if (player_id < 0 || player_id >= NUM_PLAYERS) return;
-    ContractInstance *ci = &p2->players[player_id].contract;
+    PlayerPhase2 *pp = &p2->players[player_id];
     int n = count < PASS_CARD_COUNT ? count : PASS_CARD_COUNT;
-    for (int i = 0; i < n; i++)
-        ci->received_in_pass[i] = cards[i];
-    ci->num_received = n;
+
+    for (int c = 0; c < pp->num_active_contracts; c++) {
+        ContractInstance *ci = &pp->contracts[c];
+        for (int i = 0; i < n; i++)
+            ci->received_in_pass[i] = cards[i];
+        ci->num_received = n;
+    }
 }
 
 /* Helper: check if card is in a player's received_in_pass list */
@@ -195,7 +358,7 @@ void contract_on_trick_complete(Phase2State *p2, const Trick *trick, int winner,
     if (winner < 0 || winner >= NUM_PLAYERS) return;
     if (trick_number < 0 || trick_number > 12) return;
 
-    /* --- Section 1: Pre-compute --- */
+    /* --- Pre-compute --- */
     int trick_scoring_pts = 0;
     bool qs_in_trick = false;
     for (int i = 0; i < trick->num_played; i++) {
@@ -204,134 +367,138 @@ void contract_on_trick_complete(Phase2State *p2, const Trick *trick, int winner,
             qs_in_trick = true;
     }
 
-    /* Map: which play-order index does each player own */
     int player_play_idx[NUM_PLAYERS];
     for (int p = 0; p < NUM_PLAYERS; p++)
         player_play_idx[p] = -1;
     for (int i = 0; i < trick->num_played; i++)
         player_play_idx[trick->player_ids[i]] = i;
 
-    /* --- Section 2: PREVENT_MOON (before updating winner's points) --- */
+    /* --- PREVENT_MOON (check across all contracts) --- */
     if (trick_scoring_pts > 0) {
         int total_distributed = 0;
-        for (int p = 0; p < NUM_PLAYERS; p++)
-            total_distributed += p2->players[p].contract.points_taken;
+        for (int p = 0; p < NUM_PLAYERS; p++) {
+            /* Use first contract's points_taken as representative */
+            if (p2->players[p].num_active_contracts > 0)
+                total_distributed += p2->players[p].contracts[0].points_taken;
+        }
 
         for (int p = 0; p < NUM_PLAYERS; p++) {
             if (p == winner) continue;
-            int pts = p2->players[p].contract.points_taken;
+            int pts = (p2->players[p].num_active_contracts > 0)
+                          ? p2->players[p].contracts[0].points_taken : 0;
             if (pts > 0 && pts == total_distributed) {
-                /* Winner is breaking P's moon run */
-                p2->players[winner].contract.prevented_moon = true;
+                for (int c = 0; c < p2->players[winner].num_active_contracts; c++)
+                    p2->players[winner].contracts[c].prevented_moon = true;
                 break;
             }
         }
     }
 
-    /* --- Section 3: Winner tracking --- */
-    ContractInstance *wi = &p2->players[winner].contract;
-    wi->tricks_won++;
-    wi->tricks_won_mask |= (uint16_t)(1 << trick_number);
-    wi->current_streak++;
-    if (wi->current_streak > wi->max_streak)
-        wi->max_streak = wi->current_streak;
+    /* --- Winner tracking (all contracts) --- */
+    PlayerPhase2 *wp = &p2->players[winner];
+    for (int c = 0; c < wp->num_active_contracts; c++) {
+        ContractInstance *wi = &wp->contracts[c];
+        wi->tricks_won++;
+        wi->tricks_won_mask |= (uint16_t)(1 << trick_number);
+        wi->current_streak++;
+        if (wi->current_streak > wi->max_streak)
+            wi->max_streak = wi->current_streak;
 
-    /* Winner card collection */
-    for (int i = 0; i < trick->num_played; i++) {
-        Card c = trick->cards[i];
-        wi->cards_collected[c.suit]++;
-        wi->points_taken += card_points(c);
+        for (int i = 0; i < trick->num_played; i++) {
+            Card card = trick->cards[i];
+            wi->cards_collected[card.suit]++;
+            wi->points_taken += card_points(card);
 
-        /* Specific card tracking (COLLECT_CARD / AVOID_CARD) */
-        if (wi->contract_id >= 0) {
-            const ContractDef *cd = phase2_get_contract(wi->contract_id);
-            if (cd && (cd->condition == COND_COLLECT_CARD ||
-                       cd->condition == COND_AVOID_CARD) &&
-                card_equals(c, cd->cond_param.card)) {
-                wi->has_card = true;
+            if (wi->contract_id >= 0) {
+                const ContractDef *cd = phase2_get_contract(wi->contract_id);
+                if (cd && (cd->condition == COND_COLLECT_CARD ||
+                           cd->condition == COND_AVOID_CARD) &&
+                    card_equals(card, cd->cond_param.card)) {
+                    wi->has_card = true;
+                }
             }
+        }
+
+        if (player_play_idx[winner] >= 0) {
+            Card winner_card = trick->cards[player_play_idx[winner]];
+            if (is_received_card(wi, winner_card))
+                wi->won_with_passed_card = true;
         }
     }
 
-    /* Won with passed card check */
-    if (player_play_idx[winner] >= 0) {
-        Card winner_card = trick->cards[player_play_idx[winner]];
-        if (is_received_card(wi, winner_card))
-            wi->won_with_passed_card = true;
-    }
-
-    /* --- Section 4: All-player loop --- */
+    /* --- All-player loop (all contracts) --- */
     bool hearts_breaker_found = false;
     bool suit_seen_in_trick[SUIT_COUNT] = {false};
     for (int i = 0; i < trick->num_played; i++) {
         int p = trick->player_ids[i];
         if (p < 0 || p >= NUM_PLAYERS) continue;
-        ContractInstance *ci = &p2->players[p].contract;
+        PlayerPhase2 *pp = &p2->players[p];
 
-        /* Streak reset for non-winners */
-        if (p != winner)
-            ci->current_streak = 0;
+        for (int c_idx = 0; c_idx < pp->num_active_contracts; c_idx++) {
+            ContractInstance *ci = &pp->contracts[c_idx];
 
-        /* Lead tracking */
-        if (p == trick->lead_player)
-            ci->led_with_suit[trick->lead_suit] = true;
+            if (p != winner)
+                ci->current_streak = 0;
 
-        /* Hearts break: only the first heart played in the trick gets credit */
-        if (!hearts_broken_before && !hearts_breaker_found &&
-            trick->cards[i].suit == SUIT_HEARTS) {
-            ci->broke_hearts = true;
-            hearts_breaker_found = true;
-        }
+            if (p == trick->lead_player)
+                ci->led_with_suit[trick->lead_suit] = true;
 
-        /* QoS trick lead */
-        if (qs_in_trick && p == trick->lead_player)
-            ci->led_qs_trick = true;
-
-        /* First-of-suit: only the first card of each suit in play order
-         * (considering both round-level and trick-level first appearance) */
-        Card c = trick->cards[i];
-        if (!p2->round.suit_seen[c.suit] && !suit_seen_in_trick[c.suit] &&
-            ci->contract_id >= 0) {
-            const ContractDef *cd = phase2_get_contract(ci->contract_id);
-            if (cd && cd->condition == COND_PLAY_CARD_FIRST_OF_SUIT &&
-                card_equals(c, cd->cond_param.card)) {
-                ci->played_card_first_of_suit = true;
+            if (!hearts_broken_before && !hearts_breaker_found &&
+                trick->cards[i].suit == SUIT_HEARTS) {
+                ci->broke_hearts = true;
             }
-        }
-        suit_seen_in_trick[c.suit] = true;
 
-        /* Hit tracking (non-winner only) */
-        if (p != winner) {
-            int pts = card_points(c);
-            if (pts > 0) {
-                ci->hits_dealt[c.suit]++;
+            if (qs_in_trick && p == trick->lead_player)
+                ci->led_qs_trick = true;
 
-                /* Hit with passed card */
-                if (is_received_card(ci, c)) {
-                    ci->hit_with_passed_card = true;
+            Card card = trick->cards[i];
+            if (!p2->round.suit_seen[card.suit] && !suit_seen_in_trick[card.suit] &&
+                ci->contract_id >= 0) {
+                const ContractDef *cd = phase2_get_contract(ci->contract_id);
+                if (cd && cd->condition == COND_PLAY_CARD_FIRST_OF_SUIT &&
+                    card_equals(card, cd->cond_param.card)) {
+                    ci->played_card_first_of_suit = true;
                 }
+            }
 
-                /* Hit with transmuted card */
-                if (tti && tti->transmutation_ids[i] >= 0) {
-                    const TransmutationDef *td =
-                        phase2_get_transmutation(tti->transmutation_ids[i]);
-                    if (td && td->custom_points != 0) {
-                        ci->hit_with_transmute = true;
+            if (p != winner) {
+                int pts = card_points(card);
+                if (pts > 0) {
+                    ci->hits_dealt[card.suit]++;
+                    if (is_received_card(ci, card))
+                        ci->hit_with_passed_card = true;
+                    if (tti && tti->transmutation_ids[i] >= 0) {
+                        const TransmutationDef *td =
+                            phase2_get_transmutation(tti->transmutation_ids[i]);
+                        if (td && td->custom_points != 0)
+                            ci->hit_with_transmute = true;
                     }
                 }
             }
         }
+
+        /* Track hearts breaker only once per trick (not per contract) */
+        if (!hearts_broken_before && !hearts_breaker_found &&
+            trick->cards[i].suit == SUIT_HEARTS) {
+            hearts_breaker_found = true;
+        }
+
+        suit_seen_in_trick[trick->cards[i].suit] = true;
     }
 
-    /* --- Section 5: Update round suit_seen state --- */
+    /* Update round suit_seen state */
     for (int i = 0; i < trick->num_played; i++)
         p2->round.suit_seen[trick->cards[i].suit] = true;
 }
 
-void contract_evaluate(Phase2State *p2, int player_id)
+/* ================================================================
+ * Contract evaluation (multi-contract)
+ * ================================================================ */
+
+/* Evaluate a single contract instance */
+static void contract_evaluate_one(Phase2State *p2, int player_id,
+                                   ContractInstance *ci)
 {
-    if (player_id < 0 || player_id >= NUM_PLAYERS) return;
-    ContractInstance *ci = &p2->players[player_id].contract;
     if (ci->contract_id < 0) return;
 
     const ContractDef *cd = phase2_get_contract(ci->contract_id);
@@ -389,7 +556,10 @@ void contract_evaluate(Phase2State *p2, int player_id)
         success = true;
         for (int p = 0; p < NUM_PLAYERS; p++) {
             if (p == player_id) continue;
-            if (p2->players[p].contract.points_taken <= ci->points_taken) {
+            /* Compare using first contract's points (all track same trick data) */
+            int other_pts = (p2->players[p].num_active_contracts > 0)
+                                ? p2->players[p].contracts[0].points_taken : 0;
+            if (other_pts <= ci->points_taken) {
                 success = false;
                 break;
             }
@@ -411,14 +581,14 @@ void contract_evaluate(Phase2State *p2, int player_id)
 
     case COND_WIN_FIRST_N_TRICKS: {
         int n = cd->cond_param.count;
-        uint16_t mask = (uint16_t)((1 << n) - 1); /* bits 0..N-1 */
+        uint16_t mask = (uint16_t)((1 << n) - 1);
         success = (ci->tricks_won_mask & mask) == mask;
         break;
     }
 
     case COND_AVOID_LAST_N_TRICKS: {
         int n = cd->cond_param.count;
-        uint16_t mask = (uint16_t)(((1 << n) - 1) << (13 - n)); /* bits (13-N)..12 */
+        uint16_t mask = (uint16_t)(((1 << n) - 1) << (13 - n));
         success = (ci->tricks_won_mask & mask) == 0;
         break;
     }
@@ -463,74 +633,47 @@ void contract_evaluate(Phase2State *p2, int player_id)
         break;
     }
 
-    if (success) {
+    if (success)
         ci->completed = true;
-    } else {
+    else
         ci->failed = true;
-    }
 }
 
-void contract_apply_reward(Phase2State *p2, int player_id)
+void contract_evaluate_all(Phase2State *p2, int player_id)
 {
     if (player_id < 0 || player_id >= NUM_PLAYERS) return;
-    ContractInstance *ci = &p2->players[player_id].contract;
-    if (!ci->completed) return;
-
-    const ContractDef *cd = phase2_get_contract(ci->contract_id);
-    if (!cd) return;
-
     PlayerPhase2 *pp = &p2->players[player_id];
 
-    /* Add permanent effects from rewards */
-    for (int r = 0; r < cd->num_rewards; r++) {
-        if (pp->num_persistent >= MAX_ACTIVE_EFFECTS) break;
-
-        ActiveEffect *ae = &pp->persistent_effects[pp->num_persistent++];
-        ae->effect = cd->rewards[r];
-        ae->scope = cd->reward_scope;
-        ae->source_player = player_id;
-        ae->target_player = -1;
-        ae->rounds_remaining = -1; /* permanent */
-        ae->active = true;
-    }
-
-    /* Grant transmutation card rewards */
-    for (int r = 0; r < cd->num_transmute_rewards; r++) {
-        if (cd->transmute_reward_ids[r] >= 0) {
-            transmute_inv_add(&pp->transmute_inv, cd->transmute_reward_ids[r]);
-        }
-    }
-
-    /* Advance King tier for the suit whose King provided this contract.
-     * With fallback mode (unassigned kings), skip tier advancement. */
-    for (int s = 0; s < SUIT_COUNT; s++) {
-        if (pp->king_ids[s] < 0) continue;
-
-        const CharacterDef *ch = phase2_get_character(pp->king_ids[s]);
-        if (!ch || ch->figure_type != FIGURE_KING) continue;
-
-        for (int t = 0; t < CONTRACT_TIERS; t++) {
-            if (ch->mechanics.king.contract_ids[t] == ci->contract_id) {
-                KingProgress *kp = &pp->king_progress[s];
-                if (kp->current_tier < CONTRACT_TIERS) {
-                    kp->tier_completed[kp->current_tier] = true;
-                    kp->current_tier++;
-                }
-                return;
-            }
-        }
-    }
+    for (int c = 0; c < pp->num_active_contracts; c++)
+        contract_evaluate_one(p2, player_id, &pp->contracts[c]);
 }
 
-void contract_ai_select(Phase2State *p2, int player_id)
+void contract_apply_rewards_all(Phase2State *p2, int player_id)
 {
     if (player_id < 0 || player_id >= NUM_PLAYERS) return;
+    PlayerPhase2 *pp = &p2->players[player_id];
 
-    int options[MAX_CONTRACT_OPTIONS];
-    int count = contract_get_available(p2, player_id, options);
+    for (int c = 0; c < pp->num_active_contracts; c++) {
+        ContractInstance *ci = &pp->contracts[c];
+        if (!ci->completed) continue;
 
-    if (count <= 0) return;
+        /* Grant the draft-paired transmutation */
+        if (ci->paired_transmutation_id >= 0)
+            transmute_inv_add(&pp->transmute_inv, ci->paired_transmutation_id);
 
-    int pick = GetRandomValue(0, count - 1);
-    contract_select(p2, player_id, options[pick]);
+        /* Add permanent effects from contract def rewards */
+        const ContractDef *cd = phase2_get_contract(ci->contract_id);
+        if (!cd) continue;
+
+        for (int r = 0; r < cd->num_rewards; r++) {
+            if (pp->num_persistent >= MAX_ACTIVE_EFFECTS) break;
+            ActiveEffect *ae = &pp->persistent_effects[pp->num_persistent++];
+            ae->effect = cd->rewards[r];
+            ae->scope = cd->reward_scope;
+            ae->source_player = player_id;
+            ae->target_player = -1;
+            ae->rounds_remaining = -1;
+            ae->active = true;
+        }
+    }
 }

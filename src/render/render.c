@@ -1,12 +1,13 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (opponent_hover_active, RenderState fields),
- *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to, CardVisual.inverted),
- *                 layout.h (layout_scoring_*, layout_wipe_boundary_x),
+ * @deps-requires: render.h (draft UI fields, info_contract_count,
+ *                 contract_result_*, RenderState fields),
+ *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to,
+ *                 CardVisual.inverted), layout.h (layout_scoring_*, layout_wipe_boundary_x),
  *                 card_render.h, phase2/vendetta.h, phase2/phase2_defs.h,
  *                 core/game_state.h (GamePhase, PHASE_SCORING),
  *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-21 — Inversion overlay: down arrow on inverted cards
+ * @deps-last-changed: 2026-03-22 — Uses SETTINGS_ROW_COUNT and SETTINGS_ACTIVE_COUNT (now 9)
  * ============================================================ */
 
 #include "render.h"
@@ -19,6 +20,7 @@
 #include "card_render.h"
 #include "core/hand.h"
 #include "phase2/phase2_state.h"
+#include "phase2/phase2_defs.h"
 #include "phase2/vendetta.h"
 #include "rlgl.h"
 
@@ -437,15 +439,15 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->settings_tab_btns[t].subtitle = NULL;
         }
 
-        /* Row ranges per tab: Display=0..2, Gameplay=3..4, Audio=5..7 */
-        static const int tab_row_start[] = {0, 3, 5};
-        static const int tab_row_end[]   = {3, 5, 8}; /* exclusive */
+        /* Row ranges per tab: Display=0..2, Gameplay=3..5, Audio=6..8 */
+        static const int tab_row_start[] = {0, 3, 6};
+        static const int tab_row_end[]   = {3, 6, 9}; /* exclusive */
         int rstart = tab_row_start[rs->settings_tab];
         int rend   = tab_row_end[rs->settings_tab];
 
         static const char *labels[] = {
             "Window Mode", "Resolution", "FPS Cap",
-            "Anim Speed", "AI Speed",
+            "Anim Speed", "AI Speed", "Auto-Sort Received",
             "Master Volume", "Music Volume", "SFX Volume"
         };
 
@@ -608,6 +610,12 @@ void render_init(RenderState *rs)
     rs->selected_contract_idx = -1;
     rs->contract_ui_active = false;
     rs->show_contract_results = false;
+    rs->contract_result_count = 0;
+    rs->contract_scroll_y = 0.0f;
+    rs->draft_round_display = 0;
+    rs->draft_picks_made = 0;
+    for (int i = 0; i < 4; i++) rs->draft_transmute_ids[i] = -1;
+    rs->info_contract_count = 0;
 
     rs->transmute_btn_count = 0;
     rs->pending_transmutation_id = -1;
@@ -929,11 +937,11 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
         case SCORE_SUB_CONTRACTS:
             /* Staggered reveal of contract rows */
-            if (rs->contract_reveal_count < NUM_PLAYERS) {
+            if (rs->contract_reveal_count < rs->contract_result_count) {
                 rs->contract_reveal_timer -= dt;
                 if (rs->contract_reveal_timer <= 0.0f) {
                     rs->contract_reveal_count++;
-                    if (rs->contract_reveal_count < NUM_PLAYERS) {
+                    if (rs->contract_reveal_count < rs->contract_result_count) {
                         rs->contract_reveal_timer =
                             ANIM_CONTRACT_REVEAL_STAGGER * anim_mult;
                     } else {
@@ -1588,35 +1596,83 @@ static void draw_contract_buttons(const RenderState *rs, float s)
             border_col = GRAY;
         }
 
-        DrawRectangleRounded(btn->bounds, 0.2f, 4, bg);
-        DrawRectangleRoundedLines(btn->bounds, 0.2f, 4, border_col);
+        DrawRectangleRounded(btn->bounds, 0.1f, 4, bg);
+        DrawRectangleRoundedLines(btn->bounds, 0.1f, 4, border_col);
 
-        int font_size = (int)(18.0f * s);
-        int tw2 = MeasureText(btn->label, font_size);
+        float bx = btn->bounds.x;
+        float by = btn->bounds.y;
+        float bw = btn->bounds.width;
+        float pad = 8.0f * s;
 
-        if (btn->subtitle != NULL) {
-            int sub_size = (int)(12.0f * s);
-            int sw = MeasureText(btn->subtitle, sub_size);
-            int total_h = font_size + (int)(3.0f * s) + sub_size;
-            int y_start = (int)(btn->bounds.y +
-                                (btn->bounds.height - (float)total_h) * 0.5f);
+        int cond_fs = (int)(13.0f * s);
+        int name_fs = (int)(13.0f * s);
+        int desc_fs = (int)(11.0f * s);
+        float max_w = bw - pad * 2.0f;
 
-            DrawText(btn->label,
-                     (int)(btn->bounds.x + (btn->bounds.width - (float)tw2) * 0.5f),
-                     y_start, font_size, text_col);
+        /* 1. Contract condition (label = description), centered word-wrap */
+        float cy = by + pad;
+        if (btn->label) {
+            /* Measure to center: draw_text_wrapped is left-aligned,
+             * so just draw from left padding */
+            float h = draw_text_wrapped(btn->label, bx + pad, cy,
+                                         cond_fs, max_w, text_col);
+            cy += h + 4.0f * s;
+        }
 
-            Color sub_col = (i == rs->selected_contract_idx)
-                                ? (Color){255, 255, 200, 255}
-                                : LIGHTGRAY;
-            DrawText(btn->subtitle,
-                     (int)(btn->bounds.x + (btn->bounds.width - (float)sw) * 0.5f),
-                     y_start + font_size + (int)(3.0f * s), sub_size, sub_col);
-        } else {
-            float text_y = btn->bounds.y +
-                           (btn->bounds.height - (float)font_size) * 0.5f;
-            DrawText(btn->label,
-                     (int)(btn->bounds.x + (btn->bounds.width - (float)tw2) * 0.5f),
-                     (int)text_y, font_size, text_col);
+        /* 2. Transmutation card sprite, centered */
+        int tid = rs->draft_transmute_ids[i];
+        float card_scale = 0.65f * s;
+        float card_w = CARD_WIDTH_REF * card_scale;
+        float card_h = CARD_HEIGHT_REF * card_scale;
+        float card_x = bx + (bw - card_w) * 0.5f;
+
+        if (tid >= 0) {
+            Vector2 pos = {card_x, cy};
+            Vector2 origin = {0, 0};
+            if (card_render_has_transmute_sprite(tid)) {
+                card_render_transmute_face(tid, pos, card_scale,
+                                           1.0f, false, false, 0.0f, origin);
+            } else {
+                /* Fallback: draw normal card face */
+                const TransmutationDef *td = phase2_get_transmutation(tid);
+                if (td) {
+                    Card fallback = {.suit = td->result_suit, .rank = td->result_rank};
+                    card_render_face(fallback, pos, card_scale,
+                                     1.0f, false, false, 0.0f, origin);
+                }
+            }
+        }
+        cy += card_h + 4.0f * s;
+
+        /* 3. Transmutation name (left-aligned, GOLD) */
+        if (btn->subtitle && btn->subtitle[0] != '\0') {
+            /* subtitle format: "TmuteName\nTmuteDescription" */
+            const char *nl = strchr(btn->subtitle, '\n');
+            if (nl) {
+                int name_len = (int)(nl - btn->subtitle);
+                char name_buf[64];
+                int n = name_len < (int)sizeof(name_buf) - 1
+                            ? name_len : (int)sizeof(name_buf) - 1;
+                memcpy(name_buf, btn->subtitle, n);
+                name_buf[n] = '\0';
+
+                Color name_col = (i == rs->selected_contract_idx)
+                                     ? (Color){255, 255, 200, 255} : GOLD;
+                float h = draw_text_wrapped(name_buf, bx + pad, cy,
+                                             name_fs, max_w, name_col);
+                cy += h + 2.0f * s;
+
+                /* 4. Transmutation description (left-aligned, LIGHTGRAY) */
+                Color desc_col = (i == rs->selected_contract_idx)
+                                     ? (Color){255, 255, 200, 200} : LIGHTGRAY;
+                draw_text_wrapped(nl + 1, bx + pad, cy,
+                                   desc_fs, max_w, desc_col);
+            } else {
+                Color name_col = (i == rs->selected_contract_idx)
+                                     ? (Color){255, 255, 200, 255} : GOLD;
+                draw_text_wrapped(btn->subtitle, bx + pad, cy,
+                                   name_fs, max_w, name_col);
+            }
         }
     }
 }
@@ -1708,6 +1764,7 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
 
     case PASS_SUB_TOSS_ANIM:
     case PASS_SUB_TOSS_WAIT:
+    case PASS_SUB_REVEAL:
     case PASS_SUB_RECEIVE:
         /* No UI overlay during pass animation — just show cards */
         break;
@@ -1788,13 +1845,16 @@ static void draw_left_panel_info(const RenderState *rs)
     float max_w = r.width - pad * 2;
 
     /* Contract section */
-    DrawText("Contract", (int)x, (int)y, header_fs, GOLD);
+    DrawText("Contracts", (int)x, (int)y, header_fs, GOLD);
     y += (float)header_fs + 4.0f * s;
-    if (rs->info_contract_active) {
-        y += draw_text_wrapped(rs->info_contract_name, x, y,
-                               body_fs, max_w, WHITE);
-        y += draw_text_wrapped(rs->info_contract_desc, x, y,
-                               body_fs, max_w, LIGHTGRAY);
+    if (rs->info_contract_count > 0) {
+        for (int c = 0; c < rs->info_contract_count; c++) {
+            y += draw_text_wrapped(rs->info_contract_name[c], x, y,
+                                   body_fs, max_w, WHITE);
+            y += draw_text_wrapped(rs->info_contract_desc[c], x, y,
+                                   body_fs, max_w, LIGHTGRAY);
+            y += 2.0f * s;
+        }
     } else {
         DrawText("None", (int)x, (int)y, body_fs, GRAY);
         y += (float)body_fs + 2.0f * s;
@@ -1983,8 +2043,8 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     /* Dim unplayable cards — handled inside draw_card_visual via cv->dimmed */
 }
 
-/* Draw the contracts results panel: 3 columns (Player | Contract | Result).
- * Middle column shows contract name + description on the line below. */
+/* Draw the contracts results panel: 3 columns (Player | Reward | Contract).
+ * Only completed contracts are shown. Scrollable when content overflows. */
 static void draw_contracts_panel(const RenderState *rs, float s,
                                   const LayoutConfig *cfg)
 {
@@ -1994,13 +2054,15 @@ static void draw_contracts_panel(const RenderState *rs, float s,
     Vector2 bc = layout_board_center(cfg);
     int font22 = (int)(22.0f * s);
     int font13 = (int)(13.0f * s);
+    int font11 = (int)(11.0f * s);
     int table_x = (int)tbl.table_x;
     int col2_x  = (int)tbl.col2_x;
     int col3_x  = (int)tbl.col3_x;
     int col3_w  = (int)tbl.col3_w;
+    float col2_w = (float)col3_x - (float)col2_x - 8.0f * s;
 
     /* Title */
-    const char *title = "Contract Results";
+    const char *title = "Rewards Obtained";
     int title_size = (int)(36.0f * s);
     int tw = MeasureText(title, title_size);
     DrawText(title, (int)(bc.x - (float)tw * 0.5f),
@@ -2009,49 +2071,93 @@ static void draw_contracts_panel(const RenderState *rs, float s,
     /* Header */
     int header_y = (int)tbl.header_y;
     DrawText("Player", table_x, header_y, font22, LIGHTGRAY);
-    DrawText("Contract", col2_x, header_y, font22, LIGHTGRAY);
-    {
-        const char *rh = "Result";
-        int rw = MeasureText(rh, font22);
-        DrawText(rh, col3_x + col3_w - rw, header_y, font22, LIGHTGRAY);
-    }
+    DrawText("Reward", col2_x, header_y, font22, LIGHTGRAY);
+    DrawText("Contract", col3_x, header_y, font22, LIGHTGRAY);
 
     DrawLine(table_x, (int)tbl.line_y,
              table_x + (int)tbl.table_w, (int)tbl.line_y, GRAY);
 
-    /* Player rows */
-    for (int i = 0; i < NUM_PLAYERS; i++) {
+    if (rs->contract_result_count == 0 && rs->contract_reveal_count > 0) {
+        int y = (int)tbl.first_row_y;
+        DrawText("No contracts completed this round", table_x, y, font22, GRAY);
+        return;
+    }
+
+    /* Compute available scroll area */
+    Rectangle br = layout_board_rect(cfg);
+    float scroll_top = tbl.first_row_y;
+    float scroll_bottom = br.y + br.height - 150.0f * s; /* leave room for button + indicator */
+    float visible_h = scroll_bottom - scroll_top;
+
+    /* Handle mouse wheel scroll (mutable cast for scroll state) */
+    float *scroll = (float *)&rs->contract_scroll_y;
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f) {
+        *scroll -= wheel * 30.0f * s;
+        if (*scroll < 0.0f) *scroll = 0.0f;
+    }
+
+    /* Compute total content height */
+    float total_h = tbl.row_h * (float)rs->contract_result_count;
+    float max_scroll = total_h - visible_h;
+    if (max_scroll < 0.0f) max_scroll = 0.0f;
+    if (*scroll > max_scroll) *scroll = max_scroll;
+
+    /* Clip rows to visible area */
+    BeginScissorMode((int)br.x, (int)scroll_top,
+                     (int)br.width, (int)visible_h);
+
+    /* Completed contract rows */
+    for (int i = 0; i < rs->contract_result_count; i++) {
         if (rs->contract_result_name[i][0] == '\0') continue;
 
-        int y = (int)layout_contracts_row_y(i, &tbl);
+        float fy = tbl.first_row_y + tbl.row_h * (float)i - rs->contract_scroll_y;
+        int y = (int)fy;
         bool revealed = i < rs->contract_reveal_count;
 
         if (revealed) {
-            Color row_col = rs->contract_result_success[i] ? GREEN : RED;
-            Color desc_col = rs->contract_result_success[i]
-                                 ? (Color){100, 200, 100, 180}
-                                 : (Color){200, 100, 100, 180};
+            Color row_col = GREEN;
+            Color tdesc_col = (Color){100, 200, 100, 180};
 
             /* Column 1: Player name */
-            DrawText(player_name(i), table_x, y, font22, row_col);
+            DrawText(rs->contract_result_text[i], table_x, y, font22, row_col);
 
-            /* Column 2: Contract name + description below */
+            /* Column 2: Transmutation name + transmutation description */
             DrawText(rs->contract_result_name[i], col2_x, y, font22, row_col);
-            DrawText(rs->contract_result_desc[i], col2_x,
-                     y + font22 + (int)(2.0f * s), font13, desc_col);
+            draw_text_wrapped(rs->contract_result_tdesc[i],
+                              (float)col2_x, (float)(y + font22 + (int)(2.0f * s)),
+                              font11, col2_w, tdesc_col);
 
-            /* Column 3: Result, right-aligned */
-            const char *status = rs->contract_result_success[i]
-                                     ? "Completed!" : "Failed";
-            int sw = MeasureText(status, font22);
-            DrawText(status, col3_x + col3_w - sw, y, font22, row_col);
+            /* Column 3: Contract condition */
+            draw_text_wrapped(rs->contract_result_desc[i],
+                              (float)col3_x, (float)y,
+                              font13, (float)col3_w, LIGHTGRAY);
         } else {
-            /* Not yet revealed: neutral colors, no result */
-            DrawText(player_name(i), table_x, y, font22, LIGHTGRAY);
+            /* Not yet revealed */
+            DrawText(rs->contract_result_text[i], table_x, y, font22, LIGHTGRAY);
             DrawText(rs->contract_result_name[i], col2_x, y, font22, LIGHTGRAY);
-            DrawText(rs->contract_result_desc[i], col2_x,
-                     y + font22 + (int)(2.0f * s), font13, DARKGRAY);
+            draw_text_wrapped(rs->contract_result_desc[i],
+                              (float)col3_x, (float)y,
+                              font13, (float)col3_w, DARKGRAY);
         }
+    }
+
+    EndScissorMode();
+
+    /* Scroll-down indicator (between table bottom and continue button) */
+    if (max_scroll > 0.0f && *scroll < max_scroll - 1.0f) {
+        float arrow_cx = tbl.table_x + tbl.table_w * 0.5f;
+        float arrow_y = scroll_bottom + 8.0f * s;
+        float arrow_sz = 10.0f * s;
+        float pulse = 0.6f + 0.4f * sinf((float)GetTime() * 3.0f);
+        unsigned char alpha = (unsigned char)(255.0f * pulse);
+
+        /* Down arrow triangle (counter-clockwise for Raylib) */
+        Color arrow_col = (Color){200, 200, 200, alpha};
+        Vector2 v1 = {arrow_cx + arrow_sz, arrow_y};
+        Vector2 v2 = {arrow_cx - arrow_sz, arrow_y};
+        Vector2 v3 = {arrow_cx, arrow_y + arrow_sz};
+        DrawTriangle(v1, v2, v3, arrow_col);
     }
 }
 
@@ -2127,10 +2233,8 @@ static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
     DrawRectangleRec(br, (Color){0, 0, 0, 150});
 
     if (rs->score_subphase == SCORE_SUB_CONTRACTS) {
-        /* Contracts results panel */
-        BeginScissorMode((int)br.x, (int)br.y, (int)br.width, (int)br.height);
+        /* Contracts results panel (handles its own scissor clipping) */
         draw_contracts_panel(rs, s, cfg);
-        EndScissorMode();
     } else {
         /* Scoring table */
         draw_scoring_table(rs, s, cfg);

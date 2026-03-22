@@ -2,16 +2,11 @@
 #define LAYOUT_H
 
 /* ============================================================
- * @deps-exports: PlayerPosition enum, LayoutConfig, ScoringTableLayout,
- *                layout_hand/trick/score/name/confirm/board/pile/pass_staging(),
- *                layout_scoring_table(), layout_scoring_row_y(),
- *                layout_scoring_card_position(), layout_wipe_boundary_x(),
- *                layout_contract_options(), layout_left_panel_*(),
- *                layout_recalculate()
+ * @deps-exports: layout_pass_preview_positions(), PlayerPosition, LayoutConfig,
+ *                ScoringTableLayout, layout_hand/trick/score/name/confirm/board/pile/pass_staging()
  * @deps-requires: raylib.h (Rectangle, Vector2)
- * @deps-used-by: layout.c, render.h, render.c, turn_flow.c, process_input.c,
- *                pass_phase.c, phase_transitions.c
- * @deps-last-changed: 2026-03-19 — Added layout_wipe_boundary_x() for diagonal wipe boundary calculation
+ * @deps-used-by: layout.c, render.c, pass_phase.c, process_input.c, turn_flow.c
+ * @deps-last-changed: 2026-03-22 — Pass animation: added layout_pass_preview_positions() for card preview row positioning
  * ============================================================ */
 
 #include "raylib.h"
@@ -136,6 +131,11 @@ void layout_contracts_table(const LayoutConfig *cfg, ContractsTableLayout *out);
 
 /* Y position for a player's row in the contracts table. */
 float layout_contracts_row_y(int player_index, const ContractsTableLayout *tbl);
+
+/* Compute positions for a preview row of received cards, centered above
+ * the human player's hand. Cards are evenly spaced at hand scale. */
+void layout_pass_preview_positions(int card_count, const LayoutConfig *cfg,
+                                   Vector2 out_positions[]);
 
 /* Recalculate layout dimensions for a new screen size.
  * Scales all dimensions proportionally from 720p reference. */

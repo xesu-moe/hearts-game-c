@@ -1,8 +1,8 @@
 /* ============================================================
  * @deps-implements: settings.h
- * @deps-requires: settings.h (GameSettings, WindowMode, AnimSpeed, AISpeed),
+ * @deps-requires: settings.h (GameSettings, auto_sort_received field),
  *                 vendor/cJSON.h, raylib.h, stdio.h, stdlib.h, string.h
- * @deps-last-changed: 2026-03-20 — Removed render/layout.h dependency; callers handle layout_recalculate()
+ * @deps-last-changed: 2026-03-22 — Load/save auto_sort_received bool from JSON
  * ============================================================ */
 
 #include "settings.h"
@@ -30,6 +30,7 @@ void settings_default(GameSettings *s)
     s->fps_index        = 1;  /* 60 fps */
     s->anim_speed       = ANIM_SPEED_NORMAL;
     s->ai_speed         = AI_SPEED_NORMAL;
+    s->auto_sort_received = true;
     s->master_volume    = 1.0f;
     s->music_volume     = 1.0f;
     s->sfx_volume       = 1.0f;
@@ -115,6 +116,10 @@ void settings_load(GameSettings *s)
             s->ai_speed = AI_SPEED_NORMAL;
     }
 
+    /* Auto-sort received */
+    cJSON *jasr = cJSON_GetObjectItem(root, "auto_sort_received");
+    if (cJSON_IsBool(jasr)) s->auto_sort_received = cJSON_IsTrue(jasr);
+
     /* Volumes */
     cJSON *jmv = cJSON_GetObjectItem(root, "master_volume");
     if (cJSON_IsNumber(jmv)) s->master_volume = (float)jmv->valuedouble;
@@ -164,6 +169,8 @@ void settings_save(const GameSettings *s)
     else if (s->ai_speed == AI_SPEED_FAST) ai_str = "fast";
     else if (s->ai_speed == AI_SPEED_INSTANT) ai_str = "instant";
     cJSON_AddStringToObject(root, "ai_speed", ai_str);
+
+    cJSON_AddBoolToObject(root, "auto_sort_received", s->auto_sort_received);
 
     cJSON_AddNumberToObject(root, "master_volume", (double)s->master_volume);
     cJSON_AddNumberToObject(root, "music_volume", (double)s->music_volume);

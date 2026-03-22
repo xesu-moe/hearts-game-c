@@ -1,10 +1,13 @@
 /* ============================================================
  * @deps-implements: info_sync.h
  * @deps-requires: info_sync.h, core/game_state.h, render/render.h,
- *                 phase2/phase2_state.h (curse_force_hearts[], anchor_force_suit[]), phase2/phase2_defs.h,
- *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h (transmute_curse_is_valid_lead, transmute_anchor_is_valid_lead, transmute_is_fog, transmute_get_transmuter),
- *                 phase2/transmutation.h (TrickTransmuteInfo.fogged/fog_transmuter), stdio.h
- * @deps-last-changed: 2026-03-21 — Added Anchor transmutation: check force lead suit in playability
+ *                 phase2/phase2_state.h (PlayerPhase2.contracts[],
+ *                   PlayerPhase2.num_active_contracts, curse_force_hearts[],
+ *                   anchor_force_suit[]),
+ *                 phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation),
+ *                 phase2/vendetta_logic.h, phase2/transmutation_logic.h,
+ *                 phase2/transmutation.h, stdio.h
+ * @deps-last-changed: 2026-03-21 — Updated for multi-contract info panel sync (info_contract_count)
  * ============================================================ */
 
 #include "info_sync.h"
@@ -20,22 +23,25 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                       PlayPhaseState *pls)
 {
     if (p2->enabled) {
-        /* Contract */
-        if (p2->players[0].contract.contract_id >= 0) {
-            const ContractDef *cd =
-                phase2_get_contract(p2->players[0].contract.contract_id);
-            if (cd) {
-                rs->info_contract_active = true;
-                snprintf(rs->info_contract_name,
-                         sizeof(rs->info_contract_name), "%s", cd->name);
-                snprintf(rs->info_contract_desc,
-                         sizeof(rs->info_contract_desc), "%s",
-                         cd->description);
-            } else {
-                rs->info_contract_active = false;
+        /* Contracts (up to 3) */
+        rs->info_contract_count = 0;
+        for (int c = 0; c < p2->players[0].num_active_contracts && c < 3; c++) {
+            if (p2->players[0].contracts[c].contract_id >= 0) {
+                const ContractInstance *ci = &p2->players[0].contracts[c];
+                const ContractDef *cd = phase2_get_contract(ci->contract_id);
+                const TransmutationDef *td = (ci->paired_transmutation_id >= 0)
+                    ? phase2_get_transmutation(ci->paired_transmutation_id) : NULL;
+                if (cd) {
+                    int idx = rs->info_contract_count;
+                    snprintf(rs->info_contract_name[idx],
+                             sizeof(rs->info_contract_name[idx]), "%s",
+                             td ? td->name : cd->name);
+                    snprintf(rs->info_contract_desc[idx],
+                             sizeof(rs->info_contract_desc[idx]), "%s",
+                             cd->description);
+                    rs->info_contract_count++;
+                }
             }
-        } else {
-            rs->info_contract_active = false;
         }
 
         /* Vendetta action */
@@ -190,7 +196,7 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
             rs->vendetta_skip_btn.visible = false;
         }
     } else {
-        rs->info_contract_active = false;
+        rs->info_contract_count = 0;
         rs->info_vendetta_active = false;
         rs->info_bonus_count = 0;
         rs->vendetta_available = false;

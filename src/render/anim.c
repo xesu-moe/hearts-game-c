@@ -1,8 +1,8 @@
 /* ============================================================
  * @deps-implements: anim.h
- * @deps-requires: anim.h (anim_set_speed, anim_get_speed), easing.h,
- *                 math.h, stddef.h, raylib.h
- * @deps-last-changed: 2026-03-19 — Added anim_set_speed(), anim_get_speed()
+ * @deps-requires: anim.h (CardVisual, anim_set_speed, anim_get_speed, anim_start_scaled),
+ *                 easing.h (ease_apply), math.h, stddef.h, raylib.h
+ * @deps-last-changed: 2026-03-22 — Scale animation: implemented anim_start_scaled() and scale interpolation in anim_update()
  * ============================================================ */
 
 #include "anim.h"
@@ -39,6 +39,17 @@ void anim_start(CardVisual *cv, Vector2 target, float target_rot,
     cv->animating = true;
     cv->anim_delay = 0.0f;
     cv->use_bezier = false;
+    cv->anim_scale = false;
+}
+
+void anim_start_scaled(CardVisual *cv, Vector2 target, float target_rot,
+                       float target_scale, float duration, EaseType ease)
+{
+    cv->start_scale = cv->scale;
+    cv->target_scale = target_scale;
+    cv->anim_scale = true;
+    anim_start(cv, target, target_rot, duration, ease);
+    cv->anim_scale = true; /* re-set after anim_start clears it */
 }
 
 void anim_update(CardVisual *cv, float dt)
@@ -56,6 +67,10 @@ void anim_update(CardVisual *cv, float dt)
     if (cv->anim_duration <= 0.0f) {
         cv->position = cv->target;
         cv->rotation = cv->target_rotation;
+        if (cv->anim_scale) {
+            cv->scale = cv->target_scale;
+            cv->anim_scale = false;
+        }
         cv->animating = false;
         return;
     }
@@ -78,6 +93,11 @@ void anim_update(CardVisual *cv, float dt)
         cv->position.x = lerpf(cv->start.x, cv->target.x, eased);
         cv->position.y = lerpf(cv->start.y, cv->target.y, eased);
         cv->rotation = lerpf(cv->start_rotation, cv->target_rotation, eased);
+    }
+
+    if (cv->anim_scale) {
+        cv->scale = lerpf(cv->start_scale, cv->target_scale, eased);
+        if (!cv->animating) cv->anim_scale = false;
     }
 }
 

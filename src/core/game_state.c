@@ -87,6 +87,7 @@ void game_state_new_round(GameState *gs)
     }
 
     /* Clear pass state */
+    gs->skip_human_pass_sort = false;
     for (int i = 0; i < NUM_PLAYERS; i++) {
         for (int j = 0; j < PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
@@ -174,7 +175,8 @@ bool game_state_execute_pass(GameState *gs)
 
     /* Re-sort hands and clear pass state */
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        hand_sort(&gs->players[i].hand);
+        if (!(i == 0 && gs->skip_human_pass_sort))
+            hand_sort(&gs->players[i].hand);
         gs->pass_ready[i] = false;
         for (int j = 0; j < PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
