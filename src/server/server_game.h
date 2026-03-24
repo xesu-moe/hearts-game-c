@@ -13,6 +13,7 @@
 #define SERVER_GAME_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "core/game_state.h"
 #include "core/input_cmd.h"
@@ -85,7 +86,9 @@ void server_game_tick(ServerGame *sg);
 bool server_game_is_over(const ServerGame *sg);
 
 /* Apply a human player's command. Validates against current sub-state.
- * Returns true if accepted, false if rejected. */
-bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd);
+ * Returns true if accepted, false if rejected.
+ * On rejection, fills err_out (if non-NULL) with a player-facing reason. */
+bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
+                           char *err_out, size_t err_len);
 
 #endif /* SERVER_GAME_H */

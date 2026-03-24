@@ -15,8 +15,8 @@
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, card_to_index),
  *                 core/input_cmd.h (InputCmd, InputCmdType),
  *                 stdbool.h, stdint.h
- * @deps-used-by: protocol.c, socket.c, server_net.c
- * @deps-last-changed: 2026-03-23 — Step 6: Added InputCmd conversion functions
+ * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.h, reconnect.h
+ * @deps-last-changed: 2026-03-24 — Step 11: Added session_token to NetMsgHandshakeAck
  * ============================================================ */
 
 #include <stdbool.h>
@@ -142,7 +142,8 @@ typedef struct NetMsgHandshake {
 
 typedef struct NetMsgHandshakeAck {
     uint16_t protocol_version;
-    uint8_t  assigned_seat; /* 0-3 */
+    uint8_t  assigned_seat;                     /* 0-3 */
+    uint8_t  session_token[NET_AUTH_TOKEN_LEN]; /* client stores for reconnect */
 } NetMsgHandshakeAck;
 
 typedef struct NetMsgHandshakeReject {

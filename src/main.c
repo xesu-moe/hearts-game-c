@@ -183,6 +183,14 @@ int main(void)
             rs.sync_needed = true;
         }
 
+        /* Step 13: Display server error messages in chat log */
+        {
+            char errbuf[NET_MAX_CHAT_LEN];
+            if (client_net_consume_error(errbuf, sizeof(errbuf))) {
+                render_chat_log_push_color(&rs, errbuf, ORANGE);
+            }
+        }
+
         GamePhase phase_before_update = gs.phase;
         while (clk.accumulator >= FIXED_DT) {
             game_update(&gs, &rs, &p2, &pps, &pls, &sui, &g_settings,

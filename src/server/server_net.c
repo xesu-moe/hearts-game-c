@@ -2,7 +2,8 @@
  * @deps-implements: server/server_net.h
  * @deps-requires: server/server_net.h, server/room.h (Room, ConnSlotInfo,
  *                 room_manager_init, room_create, room_join, room_leave,
- *                 room_find_by_code, room_get, room_tick_all, MAX_ROOMS),
+ *                 room_find_by_code, room_find_by_conn, room_get, room_tick_all,
+ *                 room_reconnect, room_update_timers, MAX_ROOMS),
  *                 server/server_game.h (ServerGame, server_game_apply_cmd),
  *                 net/socket.h (NetSocket, net_socket_*),
  *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView,
@@ -10,7 +11,7 @@
  *                 core/game_state.h (PassSubphase, game_state_current_player),
  *                 core/input_cmd.h (InputCmd),
  *                 stdio.h, stdlib.h, string.h
- * @deps-last-changed: 2026-03-23 — Step 6: Server Network Loop
+ * @deps-last-changed: 2026-03-24 — Step 11: Call room_reconnect on handshake
  * ============================================================ */
 
 #include "server_net.h"
@@ -213,6 +214,47 @@ static void sv_handle_handshake(int conn_id, const NetMsgHandshake *hs)
             net_socket_close(&g_net, conn_id);
             return;
         }
+
+        /* If room is PLAYING, try reconnect by session token */
+        Room *playing_room = room_get(room_idx);
+        if (playing_room && playing_room->status == ROOM_PLAYING) {
+            int seat = room_reconnect(room_idx, conn_id, hs->auth_token);
+            if (seat >= 0) {
+                ConnSlotInfo *info = malloc(sizeof(ConnSlotInfo));
+                if (!info) {
+                    fprintf(stderr, "[net] malloc failed for ConnSlotInfo\n");
+                    room_leave(room_idx, seat);
+                    net_socket_close(&g_net, conn_id);
+                    return;
+                }
+                info->room_index = room_idx;
+                info->seat = seat;
+                g_net.conns[conn_id].user_data = info;
+
+                NetMsg reply;
+                memset(&reply, 0, sizeof(reply));
+                reply.type = NET_MSG_HANDSHAKE_ACK;
+                reply.handshake_ack.protocol_version = PROTOCOL_VERSION;
+                reply.handshake_ack.assigned_seat = (uint8_t)seat;
+                memcpy(reply.handshake_ack.session_token,
+                       playing_room->slots[seat].auth_token,
+                       NET_AUTH_TOKEN_LEN);
+                net_socket_send_msg(&g_net, conn_id, &reply);
+
+                printf("[net] Conn %d reconnected to room %s seat %d\n",
+                       conn_id, playing_room->code, seat);
+                return;
+            }
+            /* No matching token — can't join mid-game */
+            NetMsg reply;
+            memset(&reply, 0, sizeof(reply));
+            reply.type = NET_MSG_HANDSHAKE_REJECT;
+            reply.handshake_reject.server_version = PROTOCOL_VERSION;
+            reply.handshake_reject.reason = NET_REJECT_ROOM_FULL;
+            net_socket_send_msg(&g_net, conn_id, &reply);
+            net_socket_close(&g_net, conn_id);
+            return;
+        }
     }
 
     /* Join the room */
@@ -247,13 +289,17 @@ static void sv_handle_handshake(int conn_id, const NetMsgHandshake *hs)
     info->seat = seat;
     g_net.conns[conn_id].user_data = info;
 
-    /* Send handshake ACK */
+    /* Send handshake ACK with session token */
     Room *room = room_get(room_idx);
     NetMsg reply;
     memset(&reply, 0, sizeof(reply));
     reply.type = NET_MSG_HANDSHAKE_ACK;
     reply.handshake_ack.protocol_version = PROTOCOL_VERSION;
     reply.handshake_ack.assigned_seat = (uint8_t)seat;
+    if (room) {
+        memcpy(reply.handshake_ack.session_token,
+               room->slots[seat].auth_token, NET_AUTH_TOKEN_LEN);
+    }
     net_socket_send_msg(&g_net, conn_id, &reply);
 
     printf("[net] Conn %d joined room %s seat %d\n",
@@ -283,15 +329,18 @@ static void sv_handle_input_cmd(int conn_id, const NetInputCmd *net_cmd)
     cmd.source_player = info->seat; /* Enforce seat — never trust client */
 
     /* Apply to game state */
-    if (!server_game_apply_cmd(&room->game, info->seat, &cmd)) {
-        /* Command rejected — optionally send error to client */
-        NetMsg err;
-        memset(&err, 0, sizeof(err));
-        err.type = NET_MSG_ERROR;
-        err.error.code = 1;
-        snprintf(err.error.message, NET_MAX_CHAT_LEN,
-                 "Command rejected (type=%d)", cmd.type);
-        net_socket_send_msg(&g_net, conn_id, &err);
+    char err_msg[NET_MAX_CHAT_LEN] = {0};
+    if (!server_game_apply_cmd(&room->game, info->seat, &cmd,
+                               err_msg, sizeof(err_msg))) {
+        /* Send error to client (skip silent rejections like CONFIRM) */
+        if (err_msg[0] != '\0') {
+            NetMsg err;
+            memset(&err, 0, sizeof(err));
+            err.type = NET_MSG_ERROR;
+            err.error.code = 1;
+            strncpy(err.error.message, err_msg, NET_MAX_CHAT_LEN - 1);
+            net_socket_send_msg(&g_net, conn_id, &err);
+        }
     }
 }
 

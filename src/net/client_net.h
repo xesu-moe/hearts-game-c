@@ -8,14 +8,16 @@
  * connect, handshake, per-frame send/recv, ping, and state
  * storage. Steps 8-9 consume the stored NetPlayerView.
  *
- * @deps-exports: ClientNetState, client_net_init/shutdown/connect/
- *                disconnect/update/state/seat/has_new_state/
- *                consume_state/ping_ms/reject_reason/send_cmd
+ * @deps-exports: ClientNetState (+ CLIENT_NET_RECONNECTING), client_net_init/shutdown/
+ *                connect/disconnect/update/state/seat/has_new_state/
+ *                consume_state/ping_ms/reject_reason/send_cmd/is_reconnecting/
+ *                reconnect_attempt/reconnect_time_remaining
  * @deps-requires: net/protocol.h (NetPlayerView, NetRejectReason,
  *                 PROTOCOL_VERSION, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN),
+ *                 net/reconnect.h (ReconnectState, reconnect_*),
  *                 core/input_cmd.h (InputCmd)
- * @deps-used-by: main.c, (future) cmd_send.c, state_recv.c
- * @deps-last-changed: 2026-03-23 — Step 7: Initial creation
+ * @deps-used-by: main.c, cmd_send.c, state_recv.c
+ * @deps-last-changed: 2026-03-24 — Step 11: Added reconnect state machine
  * ============================================================ */
 
 #include <stdbool.h>
@@ -33,6 +35,7 @@ typedef enum ClientNetState {
     CLIENT_NET_CONNECTING,      /* TCP connect in progress */
     CLIENT_NET_HANDSHAKING,     /* TCP up, handshake sent, waiting ACK */
     CLIENT_NET_CONNECTED,       /* Handshake complete, in-game */
+    CLIENT_NET_RECONNECTING,    /* auto-reconnect with backoff */
     CLIENT_NET_ERROR            /* Connection failed or rejected */
 } ClientNetState;
 
@@ -87,6 +90,22 @@ int32_t client_net_ping_ms(void);
 
 /* Rejection reason if state is CLIENT_NET_ERROR (NetRejectReason). */
 uint8_t client_net_reject_reason(void);
+
+/* True if the client is actively trying to reconnect. */
+bool client_net_is_reconnecting(void);
+
+/* Current reconnect attempt number (for UI). 0 if not reconnecting. */
+int client_net_reconnect_attempt(void);
+
+/* Seconds until next reconnect attempt. 0 if not reconnecting. */
+float client_net_reconnect_time_remaining(void);
+
+/* True if a server error message has been received since last consume. */
+bool client_net_has_error(void);
+
+/* Copy the error message into out (up to len bytes) and clear the flag.
+ * Returns false if no error was pending. */
+bool client_net_consume_error(char *out, size_t len);
 
 /* ================================================================
  * Command Sending (used by Step 8)

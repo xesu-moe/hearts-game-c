@@ -3,12 +3,14 @@
  *                room_manager_init(), room_create(), room_destroy(),
  *                room_join(), room_leave(), room_find_by_code(),
  *                room_find_by_conn(), room_get(), room_active_count(),
- *                room_tick(), room_tick_all(),
- *                ROOM_CODE_LEN, MAX_ROOMS
+ *                room_tick(), room_tick_all(), room_update_timers(),
+ *                room_reconnect(), ROOM_CODE_LEN, MAX_ROOMS,
+ *                DISCONNECT_GRACE_SEC, ROOM_ABANDON_SEC
  * @deps-requires: server/server_game.h (ServerGame, server_game_init,
  *                 server_game_start, server_game_tick, server_game_is_over),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS)
- * @deps-last-changed: 2026-03-23 — Initial creation (Step 5: Server Room Management)
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS),
+ *                 core/clock.h (FIXED_DT)
+ * @deps-last-changed: 2026-03-24 — Step 11: Added disconnect/reconnect timers
  * ============================================================ */
 
 #ifndef ROOM_H
@@ -24,8 +26,10 @@
  * Constants
  * ================================================================ */
 
-#define ROOM_CODE_LEN 5   /* 4 chars + NUL */
-#define MAX_ROOMS     100
+#define ROOM_CODE_LEN          5     /* 4 chars + NUL */
+#define MAX_ROOMS              100
+#define DISCONNECT_GRACE_SEC   30.0f /* seconds before AI takeover */
+#define ROOM_ABANDON_SEC      300.0f /* 5 min with 0 humans → destroy */
 
 /* ================================================================
  * Enums
@@ -60,7 +64,8 @@ typedef struct PlayerSlot {
     SlotStatus status;
     int        conn_id;   /* index into NetSocket.conns[], -1 if not connected */
     int        player_id; /* seat 0-3, same as array index */
-    uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* stub — no-op validation */
+    uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* session token for reconnect */
+    float      disconnect_timer; /* seconds since disconnect, -1 if N/A */
 } PlayerSlot;
 
 typedef struct Room {
@@ -69,6 +74,7 @@ typedef struct Room {
     PlayerSlot  slots[NET_MAX_PLAYERS];
     ServerGame  game;
     int         connected_count; /* number of SLOT_CONNECTED players */
+    float       abandon_timer;   /* counts up when 0 humans connected */
 } Room;
 
 /* ================================================================
@@ -129,5 +135,20 @@ void room_tick(int room_index);
 
 /* Tick all PLAYING rooms, then destroy all FINISHED rooms. */
 void room_tick_all(void);
+
+/* ================================================================
+ * Disconnect & Reconnect (Step 11)
+ * ================================================================ */
+
+/* Tick disconnect timers for all slots in a room.
+ * Converts DISCONNECTED → SLOT_AI after grace period.
+ * Returns true if room is abandoned (0 humans for ROOM_ABANDON_SEC). */
+bool room_update_timers(int room_index, float dt);
+
+/* Attempt to reconnect a player by matching session token.
+ * Scans DISCONNECTED and AI slots. On match, restores SLOT_CONNECTED
+ * and sets is_human=true. Returns seat (0-3) or -1. */
+int room_reconnect(int room_index, int conn_id,
+                   const uint8_t token[NET_AUTH_TOKEN_LEN]);
 
 #endif /* ROOM_H */

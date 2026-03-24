@@ -1,18 +1,23 @@
 /* ============================================================
  * @deps-implements: server/room.h
  * @deps-requires: server/room.h (Room, PlayerSlot, SlotStatus, RoomStatus,
- *                 ServerGame via server_game.h),
+ *                 room_update_timers, room_reconnect),
  *                 server/server_game.h (server_game_init, server_game_start,
  *                 server_game_tick, server_game_is_over),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS)
- * @deps-last-changed: 2026-03-23 — Initial creation (Step 5: Server Room Management)
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS),
+ *                 core/clock.h (FIXED_DT), fcntl.h, unistd.h
+ * @deps-last-changed: 2026-03-24 — Step 11: Implemented timer/reconnect functions
  * ============================================================ */
 
 #include "room.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "core/clock.h" /* FIXED_DT */
 
 /* ================================================================
  * Room Code Alphabet
@@ -32,6 +37,20 @@ static int  g_active_room_count;
 /* ================================================================
  * Internal Helpers
  * ================================================================ */
+
+/* Generate a random session token for reconnect identification. */
+static void room_generate_session_token(uint8_t token[NET_AUTH_TOKEN_LEN])
+{
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd >= 0) {
+        ssize_t n = read(fd, token, NET_AUTH_TOKEN_LEN);
+        close(fd);
+        if (n == NET_AUTH_TOKEN_LEN) return;
+    }
+    /* Fallback: rand() — less random but functional */
+    for (int i = 0; i < NET_AUTH_TOKEN_LEN; i++)
+        token[i] = (uint8_t)(rand() % 256);
+}
 
 /* Generate a unique 4-char room code. Returns true on success. */
 static bool room_generate_code(char code[ROOM_CODE_LEN])
@@ -142,9 +161,9 @@ int room_join(int room_index, int conn_id,
     PlayerSlot *slot = &room->slots[seat];
     slot->status  = SLOT_CONNECTED;
     slot->conn_id = conn_id;
-    if (auth_token) {
-        memcpy(slot->auth_token, auth_token, NET_AUTH_TOKEN_LEN);
-    }
+    slot->disconnect_timer = -1.0f;
+    (void)auth_token; /* lobby tokens not used yet */
+    room_generate_session_token(slot->auth_token);
 
     room->connected_count++;
     printf("Room %s: player joined seat %d (conn %d, connected: %d/%d)\n",
@@ -191,11 +210,19 @@ void room_leave(int room_index, int seat)
             printf("Room %s: all players left, destroying\n", room->code);
             room_destroy(room_index);
         }
-    } else if (room->status == ROOM_PLAYING || room->status == ROOM_FINISHED) {
+    } else if (room->status == ROOM_PLAYING) {
         slot->status  = SLOT_DISCONNECTED;
         slot->conn_id = -1;
+        slot->disconnect_timer = 0.0f; /* start counting up */
         room->connected_count--;
-        /* AI takeover and disconnect timers added in Step 11 */
+        printf("Room %s: seat %d disconnected, %.0fs grace period\n",
+               room->code, seat, DISCONNECT_GRACE_SEC);
+        /* auth_token preserved for reconnect matching */
+    } else if (room->status == ROOM_FINISHED) {
+        slot->status  = SLOT_DISCONNECTED;
+        slot->conn_id = -1;
+        slot->disconnect_timer = -1.0f; /* no timer — room is ending */
+        room->connected_count--;
     }
 }
 
@@ -265,6 +292,17 @@ void room_tick(int room_index)
 
 void room_tick_all(void)
 {
+    /* Update disconnect timers and destroy abandoned rooms */
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (g_rooms[i].status == ROOM_PLAYING) {
+            if (room_update_timers(i, FIXED_DT)) {
+                printf("Room %s: abandoned, destroying\n", g_rooms[i].code);
+                room_destroy(i);
+                continue;
+            }
+        }
+    }
+
     /* Tick all playing rooms */
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (g_rooms[i].status == ROOM_PLAYING) {
@@ -278,4 +316,74 @@ void room_tick_all(void)
             room_destroy(i);
         }
     }
+}
+
+/* ================================================================
+ * Disconnect & Reconnect (Step 11)
+ * ================================================================ */
+
+bool room_update_timers(int room_index, float dt)
+{
+    if (room_index < 0 || room_index >= MAX_ROOMS) return false;
+
+    Room *room = &g_rooms[room_index];
+    if (room->status != ROOM_PLAYING) return false;
+
+    /* Tick disconnect timers for each disconnected slot */
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        PlayerSlot *slot = &room->slots[s];
+        if (slot->status != SLOT_DISCONNECTED) continue;
+
+        slot->disconnect_timer += dt;
+        if (slot->disconnect_timer >= DISCONNECT_GRACE_SEC) {
+            slot->status = SLOT_AI;
+            slot->disconnect_timer = -1.0f;
+            room->game.gs.players[s].is_human = false;
+            printf("Room %s: seat %d switched to AI after %.0fs\n",
+                   room->code, s, DISCONNECT_GRACE_SEC);
+        }
+    }
+
+    /* Track room abandonment (0 humans connected) */
+    if (room->connected_count == 0) {
+        room->abandon_timer += dt;
+        if (room->abandon_timer >= ROOM_ABANDON_SEC)
+            return true; /* caller should destroy */
+    } else {
+        room->abandon_timer = 0.0f;
+    }
+
+    return false;
+}
+
+int room_reconnect(int room_index, int conn_id,
+                   const uint8_t token[NET_AUTH_TOKEN_LEN])
+{
+    if (room_index < 0 || room_index >= MAX_ROOMS) return -1;
+
+    Room *room = &g_rooms[room_index];
+    if (room->status != ROOM_PLAYING) return -1;
+
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        PlayerSlot *slot = &room->slots[s];
+        if (slot->status != SLOT_DISCONNECTED && slot->status != SLOT_AI)
+            continue;
+
+        if (memcmp(slot->auth_token, token, NET_AUTH_TOKEN_LEN) != 0)
+            continue;
+
+        /* Match found — restore the slot */
+        slot->status  = SLOT_CONNECTED;
+        slot->conn_id = conn_id;
+        slot->disconnect_timer = -1.0f;
+        room->game.gs.players[s].is_human = true;
+        room->connected_count++;
+        room->abandon_timer = 0.0f;
+
+        printf("Room %s: seat %d reconnected (conn %d)\n",
+               room->code, s, conn_id);
+        return s;
+    }
+
+    return -1;
 }

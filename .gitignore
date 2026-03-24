@@ -1,1 +1,4 @@
 *.o
+*.d
+CLAUDE.md
+hollow-hearts

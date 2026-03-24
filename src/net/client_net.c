@@ -3,12 +3,15 @@
  * @deps-requires: net/client_net.h (ClientNetState, client_net_*),
  *                 net/socket.h (NetSocket, net_socket_*),
  *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView,
- *                 NetInputCmd, PROTOCOL_VERSION, NET_ROOM_CODE_LEN,
- *                 NET_AUTH_TOKEN_LEN, net_input_cmd_is_relevant,
- *                 net_input_cmd_from_local),
+ *                 NetInputCmd, NET_ADDR_LEN, PROTOCOL_VERSION,
+ *                 NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN,
+ *                 net_input_cmd_is_relevant, net_input_cmd_from_local),
+ *                 net/reconnect.h (ReconnectState, reconnect_init,
+ *                 reconnect_begin, reconnect_update, reconnect_cancel,
+ *                 reconnect_is_active, RECONNECT_MAX_ATTEMPTS),
  *                 core/input_cmd.h (InputCmd),
  *                 string.h, stdio.h, time.h
- * @deps-last-changed: 2026-03-23 — Step 7: Initial creation
+ * @deps-last-changed: 2026-03-24 — Step 11: Exponential backoff reconnect logic
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L /* clock_gettime */
@@ -21,6 +24,7 @@
 
 #include "net/socket.h"
 #include "net/protocol.h"
+#include "net/reconnect.h"
 #include "core/input_cmd.h"
 
 /* ================================================================
@@ -49,6 +53,16 @@ static uint32_t       g_ping_sequence;
 static float          g_ping_timer;
 static int32_t        g_ping_rtt_ms;
 
+/* Reconnect (Step 11) */
+static ReconnectState g_reconnect;
+static char           g_last_ip[NET_ADDR_LEN];
+static uint16_t       g_last_port;
+static uint8_t        g_session_token[NET_AUTH_TOKEN_LEN];
+
+/* Error display (Step 13) */
+static char           g_error_msg[NET_MAX_CHAT_LEN];
+static bool           g_has_error;
+
 /* ================================================================
  * Internal helpers
  * ================================================================ */
@@ -71,6 +85,10 @@ static void reset_state(void)
     g_ping_timer    = 0.0f;
     g_ping_rtt_ms   = -1;
     memset(g_room_code, 0, sizeof(g_room_code));
+    memset(g_session_token, 0, sizeof(g_session_token));
+    reconnect_init(&g_reconnect);
+    g_error_msg[0] = '\0';
+    g_has_error = false;
 }
 
 static void send_handshake(void)
@@ -79,8 +97,11 @@ static void send_handshake(void)
     memset(&msg, 0, sizeof(msg));
     msg.type = NET_MSG_HANDSHAKE;
     msg.handshake.protocol_version = PROTOCOL_VERSION;
-    /* auth_token is all zeros (dummy — lobby not built yet) */
     memcpy(msg.handshake.room_code, g_room_code, NET_ROOM_CODE_LEN);
+
+    /* If reconnecting, send session token so server can match our seat */
+    if (reconnect_is_active(&g_reconnect))
+        memcpy(msg.handshake.auth_token, g_session_token, NET_AUTH_TOKEN_LEN);
 
     if (net_socket_send_msg(&g_net, g_conn_id, &msg) < 0) {
         fprintf(stderr, "[client_net] Failed to send handshake\n");
@@ -105,15 +126,27 @@ static void handle_message(const NetMsg *msg)
         g_state = CLIENT_NET_CONNECTED;
         g_ping_timer = 0.0f;
         g_ping_rtt_ms = -1;
-        printf("[client_net] Connected, seat %d\n", g_seat);
+        memcpy(g_session_token, msg->handshake_ack.session_token,
+               NET_AUTH_TOKEN_LEN);
+        if (reconnect_is_active(&g_reconnect)) {
+            printf("[client_net] Reconnected successfully, seat %d\n", g_seat);
+            reconnect_cancel(&g_reconnect);
+        } else {
+            printf("[client_net] Connected, seat %d\n", g_seat);
+        }
         break;
 
     case NET_MSG_HANDSHAKE_REJECT:
         g_reject_reason = msg->handshake_reject.reason;
-        g_state = CLIENT_NET_ERROR;
         printf("[client_net] Rejected (reason %d)\n", g_reject_reason);
         net_socket_close(&g_net, g_conn_id);
         g_conn_id = -1;
+        if (reconnect_is_active(&g_reconnect)) {
+            /* Stay in RECONNECTING — will retry via backoff */
+            g_state = CLIENT_NET_RECONNECTING;
+        } else {
+            g_state = CLIENT_NET_ERROR;
+        }
         break;
 
     case NET_MSG_STATE_UPDATE:
@@ -131,6 +164,9 @@ static void handle_message(const NetMsg *msg)
     case NET_MSG_ERROR:
         fprintf(stderr, "[client_net] Server error: %s\n",
                 msg->error.message);
+        strncpy(g_error_msg, msg->error.message, NET_MAX_CHAT_LEN - 1);
+        g_error_msg[NET_MAX_CHAT_LEN - 1] = '\0';
+        g_has_error = true;
         break;
 
     case NET_MSG_DISCONNECT:
@@ -192,6 +228,11 @@ void client_net_connect(const char *ip, uint16_t port, const char *room_code)
 
     reset_state();
 
+    /* Store connection params for potential reconnect */
+    if (ip)
+        strncpy(g_last_ip, ip, NET_ADDR_LEN - 1);
+    g_last_port = port;
+
     /* Store room code */
     if (room_code)
         strncpy(g_room_code, room_code, NET_ROOM_CODE_LEN - 1);
@@ -210,6 +251,8 @@ void client_net_connect(const char *ip, uint16_t port, const char *room_code)
 
 void client_net_disconnect(void)
 {
+    reconnect_cancel(&g_reconnect);
+
     if (g_conn_id < 0 || g_state == CLIENT_NET_DISCONNECTED)
         return;
 
@@ -239,6 +282,59 @@ void client_net_update(float dt)
     if (g_state == CLIENT_NET_DISCONNECTED || g_state == CLIENT_NET_ERROR)
         return;
 
+    /* --- RECONNECTING state machine --- */
+    if (g_state == CLIENT_NET_RECONNECTING) {
+        /* Poll sockets if we have an active TCP attempt */
+        if (g_conn_id >= 0)
+            net_socket_update(&g_net);
+
+        /* Check if current reconnect TCP attempt failed */
+        if (g_conn_id >= 0 &&
+            net_socket_state(&g_net, g_conn_id) == NET_CONN_DISCONNECTED) {
+            g_conn_id = -1;
+        }
+
+        /* If no active TCP, tick backoff and maybe start new attempt */
+        if (g_conn_id < 0) {
+            if (reconnect_exhausted(&g_reconnect)) {
+                printf("[client_net] Reconnect failed after %d attempts\n",
+                       RECONNECT_MAX_ATTEMPTS);
+                g_state = CLIENT_NET_DISCONNECTED;
+                reconnect_cancel(&g_reconnect);
+                return;
+            }
+            if (reconnect_update(&g_reconnect, dt)) {
+                printf("[client_net] Reconnect attempt %d/%d\n",
+                       reconnect_attempt(&g_reconnect),
+                       RECONNECT_MAX_ATTEMPTS);
+                g_conn_id = net_socket_connect(&g_net, g_last_ip,
+                                                g_last_port);
+                /* if connect fails, g_conn_id stays -1, will retry */
+            }
+            return;
+        }
+
+        /* Active TCP in progress — check if connected, send handshake.
+         * Note: send_handshake() changes g_state from RECONNECTING to
+         * HANDSHAKING. The message loop below may then transition to
+         * CONNECTED in the same tick if ACK arrives immediately. */
+        if (net_socket_state(&g_net, g_conn_id) == NET_CONN_CONNECTED) {
+            send_handshake();
+        }
+
+        /* Process messages (HANDSHAKE_ACK transitions to CONNECTED) */
+        if (g_conn_id >= 0) {
+            NetMsg msg;
+            while (net_socket_recv_msg(&g_net, g_conn_id, &msg)) {
+                handle_message(&msg);
+                if (g_conn_id < 0) break;
+            }
+        }
+        return;
+    }
+
+    /* --- Normal (non-reconnecting) flow --- */
+
     /* Poll sockets */
     net_socket_update(&g_net);
 
@@ -246,8 +342,15 @@ void client_net_update(float dt)
     if (g_conn_id >= 0 &&
         net_socket_state(&g_net, g_conn_id) == NET_CONN_DISCONNECTED) {
         if (g_state == CLIENT_NET_CONNECTED) {
-            printf("[client_net] Connection lost\n");
-            g_state = CLIENT_NET_DISCONNECTED;
+            /* Unexpected loss — start auto-reconnect */
+            printf("[client_net] Connection lost, starting reconnect\n");
+            g_state = CLIENT_NET_RECONNECTING;
+            g_conn_id = -1;
+            g_seat = -1;
+            g_has_new_state = false; /* stale data from before disconnect */
+            reconnect_begin(&g_reconnect, g_last_ip, g_last_port,
+                            g_room_code, g_session_token);
+            return;
         } else {
             printf("[client_net] Connection failed\n");
             g_state = CLIENT_NET_ERROR;
@@ -322,6 +425,38 @@ int32_t client_net_ping_ms(void)
 uint8_t client_net_reject_reason(void)
 {
     return g_reject_reason;
+}
+
+bool client_net_is_reconnecting(void)
+{
+    return g_state == CLIENT_NET_RECONNECTING;
+}
+
+int client_net_reconnect_attempt(void)
+{
+    return reconnect_attempt(&g_reconnect);
+}
+
+float client_net_reconnect_time_remaining(void)
+{
+    return reconnect_time_remaining(&g_reconnect);
+}
+
+bool client_net_has_error(void)
+{
+    return g_has_error;
+}
+
+bool client_net_consume_error(char *out, size_t len)
+{
+    if (!g_has_error) return false;
+    if (out && len > 0) {
+        strncpy(out, g_error_msg, len - 1);
+        out[len - 1] = '\0';
+    }
+    g_has_error = false;
+    g_error_msg[0] = '\0';
+    return true;
 }
 
 /* ================================================================

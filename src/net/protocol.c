@@ -2,7 +2,7 @@
  * @deps-implements: protocol.h
  * @deps-requires: protocol.h, core/card.h, core/input_cmd.h, core/game_state.h,
  *                 phase2/phase2_state.h, string.h, stdio.h
- * @deps-last-changed: 2026-03-23 — Step 6: Implemented InputCmd conversion functions
+ * @deps-last-changed: 2026-03-24 — Step 11: Serialization for session_token in HandshakeAck
  * ============================================================ */
 
 #include "net/protocol.h"
@@ -211,22 +211,26 @@ static int deser_handshake(NetMsgHandshake *m, const uint8_t *buf, size_t len)
 static int ser_handshake_ack(const NetMsgHandshakeAck *m, uint8_t *buf,
                              size_t len)
 {
-    if (len < 3)
+    size_t need = 3 + NET_AUTH_TOKEN_LEN;
+    if (len < need)
         return -1;
     size_t off = 0;
     write_u16(buf, &off, m->protocol_version);
     write_u8(buf, &off, m->assigned_seat);
+    write_bytes(buf, &off, m->session_token, NET_AUTH_TOKEN_LEN);
     return (int)off;
 }
 
 static int deser_handshake_ack(NetMsgHandshakeAck *m, const uint8_t *buf,
                                size_t len)
 {
-    if (len < 3)
+    size_t need = 3 + NET_AUTH_TOKEN_LEN;
+    if (len < need)
         return -1;
     size_t off = 0;
     m->protocol_version = read_u16(buf, &off);
     m->assigned_seat = read_u8(buf, &off);
+    read_bytes(buf, &off, m->session_token, NET_AUTH_TOKEN_LEN);
     return (int)off;
 }
 

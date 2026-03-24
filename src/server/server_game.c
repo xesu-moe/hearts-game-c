@@ -153,10 +153,17 @@ bool server_game_is_over(const ServerGame *sg)
  * Command Application — validates and applies human player commands
  * ================================================================ */
 
-bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
+/* Helper: write a player-facing rejection reason into err_out */
+#define REJECT(fmt, ...) do { \
+    if (err_out) snprintf(err_out, err_len, fmt, ##__VA_ARGS__); \
+    return false; \
+} while (0)
+
+bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
+                           char *err_out, size_t err_len)
 {
-    if (!sg->game_active) return false;
-    if (seat < 0 || seat >= NUM_PLAYERS) return false;
+    if (!sg->game_active) REJECT("Game is not active");
+    if (seat < 0 || seat >= NUM_PLAYERS) REJECT("Invalid seat");
 
     GameState *gs = &sg->gs;
     Phase2State *p2 = &sg->p2;
@@ -168,13 +175,13 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
             seat != sg->dealer_player) {
             printf("REJECTED: DEALER_DIR from seat %d (expected dealer %d, state %d)\n",
                    seat, sg->dealer_player, sg->pass_substate);
-            return false;
+            REJECT("Not your turn to choose direction");
         }
         {
             int dir = cmd->dealer_dir.direction;
-            if (dir < 0 || dir >= 3) { /* LEFT, RIGHT, ACROSS only */
+            if (dir < 0 || dir >= 3) {
                 printf("REJECTED: invalid direction %d\n", dir);
-                return false;
+                REJECT("Invalid pass direction");
             }
             gs->pass_direction = (PassDirection)dir;
             printf("Dealer %s picks direction: %s\n",
@@ -185,12 +192,14 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
 
     case INPUT_CMD_DEALER_AMT:
         if (sg->pass_substate != SV_PASS_DEALER_AMT ||
-            seat != sg->dealer_player) return false;
+            seat != sg->dealer_player) {
+            REJECT("Not your turn to choose amount");
+        }
         {
             int amt = cmd->dealer_amt.amount;
             if (amt < 2 || amt > 4) {
                 printf("REJECTED: invalid pass amount %d\n", amt);
-                return false;
+                REJECT("Pass amount must be 2-4");
             }
             gs->pass_card_count = amt;
             printf("Dealer %s picks amount: %d cards\n",
@@ -201,7 +210,9 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
 
     case INPUT_CMD_DEALER_CONFIRM:
         if (sg->pass_substate != SV_PASS_DEALER_CONFIRM ||
-            seat != sg->dealer_player) return false;
+            seat != sg->dealer_player) {
+            REJECT("Not your turn to confirm");
+        }
         printf("Dealer %s confirms\n", sv_player_name(seat));
         sg->pass_substate = SV_PASS_CONTRACT_DRAFT;
         sg->draft_round = 0;
@@ -209,17 +220,19 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
         return true;
 
     case INPUT_CMD_SELECT_CONTRACT:
-        if (sg->pass_substate != SV_PASS_CONTRACT_DRAFT) return false;
+        if (sg->pass_substate != SV_PASS_CONTRACT_DRAFT) {
+            REJECT("Cannot draft contracts now");
+        }
         {
             DraftState *draft = &p2->round.draft;
             if (draft->players[seat].has_picked_this_round) {
                 printf("REJECTED: seat %d already picked this draft round\n", seat);
-                return false;
+                REJECT("Already drafted this round");
             }
             int pair_idx = cmd->contract.contract_id;
             if (pair_idx < 0 || pair_idx >= draft->players[seat].available_count) {
                 printf("REJECTED: invalid pair index %d\n", pair_idx);
-                return false;
+                REJECT("Invalid contract choice");
             }
             draft_pick(draft, seat, pair_idx);
             printf("Seat %d drafted contract (pair %d)\n", seat, pair_idx);
@@ -227,10 +240,12 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
         return true;
 
     case INPUT_CMD_SELECT_CARD:
-        if (sg->pass_substate != SV_PASS_CARD_SELECT) return false;
+        if (sg->pass_substate != SV_PASS_CARD_SELECT) {
+            REJECT("Cannot select cards now");
+        }
         if (gs->pass_ready[seat]) {
             printf("REJECTED: seat %d already submitted pass cards\n", seat);
-            return false;
+            REJECT("Pass cards already submitted");
         }
         {
             Card card = cmd->card.card;
@@ -246,7 +261,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
             }
             if (!in_hand) {
                 printf("REJECTED: seat %d selected card not in hand\n", seat);
-                return false;
+                REJECT("Card not in your hand");
             }
 
             /* Count currently selected cards and check for duplicate */
@@ -272,7 +287,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
                 if (selected_count >= pc) {
                     printf("REJECTED: seat %d already selected %d cards\n",
                            seat, pc);
-                    return false;
+                    REJECT("Maximum cards already selected");
                 }
                 gs->pass_selections[seat][selected_count] = card;
                 selected_count++;
@@ -291,19 +306,22 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
         return true;
 
     case INPUT_CMD_CONFIRM:
-        /* CONFIRM during pass phase — if cards are selected but not yet
-         * submitted (shouldn't happen with auto-submit, but handle it) */
-        if (sg->pass_substate == SV_PASS_CARD_SELECT && gs->pass_ready[seat]) {
-            return true; /* Already ready, confirm is a no-op */
+        if (sg->pass_substate == SV_PASS_CARD_SELECT) {
+            if (gs->pass_ready[seat])
+                return true; /* Already ready, confirm is a no-op */
+            REJECT("Select your pass cards first");
         }
+        /* Silent rejection for other phases — CONFIRM is benign */
         return false;
 
     case INPUT_CMD_PLAY_CARD:
-        if (sg->play_substate != SV_PLAY_WAIT_TURN) return false;
+        if (sg->play_substate != SV_PLAY_WAIT_TURN) {
+            REJECT("Cannot play cards now");
+        }
         if (game_state_current_player(gs) != seat) {
             printf("REJECTED: PLAY_CARD from seat %d, not their turn (current: %d)\n",
                    seat, game_state_current_player(gs));
-            return false;
+            REJECT("Not your turn");
         }
         {
             Card card = cmd->card.card;
@@ -316,7 +334,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
             if (!sv_play_card_with_transmute(sg, seat, card)) {
                 printf("REJECTED: illegal play %s from seat %d\n",
                        card_name(card), seat);
-                return false;
+                REJECT("That card cannot be played");
             }
             sv_log_play(sg, seat);
 
@@ -328,13 +346,21 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
         return true;
 
     case INPUT_CMD_ROGUE_REVEAL:
-        if (sg->play_substate != SV_PLAY_ROGUE_WAIT) return false;
-        if (seat != p2->round.transmute_round.rogue_pending_winner) return false;
+        if (sg->play_substate != SV_PLAY_ROGUE_WAIT) {
+            REJECT("Cannot use Rogue now");
+        }
+        if (seat != p2->round.transmute_round.rogue_pending_winner) {
+            REJECT("Cannot use Rogue now");
+        }
         {
             int target = cmd->rogue_reveal.target_player;
             int hidx = cmd->rogue_reveal.hand_index;
-            if (target < 0 || target >= NUM_PLAYERS || target == seat) return false;
-            if (hidx < 0 || hidx >= gs->players[target].hand.count) return false;
+            if (target < 0 || target >= NUM_PLAYERS || target == seat) {
+                REJECT("Invalid Rogue target");
+            }
+            if (hidx < 0 || hidx >= gs->players[target].hand.count) {
+                REJECT("Invalid Rogue target");
+            }
 
             printf("  [Rogue] %s reveals %s's card: %s\n",
                    sv_player_name(seat), sv_player_name(target),
@@ -358,13 +384,21 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
         return true;
 
     case INPUT_CMD_DUEL_PICK:
-        if (sg->play_substate != SV_PLAY_DUEL_PICK_WAIT) return false;
-        if (seat != p2->round.transmute_round.duel_pending_winner) return false;
+        if (sg->play_substate != SV_PLAY_DUEL_PICK_WAIT) {
+            REJECT("Cannot pick Duel target now");
+        }
+        if (seat != p2->round.transmute_round.duel_pending_winner) {
+            REJECT("Cannot pick Duel target now");
+        }
         {
             int target = cmd->duel_pick.target_player;
             int hidx = cmd->duel_pick.hand_index;
-            if (target < 0 || target >= NUM_PLAYERS || target == seat) return false;
-            if (hidx < 0 || hidx >= gs->players[target].hand.count) return false;
+            if (target < 0 || target >= NUM_PLAYERS || target == seat) {
+                REJECT("Invalid Duel target");
+            }
+            if (hidx < 0 || hidx >= gs->players[target].hand.count) {
+                REJECT("Invalid Duel target");
+            }
 
             /* Store target for DUEL_GIVE step */
             sg->duel_target_player = target;
@@ -374,11 +408,17 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
         return true;
 
     case INPUT_CMD_DUEL_GIVE:
-        if (sg->play_substate != SV_PLAY_DUEL_GIVE_WAIT) return false;
-        if (seat != p2->round.transmute_round.duel_pending_winner) return false;
+        if (sg->play_substate != SV_PLAY_DUEL_GIVE_WAIT) {
+            REJECT("Cannot give Duel card now");
+        }
+        if (seat != p2->round.transmute_round.duel_pending_winner) {
+            REJECT("Cannot give Duel card now");
+        }
         {
             int own_idx = cmd->duel_give.hand_index;
-            if (own_idx < 0 || own_idx >= gs->players[seat].hand.count) return false;
+            if (own_idx < 0 || own_idx >= gs->players[seat].hand.count) {
+                REJECT("Invalid card to give");
+            }
 
             /* Validate stored target is still valid */
             int target = sg->duel_target_player;
@@ -388,7 +428,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
                 printf("REJECTED: duel target no longer valid\n");
                 p2->round.transmute_round.duel_pending_winner = -1;
                 sg->play_substate = SV_PLAY_WAIT_TURN;
-                return false;
+                REJECT("Duel target is no longer valid");
             }
 
             transmute_swap_between_players(gs, p2, seat, own_idx,
@@ -406,9 +446,11 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd)
     default:
         printf("REJECTED: unhandled command type %d from seat %d\n",
                cmd->type, seat);
-        return false;
+        REJECT("Unknown command");
     }
 }
+
+#undef REJECT
 
 /* ================================================================
  * Pass Phase — Sub-state machine
