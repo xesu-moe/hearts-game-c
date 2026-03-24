@@ -172,13 +172,16 @@ Hollow Hearts is designed for 4 human players but currently runs as a single-pro
 - Files: `src/lobby/lobby_main.c`, `src/lobby/lobby_net.h/c`, `src/lobby/db.h/c`
 - **Verify**: Lobby starts, creates SQLite DB, accepts connections
 
-**Step 15 — Account System**
-- Register: username + password (hashed with salt, e.g., SHA-256 or bcrypt-like)
-- Login: verify credentials, issue session token (random 32-byte hex)
-- Token validation: game server asks lobby to validate token on client connect
-- Account table: `id`, `username`, `password_hash`, `salt`, `created_at`, `last_login`
-- Files: `src/lobby/auth.h/c`
-- **Verify**: Register account → login → receive token → use token to join game server
+**Step 15 — Account System (Keypair Auth)**
+- Crypto: Ed25519 via TweetNaCl (`tweetnacl.c/h`, single-file public domain library)
+- Client generates Ed25519 keypair on first launch, stores private key locally (`~/.hollow-hearts/identity.key`)
+- Register: client sends `{username, public_key}` → lobby stores; rejects if username taken or public key already registered
+- Login (challenge-response): client sends `{username}` → lobby sends random 32-byte nonce → client signs nonce with private key → lobby verifies signature against stored public key → issues session token (random 32-byte hex)
+- Token validation: game server asks lobby to validate token on client connect (unchanged)
+- Account table: `id`, `username`, `public_key` (32 bytes), `created_at`, `last_login`
+- Client-side key management: `src/net/identity.h/c` — generate keypair, load/save from disk, sign challenges
+- Files: `src/lobby/auth.h/c`, `src/net/identity.h/c`, `src/vendor/tweetnacl.c/h`
+- **Verify**: First launch generates keypair → register with username → login via challenge-response → receive token → use token to join game server
 
 **Step 16 — Room Code System**
 - Lobby generates 4-6 char alphanumeric room codes (exclude ambiguous chars like O/0/I/l)
@@ -211,12 +214,13 @@ Hollow Hearts is designed for 4 human players but currently runs as a single-pro
 
 **Step 19 — Login & Register UI**
 - New game phase: `PHASE_LOGIN` (before `PHASE_MENU`)
-- Username/password text input fields
-- Register / Login buttons
-- Error display (wrong password, username taken, etc.)
+- Username text input field (no password — keypair auth is automatic)
+- Register / Login buttons (both use the locally stored keypair)
+- First-launch flow: auto-generate keypair, prompt for username, register
+- Error display (username taken, invalid signature, key not found, etc.)
 - On success: store token, transition to PHASE_MENU
 - Files: `src/game/login_ui.h/c`, modify `src/core/game_state.h` (add phase)
-- **Verify**: Client shows login → register → login → reaches menu
+- **Verify**: First launch → enter username → register → auto-login → reaches menu; subsequent launches → auto-login → reaches menu
 
 **Step 20 — Online Menu & Room UI**
 - Menu gets new options: "Play Online" (opens online submenu)

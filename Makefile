@@ -43,11 +43,12 @@ SERVER_DEP = $(SERVER_SRC:.c=.d)
 SERVER_BIN = hh-server
 SERVER_LDFLAGS = -lm
 
-LOBBY_SRC = $(LOBBY_ONLY_SRC) $(NET_SRC) $(VENDOR_SRC)
+LOBBY_NET_SRC = src/net/protocol.c src/net/socket.c
+LOBBY_SRC = $(LOBBY_ONLY_SRC) $(LOBBY_NET_SRC) $(VENDOR_SRC)
 LOBBY_OBJ = $(LOBBY_SRC:.c=.o)
 LOBBY_DEP = $(LOBBY_SRC:.c=.d)
 LOBBY_BIN = hh-lobby
-LOBBY_LDFLAGS = -lm
+LOBBY_LDFLAGS = -lm -lsqlite3
 
 ALL_OBJ = $(sort $(CLIENT_OBJ) $(SERVER_OBJ) $(LOBBY_OBJ))
 ALL_DEP = $(sort $(CLIENT_DEP) $(SERVER_DEP) $(LOBBY_DEP))

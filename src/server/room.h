@@ -88,6 +88,10 @@ void room_manager_init(void);
  * Returns room index (0..MAX_ROOMS-1) on success, -1 if full. */
 int room_create(void);
 
+/* Create a new room with a lobby-assigned code.
+ * Returns room index (0..MAX_ROOMS-1) on success, -1 if full. */
+int room_create_with_code(const char *code);
+
 /* Destroy a room, setting it to INACTIVE.
  * Does NOT close network connections or free ConnSlotInfo. */
 void room_destroy(int room_index);

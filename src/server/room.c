@@ -121,6 +121,47 @@ int room_create(void)
     return idx;
 }
 
+int room_create_with_code(const char *code)
+{
+    /* Find first inactive slot */
+    int idx = -1;
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (g_rooms[i].status == ROOM_INACTIVE) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        printf("room_create_with_code: no free room slots (max %d)\n", MAX_ROOMS);
+        return -1;
+    }
+
+    Room *room = &g_rooms[idx];
+    memset(room, 0, sizeof(Room));
+
+    /* Use the provided code instead of generating one */
+    strncpy(room->code, code, ROOM_CODE_LEN - 1);
+    room->code[ROOM_CODE_LEN - 1] = '\0';
+
+    /* Initialize player slots */
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        room->slots[i].status    = SLOT_EMPTY;
+        room->slots[i].conn_id   = -1;
+        room->slots[i].player_id = i;
+    }
+
+    /* Initialize game state */
+    server_game_init(&room->game);
+
+    room->status          = ROOM_WAITING;
+    room->connected_count = 0;
+    g_active_room_count++;
+
+    printf("Room %s created with lobby code (index %d, active: %d)\n",
+           room->code, idx, g_active_room_count);
+    return idx;
+}
+
 void room_destroy(int room_index)
 {
     if (room_index < 0 || room_index >= MAX_ROOMS) return;

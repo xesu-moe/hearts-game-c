@@ -3,9 +3,11 @@
  * @deps-requires: server/server_net.h (server_net_init, server_net_shutdown,
  *                 server_net_listen, server_net_update),
  *                 server/room.h (MAX_ROOMS, NET_MAX_PLAYERS),
+ *                 server/lobby_link.h (lobby_link_init, lobby_link_connect,
+ *                 lobby_link_update, lobby_link_shutdown),
  *                 core/clock.h (FIXED_DT, MAX_FRAME_DT, MAX_CATCHUP),
- *                 stdio.h, stdlib.h, signal.h, time.h
- * @deps-last-changed: 2026-03-23 — Step 6 Phase D: Network-driven main loop
+ *                 stdio.h, stdlib.h, signal.h, time.h, string.h
+ * @deps-last-changed: 2026-03-24 — Step 16: Lobby link integration
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L
@@ -13,10 +15,12 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "server_net.h"
 #include "room.h"
+#include "lobby_link.h"
 #include "core/clock.h" /* FIXED_DT, MAX_FRAME_DT, MAX_CATCHUP */
 
 #define DEFAULT_PORT 7777
@@ -49,16 +53,32 @@ static void time_sleep(double seconds)
 
 int main(int argc, char *argv[])
 {
-    /* Parse port from CLI */
+    /* Parse CLI: hh-server [port] [lobby_addr lobby_port] */
     uint16_t port = DEFAULT_PORT;
+    const char *lobby_addr = NULL;
+    uint16_t lobby_port = 0;
+    bool use_lobby = false;
+
     if (argc >= 2) {
         int p = atoi(argv[1]);
         if (p <= 0 || p > 65535) {
-            fprintf(stderr, "Usage: %s [port]\n", argv[0]);
-            fprintf(stderr, "  port: 1-65535 (default: %d)\n", DEFAULT_PORT);
+            fprintf(stderr, "Usage: %s [port] [lobby_addr lobby_port]\n", argv[0]);
+            fprintf(stderr, "  port:       1-65535 (default: %d)\n", DEFAULT_PORT);
+            fprintf(stderr, "  lobby_addr: lobby server IP (optional)\n");
+            fprintf(stderr, "  lobby_port: lobby server port (optional)\n");
             return 1;
         }
         port = (uint16_t)p;
+    }
+    if (argc >= 4) {
+        lobby_addr = argv[2];
+        int lp = atoi(argv[3]);
+        if (lp <= 0 || lp > 65535) {
+            fprintf(stderr, "Invalid lobby port: %s\n", argv[3]);
+            return 1;
+        }
+        lobby_port = (uint16_t)lp;
+        use_lobby = true;
     }
 
     /* Signal handling for graceful shutdown */
@@ -81,6 +101,12 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* Initialize lobby link if configured */
+    if (use_lobby) {
+        lobby_link_init(lobby_addr, lobby_port, "127.0.0.1", port, MAX_ROOMS);
+        lobby_link_connect();
+    }
+
     /* Fixed-timestep loop — server runs indefinitely */
     double last_time = time_now();
     double accumulator = 0.0;
@@ -100,6 +126,7 @@ int main(int argc, char *argv[])
         int ticks = 0;
         while (accumulator >= (double)FIXED_DT && ticks < MAX_CATCHUP) {
             server_net_update();
+            if (use_lobby) lobby_link_update();
             accumulator -= (double)FIXED_DT;
             ticks++;
         }
@@ -112,6 +139,7 @@ int main(int argc, char *argv[])
     }
 
     printf("\nServer interrupted (SIGINT/SIGTERM)\n");
+    if (use_lobby) lobby_link_shutdown();
     server_net_shutdown();
     printf("hh-server shutting down.\n");
     return 0;

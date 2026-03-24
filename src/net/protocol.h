@@ -8,15 +8,19 @@
  * This header does NOT include Raylib. It includes only core/card.h
  * and core/input_cmd.h (both Raylib-free) and standard library headers.
  *
- * @deps-exports: NetMsgType, NetMsg, NetCard, NetInputCmd, NetPlayerView,
+ * @deps-exports: NetMsgType (including NET_MSG_LOGIN_CHALLENGE,
+ *                NET_MSG_LOGIN_RESPONSE, NET_MSG_REGISTER_ACK),
+ *                NetMsg, NetCard, NetInputCmd, NetPlayerView,
+ *                NetMsgLoginChallenge, NetMsgLoginResponse,
  *                net_frame_write/read, net_msg_serialize/deserialize,
  *                net_build_player_view, net_input_cmd_is_relevant,
  *                net_input_cmd_to_local, net_input_cmd_from_local
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, card_to_index),
  *                 core/input_cmd.h (InputCmd, InputCmdType),
  *                 stdbool.h, stdint.h
- * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.h, reconnect.h
- * @deps-last-changed: 2026-03-24 — Step 11: Added session_token to NetMsgHandshakeAck
+ * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.h,
+ *                reconnect.h, lobby_net.c
+ * @deps-last-changed: 2026-03-24 — Step 15: Added challenge-response auth messages
  * ============================================================ */
 
 #include <stdbool.h>
@@ -48,7 +52,9 @@
 #define NET_AUTH_TOKEN_LEN     32
 #define NET_ROOM_CODE_LEN      8
 #define NET_ADDR_LEN           64
-#define NET_PASSWORD_HASH_LEN  64
+#define NET_ED25519_PK_LEN     32
+#define NET_ED25519_SIG_LEN    64
+#define NET_CHALLENGE_LEN      32
 
 /* ================================================================
  * Message Types (numbered ranges)
@@ -84,12 +90,16 @@ typedef enum NetMsgType {
     NET_MSG_QUEUE_MATCHMAKE  = 47,
     NET_MSG_QUEUE_CANCEL     = 48,
     NET_MSG_QUEUE_STATUS     = 49,
+    NET_MSG_LOGIN_CHALLENGE  = 50,  /* lobby -> client: nonce */
+    NET_MSG_LOGIN_RESPONSE   = 51,  /* client -> lobby: signature */
+    NET_MSG_REGISTER_ACK     = 52,  /* lobby -> client: success (no payload) */
 
     /* Lobby <-> Game Server messages (60-69) */
     NET_MSG_SERVER_REGISTER    = 60,
     NET_MSG_SERVER_CREATE_ROOM = 61,
     NET_MSG_SERVER_RESULT      = 62,
     NET_MSG_SERVER_HEARTBEAT   = 63,
+    NET_MSG_SERVER_ROOM_CREATED = 64, /* server -> lobby: room creation ACK */
 
     NET_MSG_TYPE_COUNT
 } NetMsgType;
@@ -246,14 +256,21 @@ typedef struct NetMsgPhaseChange {
  * ================================================================ */
 
 typedef struct NetMsgRegister {
-    char username[NET_MAX_NAME_LEN];
-    char password_hash[NET_PASSWORD_HASH_LEN];
+    char    username[NET_MAX_NAME_LEN];
+    uint8_t public_key[NET_ED25519_PK_LEN];
 } NetMsgRegister;
 
 typedef struct NetMsgLogin {
     char username[NET_MAX_NAME_LEN];
-    char password_hash[NET_PASSWORD_HASH_LEN];
 } NetMsgLogin;
+
+typedef struct NetMsgLoginChallenge {
+    uint8_t nonce[NET_CHALLENGE_LEN];
+} NetMsgLoginChallenge;
+
+typedef struct NetMsgLoginResponse {
+    uint8_t signature[NET_ED25519_SIG_LEN];
+} NetMsgLoginResponse;
 
 typedef struct NetMsgLoginAck {
     uint8_t  auth_token[NET_AUTH_TOKEN_LEN];
@@ -315,6 +332,11 @@ typedef struct NetMsgServerHeartbeat {
     uint16_t current_rooms;
     uint16_t current_players;
 } NetMsgServerHeartbeat;
+
+typedef struct NetMsgServerRoomCreated {
+    char    room_code[NET_ROOM_CODE_LEN];
+    uint8_t success; /* 1 = created, 0 = failed */
+} NetMsgServerRoomCreated;
 
 /* ================================================================
  * NetPlayerView Sub-Structs
@@ -494,6 +516,8 @@ typedef struct NetMsg {
         NetMsgRegister        reg;
         NetMsgLogin           login;
         NetMsgLoginAck        login_ack;
+        NetMsgLoginChallenge  login_challenge;
+        NetMsgLoginResponse   login_response;
         NetMsgCreateRoom      create_room;
         NetMsgJoinRoom        join_room;
         NetMsgRoomAssigned    room_assigned;
@@ -503,6 +527,7 @@ typedef struct NetMsg {
         NetMsgServerCreateRoom  server_create_room;
         NetMsgServerResult      server_result;
         NetMsgServerHeartbeat   server_heartbeat;
+        NetMsgServerRoomCreated server_room_created;
     };
 } NetMsg;
 

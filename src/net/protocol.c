@@ -1,8 +1,8 @@
 /* ============================================================
  * @deps-implements: protocol.h
  * @deps-requires: protocol.h, core/card.h, core/input_cmd.h, core/game_state.h,
- *                 phase2/phase2_state.h, string.h, stdio.h
- * @deps-last-changed: 2026-03-24 — Step 11: Serialization for session_token in HandshakeAck
+ *                 phase2/phase2_state.h, string.h, stdio.h, stdint.h
+ * @deps-last-changed: 2026-03-24 — Step 15: Added login_challenge/login_response serialization
  * ============================================================ */
 
 #include "net/protocol.h"
@@ -590,45 +590,79 @@ static int deser_phase_change(NetMsgPhaseChange *m, const uint8_t *buf,
 
 static int ser_register(const NetMsgRegister *m, uint8_t *buf, size_t len)
 {
-    size_t need = NET_MAX_NAME_LEN + NET_PASSWORD_HASH_LEN;
+    size_t need = NET_MAX_NAME_LEN + NET_ED25519_PK_LEN;
     if (len < need)
         return -1;
     size_t off = 0;
     write_bytes(buf, &off, m->username, NET_MAX_NAME_LEN);
-    write_bytes(buf, &off, m->password_hash, NET_PASSWORD_HASH_LEN);
+    write_bytes(buf, &off, m->public_key, NET_ED25519_PK_LEN);
     return (int)off;
 }
 
 static int deser_register(NetMsgRegister *m, const uint8_t *buf, size_t len)
 {
-    size_t need = NET_MAX_NAME_LEN + NET_PASSWORD_HASH_LEN;
+    size_t need = NET_MAX_NAME_LEN + NET_ED25519_PK_LEN;
     if (len < need)
         return -1;
     size_t off = 0;
     read_bytes(buf, &off, m->username, NET_MAX_NAME_LEN);
-    read_bytes(buf, &off, m->password_hash, NET_PASSWORD_HASH_LEN);
+    m->username[NET_MAX_NAME_LEN - 1] = '\0';
+    read_bytes(buf, &off, m->public_key, NET_ED25519_PK_LEN);
     return (int)off;
 }
 
 static int ser_login(const NetMsgLogin *m, uint8_t *buf, size_t len)
 {
-    size_t need = NET_MAX_NAME_LEN + NET_PASSWORD_HASH_LEN;
-    if (len < need)
+    if (len < NET_MAX_NAME_LEN)
         return -1;
     size_t off = 0;
     write_bytes(buf, &off, m->username, NET_MAX_NAME_LEN);
-    write_bytes(buf, &off, m->password_hash, NET_PASSWORD_HASH_LEN);
     return (int)off;
 }
 
 static int deser_login(NetMsgLogin *m, const uint8_t *buf, size_t len)
 {
-    size_t need = NET_MAX_NAME_LEN + NET_PASSWORD_HASH_LEN;
-    if (len < need)
+    if (len < NET_MAX_NAME_LEN)
         return -1;
     size_t off = 0;
     read_bytes(buf, &off, m->username, NET_MAX_NAME_LEN);
-    read_bytes(buf, &off, m->password_hash, NET_PASSWORD_HASH_LEN);
+    m->username[NET_MAX_NAME_LEN - 1] = '\0';
+    return (int)off;
+}
+
+static int ser_login_challenge(const NetMsgLoginChallenge *m, uint8_t *buf, size_t len)
+{
+    if (len < NET_CHALLENGE_LEN)
+        return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->nonce, NET_CHALLENGE_LEN);
+    return (int)off;
+}
+
+static int deser_login_challenge(NetMsgLoginChallenge *m, const uint8_t *buf, size_t len)
+{
+    if (len < NET_CHALLENGE_LEN)
+        return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->nonce, NET_CHALLENGE_LEN);
+    return (int)off;
+}
+
+static int ser_login_response(const NetMsgLoginResponse *m, uint8_t *buf, size_t len)
+{
+    if (len < NET_ED25519_SIG_LEN)
+        return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->signature, NET_ED25519_SIG_LEN);
+    return (int)off;
+}
+
+static int deser_login_response(NetMsgLoginResponse *m, const uint8_t *buf, size_t len)
+{
+    if (len < NET_ED25519_SIG_LEN)
+        return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->signature, NET_ED25519_SIG_LEN);
     return (int)off;
 }
 
@@ -880,6 +914,30 @@ static int deser_server_heartbeat(NetMsgServerHeartbeat *m, const uint8_t *buf,
     size_t off = 0;
     m->current_rooms = read_u16(buf, &off);
     m->current_players = read_u16(buf, &off);
+    return (int)off;
+}
+
+static int ser_server_room_created(const NetMsgServerRoomCreated *m,
+                                   uint8_t *buf, size_t len)
+{
+    size_t need = NET_ROOM_CODE_LEN + 1;
+    if (len < need)
+        return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->room_code, NET_ROOM_CODE_LEN);
+    write_u8(buf, &off, m->success);
+    return (int)off;
+}
+
+static int deser_server_room_created(NetMsgServerRoomCreated *m,
+                                     const uint8_t *buf, size_t len)
+{
+    size_t need = NET_ROOM_CODE_LEN + 1;
+    if (len < need)
+        return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->room_code, NET_ROOM_CODE_LEN);
+    m->success = read_u8(buf, &off);
     return (int)off;
 }
 
@@ -1380,8 +1438,15 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
     case NET_MSG_LOGIN_ACK:
         n = ser_login_ack(&msg->login_ack, payload, remaining);
         break;
+    case NET_MSG_LOGIN_CHALLENGE:
+        n = ser_login_challenge(&msg->login_challenge, payload, remaining);
+        break;
+    case NET_MSG_LOGIN_RESPONSE:
+        n = ser_login_response(&msg->login_response, payload, remaining);
+        break;
     case NET_MSG_LOGOUT:
     case NET_MSG_QUEUE_CANCEL:
+    case NET_MSG_REGISTER_ACK:
         n = 0; /* no payload */
         break;
     case NET_MSG_CREATE_ROOM:
@@ -1413,6 +1478,10 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
         break;
     case NET_MSG_SERVER_HEARTBEAT:
         n = ser_server_heartbeat(&msg->server_heartbeat, payload, remaining);
+        break;
+    case NET_MSG_SERVER_ROOM_CREATED:
+        n = ser_server_room_created(&msg->server_room_created, payload,
+                                    remaining);
         break;
 
     default:
@@ -1489,8 +1558,15 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
     case NET_MSG_LOGIN_ACK:
         n = deser_login_ack(&msg->login_ack, payload, remaining);
         break;
+    case NET_MSG_LOGIN_CHALLENGE:
+        n = deser_login_challenge(&msg->login_challenge, payload, remaining);
+        break;
+    case NET_MSG_LOGIN_RESPONSE:
+        n = deser_login_response(&msg->login_response, payload, remaining);
+        break;
     case NET_MSG_LOGOUT:
     case NET_MSG_QUEUE_CANCEL:
+    case NET_MSG_REGISTER_ACK:
         n = 0;
         break;
     case NET_MSG_CREATE_ROOM:
@@ -1520,6 +1596,10 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         break;
     case NET_MSG_SERVER_HEARTBEAT:
         n = deser_server_heartbeat(&msg->server_heartbeat, payload, remaining);
+        break;
+    case NET_MSG_SERVER_ROOM_CREATED:
+        n = deser_server_room_created(&msg->server_room_created, payload,
+                                      remaining);
         break;
     default:
         return -1;
