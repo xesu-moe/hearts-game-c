@@ -14,7 +14,7 @@
  *                 core/settings.h (GameSettings - forward decl),
  *                 phase2/phase2_state.h (Phase2State, DraftState)
  * @deps-used-by: update.c, process_input.c, main.c
- * @deps-last-changed: 2026-03-22 — Added PASS_REVEAL_DURATION, GameSettings params to pass_start_receive_anim/pass_subphase_update
+ * @deps-last-changed: 2026-03-23 — Step 10: Added bool online parameter to pass_subphase_update
  * ============================================================ */
 
 #include <stdbool.h>
@@ -87,7 +87,8 @@ bool pass_receive_animations_done(const RenderState *rs);
 
 void pass_subphase_update(PassPhaseState *pps, GameState *gs,
                           RenderState *rs, Phase2State *p2,
-                          const GameSettings *settings, float dt);
+                          const GameSettings *settings, float dt,
+                          bool online);
 
 void setup_draft_ui(RenderState *rs, Phase2State *p2);
 

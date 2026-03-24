@@ -1,15 +1,15 @@
+/* ============================================================
+ * @deps-implements: phase2_defs.h
+ * @deps-requires: phase2_defs.h, transmutation.h (TransmuteEffect), json_parse.h, stdio.h, string.h
+ * @deps-last-changed: 2026-03-22 — Removed raylib.h, replaced TraceLog with fprintf
+ * ============================================================ */
+
 #include "phase2_defs.h"
 
 #include <string.h>
+#include <stdio.h>
 
 #include "json_parse.h"
-#include <raylib.h>
-
-/* ============================================================
- * @deps-implements: phase2_defs.h
- * @deps-requires: phase2_defs.h, transmutation.h, json_parse.h, raylib.h
- * @deps-last-changed: 2026-03-22 — Removed vendetta defs
- * ============================================================ */
 
 /* --- Global Definition Tables --- */
 
@@ -47,10 +47,10 @@ void phase2_defs_init(void)
                          g_character_defs, MAX_CHARACTER_DEFS,
                          &g_character_def_count);
 
-    TraceLog(LOG_INFO, "PHASE2: Loaded %d contracts, "
-             "%d transmutations, %d characters",
-             g_contract_def_count,
-             g_transmutation_def_count, g_character_def_count);
+    fprintf(stderr, "[INFO] PHASE2: Loaded %d contracts, "
+                    "%d transmutations, %d characters\n",
+            g_contract_def_count,
+            g_transmutation_def_count, g_character_def_count);
 }
 
 /* --- Lookup Functions --- */

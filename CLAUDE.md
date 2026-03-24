@@ -2,55 +2,46 @@
 
 A Hearts modification, built in C with Raylib. Players engage with Contracts, Vendettas, and Transmutation Cards that add strategic depth to the classic trick-taking game.
 
-**THIS GAME IS AIMED TO BE PLAYED BY 4 HUMANS. NETWORKING WILL BE ADDED IN THE FUTURE. DO NOT CODE AI LOGIC AS A PRIORITY WHILE NEGLECTING 4-HUMAN INTERACTION LOGIC.**
+**THIS GAME IS FOR 4 HUMAN PLAYERS OVER THE NETWORK. The server is authoritative — never trust the client.**
 
 ## Game Vision & Roadmap
 
-### Phase 1: Vanilla Hearts (current)
+### Phase 1: Vanilla Hearts — COMPLETE
 
-Build a fully working standard Hearts game first. All engine systems must be designed with Phase 2 in mind, but no modification mechanics are implemented until vanilla Hearts is complete and stable.
+Standard Hearts game with full trick-taking, scoring, pass phase, and game-over detection. All engine systems designed with extension points for Phase 2.
 
-### Phase 2: Hollow Hearts Modifications
+### Phase 2: Hollow Hearts Modifications — COMPLETE
 
-Once vanilla Hearts is done, integrate the following systems:
+- **Contracts**: Per-round secret missions drafted from pairs. Completing grants Transmutation Cards.
+- **Transmutation Cards**: Persistent inventory, applied during pass phase. Special properties (ALWAYS_WIN, ALWAYS_LOSE, multi-suit, fog, custom points). Definitions in `assets/defs/transmutations.json`.
+- **Dealer**: Highest scorer becomes Dealer, chooses pass direction and amount.
+- **Phase 2 effects**: Rogue (reveal opponent card), Duel (exchange cards), Shield, Curse, Anchor, Binding, Parasite, Bounty, Inversion, Mirror.
 
-#### Contracts (Per-Round Secret Missions)
+### Phase 3: Networking — CURRENT
 
-- Each round, players secretly choose a Contract (e.g., "Don't score any heart", "Obtain 4 club cards")
-- Contracts are hidden from other players unless revealed
-- Completing a Contract grants Transmutation Cards as rewards
+Online multiplayer with dedicated servers, lobby/matchmaking, accounts, and anti-cheat. See **`NETWORKING.md`** for the full 22-step macro-plan.
 
-#### Transmutation Cards
-
-- Earned as rewards from completed Contracts (stored in a persistent per-player inventory)
-- During the card pass phase, a player can transmute a hand card into a special card (e.g., an always-win joker, a duplicate Queen of Spades)
-- Transmuted cards can be kept for personal use or passed to opponents as poison (negative transmutations)
-- Special properties: ALWAYS_WIN (beats everything), ALWAYS_LOSE (loses to everything), multi-suit masks (can follow multiple suits)
-- Custom point values override normal card scoring
-- Definitions loaded from `assets/defs/transmutations.json`
-
-#### Dealer
-
-- The player who scored the most points in the previous round becomes the Dealer
-- The Dealer chooses the pass direction (left, front/across, right) and pass amount (0, 2, 3, or 4 cards) for the current round
-- Amount 0 means no card passing (contract draft still happens)
-- Round 1 has no dealer (defaults: left, 3 cards)
+**Architecture**: Dedicated Game Server (`hh-server`) + Lobby Server (`hh-lobby`) + Client (`hollow-hearts`). Server code never ships to players. Server never sends opponents' hidden card identities to clients.
 
 ### Engine Design Principle
 
-**Build vanilla, architect for mods.** Every system (input, game state, scoring, phases) must have clear extension points for Phase 2 mechanics. Use the Command Pattern for actions, keep game rules data-driven where possible, and ensure the phase FSM can accommodate new phases (contract pick, vendetta, transmutation) without rewriting the core loop.
+**Server-authoritative, client-rendering.** The game server owns all game state and validates every action. Clients send `InputCmd` messages and receive state updates. The existing Command Pattern (`InputCmd` tagged union with `source_player`) maps directly to network messages. The `core/` layer (no Raylib dependencies) runs headless on the server.
 
 ## Build
 
 ```sh
-make          # release build
-make debug    # debug build (-DDEBUG -g -O0, enables debug cheats)
+make          # client release build (hollow-hearts)
+make debug    # client debug build (-DDEBUG -g -O0, enables debug cheats)
+make server   # game server (hh-server) — no Raylib
+make lobby    # lobby server (hh-lobby) — no Raylib
 ```
 
 ## Tech
 
 - Language: C (C11)
-- Graphics: Raylib
+- Graphics: Raylib (client only)
+- Networking: POSIX TCP sockets
+- Database: SQLite (lobby server only)
 - Build: Make
 
 ## Conventions
@@ -92,8 +83,8 @@ The main agent executes the plan from `@game-developer`, constrained by the Rout
 - Follow the checklist item by item
 - Create/modify files as specified in the plan
 - Leverage auto-triggered C skills (`c-data-structures`, `c-memory-management`, `c-systems-programming`) for correct patterns — write it right the first time to minimize audit rework
-- Use **Context7** MCP server to verify Raylib API signatures before calling them
-- Build with `make` to verify compilation
+- Use **Context7** MCP server to verify Raylib API signatures before calling them (client code only)
+- Build with `make` / `make server` / `make lobby` to verify compilation
 
 ### Step 4: Map Dependencies — `@dependency-mapper`
 
@@ -140,20 +131,42 @@ Main Agent            →  Implementation + `make`
 ```
 hollow-hearts/
 ├── CLAUDE.md              # This file
-├── Makefile               # Build system
+├── NETWORKING.md          # Full networking macro-plan (22 steps)
+├── Makefile               # Build system (client, server, lobby targets)
 ├── src/
-│   ├── main.c             # Entry point, top-level loop wiring
-│   ├── core/              # Pure game logic — no Raylib, no rendering
+│   ├── main.c             # Client entry point, top-level loop wiring
+│   ├── core/              # Pure game logic — no Raylib, no rendering, no networking
 │   │   ├── card.c/h       # Card type, suit/rank helpers, point values
 │   │   ├── hand.c/h       # Hand container (add, remove, sort, move, query)
 │   │   ├── deck.c/h       # Deck (shuffle, deal)
 │   │   ├── trick.c/h      # Trick (play card, determine winner)
 │   │   ├── player.c/h     # Player struct
 │   │   ├── game_state.c/h # GameState, phase enum, round/trick state
-│   │   ├── input.c/h      # Input abstraction (poll, command queue)
+│   │   ├── input.c/h      # Input abstraction (poll, command queue — InputCmd tagged union)
 │   │   ├── clock.c/h      # Game clock / time scaling
 │   │   └── settings.c/h   # Persistent game settings
-│   ├── render/            # Everything visual — owns Raylib calls
+│   ├── net/               # Shared networking code (client + server + lobby)
+│   │   ├── protocol.c/h   # Message types, binary serialization, framing
+│   │   ├── socket.c/h     # Non-blocking TCP wrappers, poll-based multiplexing
+│   │   ├── client_net.c/h # Client connection manager (connect, handshake, send/recv)
+│   │   ├── cmd_send.c/h   # Serialize and send InputCmds to server
+│   │   ├── state_recv.c/h # Receive and apply server state updates
+│   │   └── reconnect.c/h  # Reconnection with exponential backoff
+│   ├── server/            # Game server (hh-server) — headless, no Raylib
+│   │   ├── server_main.c  # Server entry point, headless game loop
+│   │   ├── server_game.c/h # Server-side game tick, command validation
+│   │   ├── server_net.c/h # Accept connections, route messages, broadcast state
+│   │   ├── room.c/h       # Room management (create, join, leave, lifecycle)
+│   │   └── lobby_link.c/h # Communication with lobby server
+│   ├── lobby/             # Lobby server (hh-lobby) — headless, no Raylib
+│   │   ├── lobby_main.c   # Lobby entry point
+│   │   ├── lobby_net.c/h  # Accept connections, route lobby messages
+│   │   ├── db.c/h         # SQLite setup, migrations, queries
+│   │   ├── auth.c/h       # Account registration, login, token management
+│   │   ├── rooms.c/h      # Room code generation, tracking, expiration
+│   │   ├── matchmaking.c/h # Matchmaking queue (FIFO, future ELO-based)
+│   │   └── server_registry.c/h # Track active game servers, load balancing
+│   ├── render/            # Everything visual — owns Raylib calls (client only)
 │   │   ├── render.c/h     # RenderState, sync, update, draw, hit-testing, drag API
 │   │   ├── anim.c/h       # Animation engine (start, update, toss, bezier, timing constants)
 │   │   ├── easing.c/h     # Easing math (ease_apply, lerpf)
@@ -161,8 +174,8 @@ hollow-hearts/
 │   │   ├── card_dimens.h  # Shared card dimension constants (CARD_WIDTH_REF, etc.)
 │   │   ├── card_render.c/h # Card sprite drawing (face, back, procedural fallback)
 │   │   └── particle.c/h   # Particle system (init, spawn, update, draw)
-│   ├── game/              # Game flow — bridges core logic and render
-│   │   ├── ai.c/h         # AI decision logic (pass selection, card play)
+│   ├── game/              # Game flow — bridges core logic and render (client only)
+│   │   ├── ai.c/h         # AI decision logic (used by server for disconnected players)
 │   │   ├── process_input.c/h # Translates mouse/key events into InputCmds
 │   │   ├── update.c/h     # Per-frame game state updates
 │   │   ├── turn_flow.c/h  # Turn/trick FSM (FlowStep)
@@ -170,7 +183,9 @@ hollow-hearts/
 │   │   ├── pass_phase.c/h # Passing phase rules
 │   │   ├── phase_transitions.c/h # Phase change orchestration
 │   │   ├── info_sync.c/h  # Syncs info panel / playability to RenderState
-│   │   └── settings_ui.c/h # Settings screen logic
+│   │   ├── settings_ui.c/h # Settings screen logic
+│   │   ├── login_ui.c/h   # Login/register screen
+│   │   └── online_ui.c/h  # Online menu, room browser, matchmaking UI
 │   ├── audio/
 │   │   └── audio.c/h      # Sound effects and music
 │   ├── phase2/            # Hollow Hearts modification systems
@@ -223,10 +238,58 @@ Each file has a single responsibility. Do not leak logic across boundaries.
 
 ### `core/` rules
 
-`core/` is pure game logic. No Raylib includes, no render types, no visual concepts. If a function needs screen positions or card visuals, it does not belong in `core/`.
+`core/` is pure game logic. No Raylib includes, no render types, no visual concepts, no network I/O. If a function needs screen positions, card visuals, or socket operations, it does not belong in `core/`. Both the client and the server link `core/`.
+
+### `net/` rules
+
+| File | Owns | Does NOT contain |
+|------|------|------------------|
+| **protocol.c** | Message type enum, binary serialization/deserialization, length-prefix framing | Socket I/O, game logic, rendering |
+| **socket.c** | Non-blocking TCP wrappers, poll-based multiplexing, connection state machine, ring buffers | Message semantics, game state, protocol interpretation |
+| **client_net.c** | Client-side connection lifecycle (connect, handshake, reconnect), send/recv integration with main loop | Server logic, rendering, game rules |
+| **cmd_send.c** | Serialize `InputCmd` and send to server, filter rendering-only commands | Command processing, game state mutation |
+| **state_recv.c** | Receive `MSG_STATE_UPDATE`, apply to local `GameState`, trigger `sync_needed` | Rendering, command generation |
+
+**Key principle:** `net/` handles the wire protocol and connection management. It serializes/deserializes `InputCmd` and game state but never makes game logic decisions. `protocol.c` defines the format, `socket.c` handles transport, other files handle client-specific flows.
+
+### `server/` rules
+
+| File | Owns | Does NOT contain |
+|------|------|------------------|
+| **server_main.c** | Server entry point, headless fixed-timestep loop, signal handling | Raylib, rendering, client UI |
+| **server_game.c** | Server-side game tick, InputCmd validation, state broadcast decisions | Socket I/O (uses `net/`), rendering |
+| **server_net.c** | Accept connections, authenticate tokens, route messages to rooms, broadcast | Game logic, room lifecycle |
+| **room.c** | Room struct, create/join/leave, player slot management, disconnect timers, AI fallback | Networking, protocol details |
+| **lobby_link.c** | Communication with lobby server (register, report results, heartbeat) | Game logic, room management |
+
+**Key principle:** `server/` orchestrates game rooms and validates all player actions. It links `core/` for game logic and `net/` for transport. It never includes Raylib headers. The server is the single source of truth — it never trusts client-provided game state.
+
+### `lobby/` rules
+
+| File | Owns | Does NOT contain |
+|------|------|------------------|
+| **lobby_main.c** | Lobby entry point, event loop | Game logic, rendering |
+| **db.c** | SQLite connection, schema migrations, parameterized queries | Business logic, networking |
+| **auth.c** | Registration, login, password hashing, token generation/validation | Database schema, networking |
+| **rooms.c** | Room code generation, code→server mapping, expiration | Game logic, matchmaking |
+| **matchmaking.c** | Queue management, player grouping, room creation triggers | Authentication, database |
+| **server_registry.c** | Track active game servers, health checks, load-based selection | Game logic, authentication |
+
+**Key principle:** `lobby/` manages player identity and game discovery. It never touches game state or `core/`. It communicates with game servers via `net/` protocol to create rooms and receive results.
+
+### Anti-cheat boundary (critical)
+
+The server MUST NOT send opponents' hidden card identities to any client. State updates include:
+- **Own hand**: full card identities
+- **Opponents' hands**: card count only (no suit/rank)
+- **Current trick**: face-up cards only (all players can see played cards)
+- **Scores, phase, turn info**: public knowledge
+
+This is enforced in `server_game.c` when building state update messages.
 
 ## Reference Resources
 
+- **Networking plan** — `NETWORKING.md` at project root. The full 22-step macro-plan for Phase 3. Reference for current step, architecture decisions, and file assignments.
 - **Architecture docs** — `.claude/docs/00_INDEX.md` for the full index. Covers subsystem lifecycle, memory management, game loops, events, input — all adapted for C with Raylib.
-- **Context7 MCP** — Global MCP server for Raylib API reference. Use to verify function signatures, parameter order, and return types. Available to main agent and all subagents.
+- **Context7 MCP** — Global MCP server for Raylib API reference. Use to verify function signatures, parameter order, and return types. Available to main agent and all subagents. (Client code only — server/lobby don't use Raylib.)
 - **C Skills** — Three auto-triggered skills (`c-data-structures`, `c-memory-management`, `c-systems-programming`) provide C patterns and best practices. Used by the main agent during implementation, not needed by code-auditor (covered by its prompt).

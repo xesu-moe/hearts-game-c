@@ -275,7 +275,7 @@ void flow_init(TurnFlow *flow)
 
 void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                  Phase2State *p2, GameSettings *settings,
-                 PlayPhaseState *pps, float dt)
+                 PlayPhaseState *pps, float dt, bool online)
 {
     if (gs->phase != PHASE_PLAYING) {
         flow->step = FLOW_IDLE;
@@ -298,7 +298,16 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
         if (gs->current_trick.num_played == 0)
             flow->hearts_broken_at_trick_start = gs->hearts_broken;
 
-        {
+        if (online) {
+            /* Online: only enter WAITING_FOR_HUMAN when it's our turn.
+             * Server handles AI plays — client detects new cards in trick
+             * via state_recv and triggers FLOW_CARD_ANIMATING from there. */
+            int current = game_state_current_player(gs);
+            if (current == 0) {
+                flow->step = FLOW_WAITING_FOR_HUMAN;
+                flow->prev_trick_count = gs->current_trick.num_played;
+            }
+        } else {
             int current = game_state_current_player(gs);
             if (current == 0) {
                 flow->step = FLOW_WAITING_FOR_HUMAN;
@@ -315,9 +324,10 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_WAITING_FOR_HUMAN: {
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
-        flow->turn_timer -= dt;
+        if (!online)
+            flow->turn_timer -= dt;
 
-        if (flow->turn_timer <= 0.0f) {
+        if (!online && flow->turn_timer <= 0.0f) {
             render_cancel_drag(rs);
             ai_play_card(gs, rs, p2, pps, 0);
         }
@@ -332,6 +342,12 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
     }
 
     case FLOW_AI_THINKING: {
+        /* Online: should never enter this state (server handles AI).
+         * Fall back to IDLE if we somehow got here. */
+        if (online) {
+            flow->step = FLOW_IDLE;
+            break;
+        }
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
         flow->turn_timer -= dt;
         if (flow->timer <= 0.0f) {
@@ -440,6 +456,15 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_TRICK_COLLECTING:
         if (flow->timer <= 0.0f) {
+            if (online) {
+                /* Online: server already resolved trick, updated scores.
+                 * Just transition to next state. */
+                rs->sync_needed = true;
+                flow->step = FLOW_BETWEEN_TRICKS;
+                flow->timer = FLOW_BETWEEN_TRICKS_TIME *
+                              settings_anim_multiplier(settings->anim_speed);
+                break;
+            }
             if (p2->enabled && trick_is_complete(&gs->current_trick)) {
                 Trick saved_trick = gs->current_trick;
                 TrickTransmuteInfo saved_tti = pps->current_tti;
@@ -674,7 +699,8 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             snprintf(msg, sizeof(msg), "Rogue: You reveal %s's card!",
                      p2_player_name(rp));
             rogue_launch_flight(flow, rs, rp, ri, msg, anim_m);
-        } else if (flow->timer <= 0.0f) {
+        } else if (!online && flow->timer <= 0.0f) {
+            /* Offline: auto-choose on timeout. Online: server handles. */
             int out_p = -1, out_idx = -1;
             ai_rogue_choose(gs, flow->rogue_winner, &out_p, &out_idx);
             flow->rogue_reveal_player = out_p;
@@ -774,8 +800,8 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             rs->opponent_hover_active = false;
             flow->step = FLOW_DUEL_ANIM_TO_CENTER;
             flow->timer = ANIM_EFFECT_FLIGHT_DURATION * anim_m;
-        } else if (flow->timer <= 0.0f) {
-            /* Timeout: skip effect */
+        } else if (!online && flow->timer <= 0.0f) {
+            /* Offline: timeout skip. Online: server handles. */
             rs->opponent_hover_active = false;
             flow->duel_winner = -1;
             render_chat_log_push(rs, "Duel: Time's up!");
@@ -920,8 +946,8 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             render_chat_log_push(rs, "Duel: Cards exchanged!");
             flow->step = FLOW_DUEL_ANIM_EXCHANGE;
             flow->timer = ANIM_DUEL_EXCHANGE_DURATION * anim_m;
-        } else if (flow->timer <= 0.0f) {
-            /* Timeout: return card */
+        } else if (!online && flow->timer <= 0.0f) {
+            /* Offline: timeout return card. Online: server handles. */
             if (flow->duel_staged_cv_idx >= 0 &&
                 flow->duel_staged_cv_idx < rs->card_count) {
                 int dp = flow->duel_target_player;

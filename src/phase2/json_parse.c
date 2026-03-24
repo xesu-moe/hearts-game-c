@@ -1,17 +1,17 @@
-#include "json_parse.h"
-
-#include <stdio.h>
-#include <string.h>
-
-#include "vendor/cJSON.h"
-#include <raylib.h>
-
 /* ============================================================
  * @deps-implements: json_parse.h
  * @deps-requires: json_parse.h, contract.h (ConditionType), transmutation.h (TransmuteEffect, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN),
- *                 vendor/cJSON.h, raylib.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-21 — Added JOKER_LEAD_WIN to TRANSMUTE_EFFECT_MAP
+ *                 vendor/cJSON.h, stdio.h, stdlib.h, string.h
+ * @deps-last-changed: 2026-03-22 — Removed raylib.h LoadFileText, replaced with fopen/fread/fclose
  * ============================================================ */
+
+#include "json_parse.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "vendor/cJSON.h"
 
 /* ----------------------------------------------------------------
  * Enum mapping tables
@@ -128,7 +128,7 @@ int enum_from_string(const EnumMapping *table, int table_size,
             return table[i].value;
         }
     }
-    TraceLog(LOG_WARNING, "JSON: Unknown enum value \"%s\"", name);
+    fprintf(stderr, "JSON: Unknown enum value \"%s\"\n", name);
     return default_val;
 }
 
@@ -226,21 +226,45 @@ static ConditionParam parse_condition_param(const cJSON *obj)
     return cp;
 }
 
-/* Load file text via Raylib, parse as JSON root. Caller must cJSON_Delete().
+/* Read entire file into malloc'd buffer. Returns NULL on failure. */
+static char *read_file_text(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (len <= 0) {
+        fclose(f);
+        return NULL;
+    }
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    fread(buf, 1, (size_t)len, f);
+    buf[len] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* Load file text, parse as JSON root. Caller must cJSON_Delete().
  * Returns NULL on failure (logs error). file_text is set for caller to free. */
 static cJSON *load_json_file(const char *path, char **file_text)
 {
-    *file_text = LoadFileText(path);
+    *file_text = read_file_text(path);
     if (!*file_text) {
-        TraceLog(LOG_WARNING, "JSON: Could not load file \"%s\"", path);
+        fprintf(stderr, "JSON: Could not load file \"%s\"\n", path);
         return NULL;
     }
 
     cJSON *root = cJSON_Parse(*file_text);
     if (!root) {
-        TraceLog(LOG_ERROR, "JSON: Parse error in \"%s\" near: %.20s",
+        fprintf(stderr, "JSON: Parse error in \"%s\" near: %.20s\n",
                  path, cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "(unknown)");
-        UnloadFileText(*file_text);
+        free(*file_text);
         *file_text = NULL;
         return NULL;
     }
@@ -261,9 +285,9 @@ bool json_load_contracts(const char *path, ContractDef *defs,
 
     const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "contracts");
     if (!cJSON_IsArray(arr)) {
-        TraceLog(LOG_ERROR, "JSON: \"contracts\" array not found in %s", path);
+        fprintf(stderr, "JSON: \"contracts\" array not found in %s\n", path);
         cJSON_Delete(root);
-        UnloadFileText(file_text);
+        free(file_text);
         return false;
     }
 
@@ -272,7 +296,7 @@ bool json_load_contracts(const char *path, ContractDef *defs,
     cJSON_ArrayForEach(item, arr)
     {
         if (count >= max_defs) {
-            TraceLog(LOG_WARNING, "JSON: Contract limit %d reached, ignoring extras", max_defs);
+            fprintf(stderr, "JSON: Contract limit %d reached, ignoring extras\n", max_defs);
             break;
         }
 
@@ -335,7 +359,7 @@ bool json_load_contracts(const char *path, ContractDef *defs,
 
     *out_count = count;
     cJSON_Delete(root);
-    UnloadFileText(file_text);
+    free(file_text);
     return true;
 }
 
@@ -353,9 +377,9 @@ bool json_load_transmutations(const char *path, TransmutationDef *defs,
 
     const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "transmutations");
     if (!cJSON_IsArray(arr)) {
-        TraceLog(LOG_ERROR, "JSON: \"transmutations\" array not found in %s", path);
+        fprintf(stderr, "JSON: \"transmutations\" array not found in %s\n", path);
         cJSON_Delete(root);
-        UnloadFileText(file_text);
+        free(file_text);
         return false;
     }
 
@@ -364,7 +388,7 @@ bool json_load_transmutations(const char *path, TransmutationDef *defs,
     cJSON_ArrayForEach(item, arr)
     {
         if (count >= max_defs) {
-            TraceLog(LOG_WARNING, "JSON: Transmutation limit %d reached", max_defs);
+            fprintf(stderr, "JSON: Transmutation limit %d reached\n", max_defs);
             break;
         }
 
@@ -421,7 +445,7 @@ bool json_load_transmutations(const char *path, TransmutationDef *defs,
 
     *out_count = count;
     cJSON_Delete(root);
-    UnloadFileText(file_text);
+    free(file_text);
     return true;
 }
 
@@ -439,9 +463,9 @@ bool json_load_characters(const char *path, CharacterDef *defs,
 
     const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "characters");
     if (!cJSON_IsArray(arr)) {
-        TraceLog(LOG_ERROR, "JSON: \"characters\" array not found in %s", path);
+        fprintf(stderr, "JSON: \"characters\" array not found in %s\n", path);
         cJSON_Delete(root);
-        UnloadFileText(file_text);
+        free(file_text);
         return false;
     }
 
@@ -450,7 +474,7 @@ bool json_load_characters(const char *path, CharacterDef *defs,
     cJSON_ArrayForEach(item, arr)
     {
         if (count >= max_defs) {
-            TraceLog(LOG_WARNING, "JSON: Character limit %d reached", max_defs);
+            fprintf(stderr, "JSON: Character limit %d reached\n", max_defs);
             break;
         }
 
@@ -510,6 +534,6 @@ bool json_load_characters(const char *path, CharacterDef *defs,
 
     *out_count = count;
     cJSON_Delete(root);
-    UnloadFileText(file_text);
+    free(file_text);
     return true;
 }

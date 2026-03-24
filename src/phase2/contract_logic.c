@@ -2,15 +2,15 @@
  * @deps-implements: contract_logic.h
  * @deps-requires: contract_logic.h, phase2_state.h, phase2_defs.h,
  *                 transmutation_logic.h (transmute_round_state_init),
- *                 core/trick.h, core/card.h, raylib.h, string.h
- * @deps-last-changed: 2026-03-21 — Replaced King-based selection with drafting system
+ *                 core/trick.h, core/card.h, stdlib.h, string.h
+ * @deps-last-changed: 2026-03-22 — Replaced raylib.h with stdlib.h (rand)
  * ============================================================ */
 
 #include "contract_logic.h"
 
 #include <string.h>
 
-#include <raylib.h>
+#include <stdlib.h>
 
 #include "phase2_defs.h"
 #include "transmutation_logic.h"
@@ -153,7 +153,7 @@ void draft_generate_pool(DraftState *draft)
     for (int t = 0; t < 3 && sel_count < DRAFT_POOL_SIZE; t++) {
         /* Fisher-Yates shuffle */
         for (int i = tier_counts[t] - 1; i > 0; i--) {
-            int j = GetRandomValue(0, i);
+            int j = (rand() % (i + 1));
             int tmp = tier_ids[t][i];
             tier_ids[t][i] = tier_ids[t][j];
             tier_ids[t][j] = tmp;
@@ -193,7 +193,7 @@ void draft_generate_pool(DraftState *draft)
 
     /* Fisher-Yates shuffle */
     for (int i = tmute_total - 1; i > 0; i--) {
-        int j = GetRandomValue(0, i);
+        int j = (rand() % (i + 1));
         int tmp = all_transmutes[i];
         all_transmutes[i] = all_transmutes[j];
         all_transmutes[j] = tmp;
@@ -247,7 +247,7 @@ void draft_ai_pick(DraftState *draft, int player_id)
     DraftPlayerState *ps = &draft->players[player_id];
     if (ps->has_picked_this_round || ps->available_count <= 0) return;
 
-    int idx = GetRandomValue(0, ps->available_count - 1);
+    int idx = (rand() % ps->available_count);
     draft_pick(draft, player_id, idx);
 }
 

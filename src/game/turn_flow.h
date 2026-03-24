@@ -11,7 +11,7 @@
  *                 core/settings.h (GameSettings), phase2/phase2_state.h,
  *                 play_phase.h (PlayPhaseState)
  * @deps-used-by: turn_flow.c, process_input.c, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-21 — Added FLOW_FOG_REVEAL enum value and
+ * @deps-last-changed: 2026-03-23 — Step 10: Added bool online parameter to flow_update
  *                     timing constants for fog reveal transition
  * ============================================================ */
 
@@ -82,6 +82,6 @@ void flow_init(TurnFlow *flow);
 
 void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                  Phase2State *p2, GameSettings *settings,
-                 PlayPhaseState *pps, float dt);
+                 PlayPhaseState *pps, float dt, bool online);
 
 #endif /* TURN_FLOW_H */

@@ -1,11 +1,12 @@
 /* ============================================================
  * @deps-implements: deck.h
- * @deps-requires: deck.h (Deck, Hand, card_from_index, hand_add_card, DECK_SIZE, NUM_PLAYERS, CARD_NONE), raylib.h (GetRandomValue)
- * @deps-last-changed: 2026-03-15 — Directory restructure
+ * @deps-requires: deck.h (Deck, Hand, card_from_index, hand_add_card, DECK_SIZE, NUM_PLAYERS, CARD_NONE)
+ * @deps-last-changed: 2026-03-22 — Replaced GetRandomValue with rand() for server compatibility
  * ============================================================ */
 
 #include "deck.h"
-#include "raylib.h"
+
+#include <stdlib.h>
 
 void deck_init(Deck *deck)
 {
@@ -17,8 +18,9 @@ void deck_init(Deck *deck)
 
 void deck_shuffle(Deck *deck)
 {
+    /* Fisher-Yates shuffle using standard rand() */
     for (int i = DECK_SIZE - 1; i > 0; i--) {
-        int j = GetRandomValue(0, i);
+        int j = rand() % (i + 1);
         Card temp = deck->cards[i];
         deck->cards[i] = deck->cards[j];
         deck->cards[j] = temp;

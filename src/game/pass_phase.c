@@ -886,7 +886,8 @@ static void handle_card_pass_subphase(PassPhaseState *pps, GameState *gs,
 
 void pass_subphase_update(PassPhaseState *pps, GameState *gs,
                           RenderState *rs, Phase2State *p2,
-                          const GameSettings *settings, float dt)
+                          const GameSettings *settings, float dt,
+                          bool online)
 {
     if (gs->phase != PHASE_PASSING) return;
 
@@ -896,11 +897,19 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
     rs->pass_subphase_remaining = remaining;
     rs->pass_subphase = pps->subphase;
 
+    /* Online: server drives all pass substates. The client doesn't run
+     * pass animations because the server doesn't send opponent pass
+     * selections needed for the toss/reveal visual pipeline. The server
+     * will transition directly to PHASE_PLAYING, at which point this
+     * function returns early (gs->phase != PHASE_PASSING). */
+    if (online)
+        return;
+
+    /* Offline: full local control */
     switch (pps->subphase) {
     case PASS_SUB_DEALER:
         pps->timer += dt;
         if (pps->dealer_announced) {
-            /* Showing announcement — wait, then advance to contracts */
             pps->dealer_announce_timer += dt;
             if (pps->dealer_announce_timer >= PASS_DEALER_ANNOUNCE) {
                 advance_pass_subphase(pps, gs, rs, p2, PASS_SUB_CONTRACT);
@@ -914,7 +923,6 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
                 dealer_announce(pps, rs);
             }
         } else if (pps->dealer_ui_active) {
-            /* Sync highlight state to render */
             rs->dealer_selected_dir = pps->dealer_dir;
             rs->dealer_selected_amt = -1;
             for (int i = 0; i < DEALER_AMOUNT_COUNT; i++) {
@@ -923,7 +931,6 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
                     break;
                 }
             }
-            /* Timeout: auto-confirm with current selection */
             if (pps->timer >= PASS_DEALER_TIME) {
                 gs->pass_direction = (PassDirection)pps->dealer_dir;
                 gs->pass_card_count = pps->dealer_amt;
@@ -952,7 +959,6 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
         }
         break;
     case PASS_SUB_REVEAL:
-        /* Wait for fly-in animations to finish before starting hold timer */
         if (pass_reveal_animations_done(rs)) {
             pps->timer += dt;
             if (pps->timer >= pass_subphase_time_limit(PASS_SUB_REVEAL)) {

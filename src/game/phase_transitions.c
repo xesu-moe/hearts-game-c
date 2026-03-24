@@ -27,7 +27,8 @@ void phase_transition_update(GameState *gs, RenderState *rs,
                              Phase2State *p2, PassPhaseState *pps,
                              PlayPhaseState *pls, TurnFlow *flow,
                              GamePhase *prev_phase,
-                             bool *prev_hearts_broken)
+                             bool *prev_hearts_broken,
+                             bool online)
 {
     /* Initialize scoring animation when entering PHASE_SCORING */
     if (gs->phase == PHASE_SCORING && *prev_phase != PHASE_SCORING) {
@@ -102,8 +103,8 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         render_clear_piles(rs);
     }
 
-    /* Deal animation complete — advance to passing phase */
-    if (gs->phase == PHASE_DEALING && rs->deal_complete) {
+    /* Deal animation complete — advance to passing phase (offline only) */
+    if (!online && gs->phase == PHASE_DEALING && rs->deal_complete) {
         gs->phase = PHASE_PASSING;
         rs->sync_needed = true;
         rs->deal_complete = false;
@@ -123,8 +124,9 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         }
     }
 
-    /* Set up Phase 2 subphases when entering PHASE_PASSING */
-    if (gs->phase == PHASE_PASSING && *prev_phase != PHASE_PASSING) {
+    /* Set up Phase 2 subphases when entering PHASE_PASSING (offline only —
+     * online: server already set dealer, pass direction, draft state) */
+    if (!online && gs->phase == PHASE_PASSING && *prev_phase != PHASE_PASSING) {
         pps->timer = 0.0f;
         pps->dealer_ui_active = false;
         pps->ai_dealer_pending = false;

@@ -3,15 +3,16 @@
  * @deps-requires: transmutation_logic.h, transmutation.h (TransmuteEffect, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN),
  *                 phase2_defs.h (phase2_get_transmutation), phase2_state.h (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[]),
  *                 core/hand.h (hand_contains, hand_has_suit), core/trick.h, core/card.h (SUIT_HEARTS, Card, Suit),
- *                 core/game_state.h (GameState, hearts_broken), string.h, raylib.h
- * @deps-last-changed: 2026-03-21 — Added Joker effect: lead card wins (beats ALWAYS_WIN), non-lead loses (ALWAYS_LOSE)
+ *                 core/game_state.h (GameState, hearts_broken), string.h, stdio.h, stdlib.h
+ * @deps-last-changed: 2026-03-22 — Removed raylib.h, replaced GetRandomValue with rand()
  * ============================================================ */
 
 #include "transmutation_logic.h"
 
 #include <string.h>
 
-#include <raylib.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "core/game_state.h"
 #include "phase2_defs.h"
@@ -325,7 +326,7 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
                 candidates[num_candidates++] = j;
             }
             if (num_candidates > 0) {
-                int pick = GetRandomValue(0, num_candidates - 1);
+                int pick = (rand() % num_candidates);
                 return trick->player_ids[candidates[pick]];
             }
             break; /* All excluded — fall through to normal */
@@ -562,8 +563,8 @@ void transmute_curse_consume(Phase2State *p2, GameState *gs, int player_id)
     if (!p2->curse_force_hearts[player_id]) return;
     p2->curse_force_hearts[player_id] = false;
     gs->hearts_broken = true;
-    TraceLog(LOG_INFO,
-             "TRANSMUTE: Curse consumed for player %d, hearts broken",
+    fprintf(stderr,
+             "TRANSMUTE: Curse consumed for player %d, hearts broken\n",
              player_id);
 }
 
@@ -580,7 +581,7 @@ void transmute_anchor_consume(Phase2State *p2, int player_id)
 {
     if (player_id < 0 || player_id >= NUM_PLAYERS) return;
     p2->anchor_force_suit[player_id] = -1;
-    TraceLog(LOG_INFO, "TRANSMUTE: Anchor consumed for player %d", player_id);
+    fprintf(stderr, "TRANSMUTE: Anchor consumed for player %d\n", player_id);
 }
 
 /* ----------------------------------------------------------------
@@ -692,51 +693,51 @@ void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,
 
         if (eff == TEFFECT_WOTT_DUPLICATE_ROUND_POINTS) {
             p2->round.transmute_round.martyr_flags[winner] = true;
-            TraceLog(LOG_INFO, "TRANSMUTE: Martyr effect flagged for player %d",
+            fprintf(stderr, "TRANSMUTE: Martyr effect flagged for player %d\n",
                      winner);
         } else if (eff == TEFFECT_WOTT_REDUCE_SCORE_3) {
             int delta = has_inversion ? -3 : 3;
             p2->round.transmute_round.gatherer_reduction[winner] += delta;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Gatherer %+d for player %d (total %d)%s",
+            fprintf(stderr,
+                     "TRANSMUTE: Gatherer %+d for player %d (total %d)%s\n",
                      delta, winner,
                      p2->round.transmute_round.gatherer_reduction[winner],
                      has_inversion ? " [Inverted]" : "");
         } else if (eff == TEFFECT_WOTT_REVEAL_OPPONENT_CARD) {
             p2->round.transmute_round.rogue_pending_winner = winner;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Rogue reveal flagged for player %d", winner);
+            fprintf(stderr,
+                     "TRANSMUTE: Rogue reveal flagged for player %d\n", winner);
         } else if (eff == TEFFECT_WOTT_REDUCE_SCORE_1) {
             int delta = has_inversion ? -1 : 1;
             p2->round.transmute_round.gatherer_reduction[winner] += delta;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Pendulum %+d for player %d (total %d)%s",
+            fprintf(stderr,
+                     "TRANSMUTE: Pendulum %+d for player %d (total %d)%s\n",
                      delta, winner,
                      p2->round.transmute_round.gatherer_reduction[winner],
                      has_inversion ? " [Inverted]" : "");
         } else if (eff == TEFFECT_WOTT_SWAP_CARD) {
             p2->round.transmute_round.duel_pending_winner = winner;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Duel swap flagged for player %d", winner);
+            fprintf(stderr,
+                     "TRANSMUTE: Duel swap flagged for player %d\n", winner);
         } else if (eff == TEFFECT_WOTT_SHIELD_NEXT_TRICK) {
             p2->shield_tricks_remaining[winner] = 3;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Shield activated for player %d (3 tricks)",
+            fprintf(stderr,
+                     "TRANSMUTE: Shield activated for player %d (3 tricks)\n",
                      winner);
         } else if (eff == TEFFECT_WOTT_FORCE_LEAD_HEARTS) {
             p2->curse_force_hearts[winner] = true;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Curse activated for player %d (must lead hearts)",
+            fprintf(stderr,
+                     "TRANSMUTE: Curse activated for player %d (must lead hearts)\n",
                      winner);
         } else if (eff == TEFFECT_ANCHOR_FORCE_LEAD_SUIT) {
             p2->anchor_force_suit[winner] = trick->lead_suit;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Anchor set for player %d (suit %d)",
+            fprintf(stderr,
+                     "TRANSMUTE: Anchor set for player %d (suit %d)\n",
                      winner, trick->lead_suit);
         } else if (eff == TEFFECT_BINDING_AUTO_WIN_NEXT) {
             p2->binding_auto_win[winner] = 1;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Binding activated for player %d", winner);
+            fprintf(stderr,
+                     "TRANSMUTE: Binding activated for player %d\n", winner);
         }
     }
 }
@@ -752,8 +753,8 @@ void transmute_apply_round_end(Phase2State *p2,
             int dup = round_points[i];
             round_points[i] += dup;
             total_scores[i] += dup;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Martyr doubles player %d round_points (%d -> %d), "
+            fprintf(stderr,
+                     "TRANSMUTE: Martyr doubles player %d round_points (%d -> %d), \n"
                      "new total = %d",
                      i, dup, round_points[i], total_scores[i]);
         }
@@ -769,16 +770,16 @@ void transmute_apply_round_end(Phase2State *p2,
             if (round_points[i] < 0) round_points[i] = 0;
             total_scores[i] -= red;
             if (total_scores[i] < 0) total_scores[i] = 0;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Gatherer reduces player %d by %d, "
+            fprintf(stderr,
+                     "TRANSMUTE: Gatherer reduces player %d by %d, \n"
                      "round = %d, total = %d",
                      i, red, round_points[i], total_scores[i]);
         } else if (red < 0) {
             /* Inversion flipped reductions to additions */
             round_points[i] -= red; /* -= negative = addition */
             total_scores[i] -= red;
-            TraceLog(LOG_INFO,
-                     "TRANSMUTE: Inverted Gatherer adds %d to player %d, "
+            fprintf(stderr,
+                     "TRANSMUTE: Inverted Gatherer adds %d to player %d, \n"
                      "round = %d, total = %d",
                      -red, i, round_points[i], total_scores[i]);
         }
