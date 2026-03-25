@@ -7,11 +7,12 @@
  *
  * @deps-exports: RegisteredServer, svreg_init, svreg_register,
  *                svreg_unregister, svreg_heartbeat, svreg_pick_server,
- *                svreg_find_by_conn, svreg_count
+ *                svreg_find_by_conn, svreg_count, svreg_expire_dead,
+ *                SvregDeadCb, SVREG_HEARTBEAT_TIMEOUT
  * @deps-requires: lobby/db.h (LobbyDB), net/protocol.h (NetMsgServerRegister,
  *                 NetMsgServerHeartbeat, NET_ADDR_LEN)
  * @deps-used-by: lobby/lobby_net.c
- * @deps-last-changed: 2026-03-24 — Step 16: Server Registry
+ * @deps-last-changed: 2026-03-25 — Step 18: Added heartbeat timeout
  * ============================================================ */
 
 #ifndef LOBBY_SERVER_REGISTRY_H
@@ -23,7 +24,8 @@
 #include "db.h"
 #include "net/protocol.h"
 
-#define LOBBY_MAX_GAME_SERVERS 32
+#define LOBBY_MAX_GAME_SERVERS   32
+#define SVREG_HEARTBEAT_TIMEOUT  60.0 /* seconds without heartbeat → dead */
 
 typedef struct RegisteredServer {
     bool     active;
@@ -59,5 +61,11 @@ const RegisteredServer *svreg_find_by_conn(int conn_id);
 
 /* Return the number of active registered servers. */
 int svreg_count(void);
+
+/* Remove servers that haven't sent a heartbeat within timeout seconds.
+ * Calls on_dead for each removed server's connection ID. */
+typedef void (*SvregDeadCb)(int conn_id);
+void svreg_expire_dead(LobbyDB *ldb, double now, double timeout,
+                       SvregDeadCb on_dead);
 
 #endif /* LOBBY_SERVER_REGISTRY_H */

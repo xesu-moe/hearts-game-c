@@ -326,6 +326,7 @@ typedef struct NetMsgServerResult {
     uint8_t winner_seats[NET_MAX_PLAYERS];
     uint8_t winner_count;
     uint16_t rounds_played;
+    uint8_t player_tokens[NET_MAX_PLAYERS][NET_AUTH_TOKEN_LEN];
 } NetMsgServerResult;
 
 typedef struct NetMsgServerHeartbeat {

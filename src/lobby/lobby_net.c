@@ -7,16 +7,18 @@
  *                 auth_logout, auth_cleanup_expired),
  *                 lobby/rooms.h (lobby_rooms_*, lobby_pending_*),
  *                 lobby/server_registry.h (svreg_*),
+ *                 lobby/matchmaking.h (mm_*),
  *                 net/socket.h (NetSocket, net_socket_*),
  *                 net/protocol.h (NetMsg, NetMsgType, NET_MAX_CHAT_LEN),
  *                 stdio.h, stdlib.h, string.h, time.h
- * @deps-last-changed: 2026-03-24 — Step 16: Room/server handlers
+ * @deps-last-changed: 2026-03-25 — Step 17: Matchmaking queue
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L
 
 #include "lobby_net.h"
 
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +26,7 @@
 
 #include "auth.h"
 #include "db.h"
+#include "matchmaking.h"
 #include "rooms.h"
 #include "server_registry.h"
 #include "net/socket.h"
@@ -89,17 +92,22 @@ static void lby_handle_create_room(int conn_id, const NetMsgCreateRoom *cr);
 static void lby_handle_join_room(int conn_id, const NetMsgJoinRoom *jr);
 static void lby_handle_server_room_created(int conn_id, const NetMsgServerRoomCreated *rc);
 
-/* Matchmaking stubs (Step 17) */
+/* Matchmaking handlers (Step 17) */
 static void lby_handle_queue(int conn_id, const NetMsgQueueMatchmake *qm);
 static void lby_handle_queue_cancel(int conn_id);
+static void lby_process_match(const MmMatchResult *match);
 
 /* Server registry handlers (Step 16) */
 static void lby_handle_server_register(int conn_id, const NetMsgServerRegister *sr);
 static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res);
 static void lby_handle_server_heartbeat(int conn_id, const NetMsgServerHeartbeat *hb);
 
-/* Pending timeout callback */
+/* Pending timeout callbacks */
 static void lby_on_pending_timeout(int client_conn_id);
+static void lby_on_mm_pending_timeout(const int conn_ids[MM_PLAYERS_PER_MATCH]);
+
+/* Dead server callback */
+static void lby_on_dead_server(int conn_id);
 
 /* ================================================================
  * Helpers
@@ -115,17 +123,6 @@ static void lby_send_error(int conn_id, uint8_t code, const char *message)
     net_socket_send_msg(&g_net, conn_id, &err);
 }
 
-static void lby_send_not_implemented(int conn_id, const char *what)
-{
-    printf("[lobby-net] %s from conn %d (stub — not implemented)\n",
-           what, conn_id);
-    NetMsg err;
-    memset(&err, 0, sizeof(err));
-    err.type = NET_MSG_ERROR;
-    err.error.code = 255;
-    snprintf(err.error.message, NET_MAX_CHAT_LEN, "%s: not implemented yet", what);
-    net_socket_send_msg(&g_net, conn_id, &err);
-}
 
 /* ================================================================
  * Public API
@@ -139,6 +136,7 @@ void lobby_net_init(int max_connections, struct LobbyDB *ldb)
     g_last_maintenance = 0;
     lobby_pending_init();
     svreg_init();
+    mm_init();
     printf("[lobby-net] Initialized (max %d connections)\n", max_connections);
 }
 
@@ -213,13 +211,20 @@ void lobby_net_update(void)
         }
     }
 
-    /* Stage 5: Periodic maintenance (~30s) */
-    double now = lby_time_now();
-    if (now - g_last_maintenance > 30.0) {
-        g_last_maintenance = now;
-        lobby_rooms_cleanup(g_db);
-        lobby_pending_expire(now, lby_on_pending_timeout);
-        auth_cleanup_expired(g_db);
+    /* Stage 5a: Expire matchmaking pending matches every tick (cheap O(16) scan) */
+    {
+        double now = lby_time_now();
+        mm_pending_expire(now, MM_PENDING_TIMEOUT, lby_on_mm_pending_timeout);
+
+        /* Stage 5b: Periodic maintenance (~30s) */
+        if (now - g_last_maintenance > 30.0) {
+            g_last_maintenance = now;
+            lobby_rooms_cleanup(g_db);
+            lobby_pending_expire(now, lby_on_pending_timeout);
+            svreg_expire_dead(g_db, now, SVREG_HEARTBEAT_TIMEOUT,
+                              lby_on_dead_server);
+            auth_cleanup_expired(g_db);
+        }
     }
 }
 
@@ -315,10 +320,24 @@ static void lby_cleanup_connection(int conn_id)
         if (info->type == LOBBY_CONN_CLIENT) {
             type_str = "client";
             lobby_pending_remove_by_client(conn_id);
+            mm_queue_remove(conn_id);
+            /* If player was in a pending match, notify the other players */
+            MmPendingMatch removed_match;
+            if (mm_pending_remove_by_conn(conn_id, &removed_match)) {
+                for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+                    if (removed_match.conn_ids[i] == conn_id) continue;
+                    if (net_socket_state(&g_net, removed_match.conn_ids[i])
+                        == NET_CONN_CONNECTED) {
+                        lby_send_error(removed_match.conn_ids[i], 25,
+                                       "A matched player disconnected");
+                    }
+                }
+            }
         } else if (info->type == LOBBY_CONN_GAME_SERVER) {
             type_str = "game-server";
             svreg_unregister(g_db, conn_id);
             lobby_pending_remove_by_server(conn_id);
+            mm_pending_remove_by_server(conn_id);
         }
         printf("[lobby-net] Cleanup conn %d (type=%s, account=%d)\n",
                conn_id, type_str, info->account_id);
@@ -568,6 +587,71 @@ static void lby_handle_server_room_created(int conn_id,
         return;
     }
 
+    /* Check if this is a matchmade room first */
+    int mm_idx = mm_pending_find_by_code(rc->room_code);
+    if (mm_idx >= 0) {
+        const MmPendingMatch *pm = mm_pending_get(mm_idx);
+        if (!pm) {
+            mm_pending_remove(mm_idx);
+            return;
+        }
+
+        /* Copy conn_ids before removing pending entry */
+        int match_conns[MM_PLAYERS_PER_MATCH];
+        memcpy(match_conns, pm->conn_ids, sizeof(match_conns));
+        mm_pending_remove(mm_idx);
+
+        if (!rc->success) {
+            printf("[lobby-net] Server failed to create matchmade room '%.8s'\n",
+                   rc->room_code);
+            lobby_rooms_set_status(g_db, rc->room_code, "expired");
+            for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+                if (net_socket_state(&g_net, match_conns[i]) == NET_CONN_CONNECTED)
+                    lby_send_error(match_conns[i], 27,
+                                   "Game server failed to create room");
+            }
+            return;
+        }
+
+        /* Look up room to get server address */
+        char addr[NET_ADDR_LEN];
+        uint16_t port;
+        char status[16];
+        if (!lobby_rooms_lookup(g_db, rc->room_code, addr, &port, status)) {
+            for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+                if (net_socket_state(&g_net, match_conns[i]) == NET_CONN_CONNECTED)
+                    lby_send_error(match_conns[i], 28, "Room data lost");
+            }
+            return;
+        }
+
+        /* Send ROOM_ASSIGNED to all 4 matched players */
+        for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+            int cc = match_conns[i];
+            if (net_socket_state(&g_net, cc) != NET_CONN_CONNECTED) {
+                printf("[lobby-net] Matched player conn %d gone\n", cc);
+                continue;
+            }
+            LobbyConnInfo *ci = g_net.conns[cc].user_data;
+            if (!ci) continue;
+
+            NetMsg reply;
+            memset(&reply, 0, sizeof(reply));
+            reply.type = NET_MSG_ROOM_ASSIGNED;
+            strncpy(reply.room_assigned.server_addr, addr, NET_ADDR_LEN - 1);
+            reply.room_assigned.server_port = port;
+            strncpy(reply.room_assigned.room_code, rc->room_code,
+                    NET_ROOM_CODE_LEN - 1);
+            memcpy(reply.room_assigned.auth_token, ci->session_token,
+                   AUTH_TOKEN_LEN);
+            net_socket_send_msg(&g_net, cc, &reply);
+        }
+        printf("[lobby-net] Matchmade room '%.8s' created -> %s:%d "
+               "(4 players notified)\n", rc->room_code, addr, port);
+        return;
+    }
+
+    /* Private room (existing logic) */
     int idx = lobby_pending_find_by_code(rc->room_code);
     if (idx < 0) {
         printf("[lobby-net] ServerRoomCreated for unknown code '%.8s'\n",
@@ -626,18 +710,150 @@ static void lby_handle_server_room_created(int conn_id,
 }
 
 /* ================================================================
- * Matchmaking Stubs (Step 17)
+ * Matchmaking Handlers (Step 17)
  * ================================================================ */
+
+/* Try to create a room for a formed match. Called after mm_try_form_match()
+ * returns a successful result. On failure, sends errors to all 4 players. */
+static void lby_process_match(const MmMatchResult *match)
+{
+    /* Pick a game server */
+    const RegisteredServer *srv = svreg_pick_server();
+    if (!srv) {
+        for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+            if (net_socket_state(&g_net, match->conn_ids[i]) == NET_CONN_CONNECTED)
+                lby_send_error(match->conn_ids[i], 21,
+                               "No game servers available");
+        }
+        return;
+    }
+
+    /* Verify server connection */
+    if (net_socket_state(&g_net, srv->conn_id) != NET_CONN_CONNECTED) {
+        for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+            if (net_socket_state(&g_net, match->conn_ids[i]) == NET_CONN_CONNECTED)
+                lby_send_error(match->conn_ids[i], 23,
+                               "Game server disconnected");
+        }
+        return;
+    }
+
+    /* Generate room code */
+    char code[LOBBY_ROOM_CODE_LEN];
+    if (!lobby_rooms_generate_code(g_db, code)) {
+        for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+            if (net_socket_state(&g_net, match->conn_ids[i]) == NET_CONN_CONNECTED)
+                lby_send_error(match->conn_ids[i], 22,
+                               "Failed to generate room code");
+        }
+        return;
+    }
+
+    /* Store in DB */
+    if (!lobby_rooms_insert(g_db, code, srv->addr, srv->port)) {
+        for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+            if (net_socket_state(&g_net, match->conn_ids[i]) == NET_CONN_CONNECTED)
+                lby_send_error(match->conn_ids[i], 23,
+                               "Failed to create room");
+        }
+        return;
+    }
+
+    /* Track pending match */
+    double now = lby_time_now();
+    int pending_idx = mm_pending_add(code, srv->conn_id,
+                                     match->conn_ids, match->account_ids,
+                                     now);
+    if (pending_idx < 0) {
+        lobby_rooms_set_status(g_db, code, "expired");
+        for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+            if (net_socket_state(&g_net, match->conn_ids[i]) == NET_CONN_CONNECTED)
+                lby_send_error(match->conn_ids[i], 24,
+                               "Too many pending requests");
+        }
+        return;
+    }
+
+    /* Verify all 4 matched players are still connected before creating room */
+    for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+        int cc = match->conn_ids[i];
+        LobbyConnInfo *ci = (net_socket_state(&g_net, cc) == NET_CONN_CONNECTED)
+                            ? g_net.conns[cc].user_data : NULL;
+        if (!ci) {
+            printf("[lobby-net] Matched player conn %d disconnected, "
+                   "aborting match\n", cc);
+            mm_pending_remove(pending_idx);
+            lobby_rooms_set_status(g_db, code, "expired");
+            for (int j = 0; j < MM_PLAYERS_PER_MATCH; j++) {
+                if (j == i) continue;
+                if (net_socket_state(&g_net, match->conn_ids[j]) == NET_CONN_CONNECTED)
+                    lby_send_error(match->conn_ids[j], 25,
+                                   "A matched player disconnected");
+            }
+            return;
+        }
+    }
+
+    /* Build SERVER_CREATE_ROOM with all 4 player tokens */
+    NetMsg create_msg;
+    memset(&create_msg, 0, sizeof(create_msg));
+    create_msg.type = NET_MSG_SERVER_CREATE_ROOM;
+    strncpy(create_msg.server_create_room.room_code, code, NET_ROOM_CODE_LEN - 1);
+    for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+        LobbyConnInfo *ci = g_net.conns[match->conn_ids[i]].user_data;
+        memcpy(create_msg.server_create_room.player_tokens[i],
+               ci->session_token, AUTH_TOKEN_LEN);
+    }
+    net_socket_send_msg(&g_net, srv->conn_id, &create_msg);
+
+    printf("[lobby-net] Matchmaking: code=%s, server=%s:%d, "
+           "conns [%d,%d,%d,%d]\n",
+           code, srv->addr, srv->port,
+           match->conn_ids[0], match->conn_ids[1],
+           match->conn_ids[2], match->conn_ids[3]);
+}
 
 static void lby_handle_queue(int conn_id, const NetMsgQueueMatchmake *qm)
 {
     (void)qm;
-    lby_send_not_implemented(conn_id, "QueueMatchmake");
+    LobbyConnInfo *info = g_net.conns[conn_id].user_data;
+    if (!info || info->auth_state != LOBBY_AUTH_AUTHENTICATED) {
+        lby_send_error(conn_id, 20, "Not authenticated");
+        return;
+    }
+
+    int position = mm_queue_add(conn_id, info->account_id);
+    if (position < 0) {
+        lby_send_error(conn_id, 40, "Cannot join queue (full or already queued)");
+        return;
+    }
+
+    /* Send queue status to the player */
+    NetMsg status_msg;
+    memset(&status_msg, 0, sizeof(status_msg));
+    status_msg.type = NET_MSG_QUEUE_STATUS;
+    status_msg.queue_status.position = (uint16_t)position;
+    status_msg.queue_status.estimated_wait_secs = 0;
+    net_socket_send_msg(&g_net, conn_id, &status_msg);
+
+    /* Check if a match can be formed */
+    MmMatchResult match = mm_try_form_match();
+    if (match.formed) {
+        lby_process_match(&match);
+    }
 }
 
 static void lby_handle_queue_cancel(int conn_id)
 {
-    lby_send_not_implemented(conn_id, "QueueCancel");
+    LobbyConnInfo *info = g_net.conns[conn_id].user_data;
+    if (!info || info->auth_state != LOBBY_AUTH_AUTHENTICATED) {
+        lby_send_error(conn_id, 20, "Not authenticated");
+        return;
+    }
+
+    if (mm_queue_remove(conn_id)) {
+        printf("[lobby-net] QueueCancel from conn %d\n", conn_id);
+    }
 }
 
 /* ================================================================
@@ -663,9 +879,108 @@ static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res)
 {
     LobbyConnInfo *info = g_net.conns[conn_id].user_data;
     if (!info || info->type != LOBBY_CONN_GAME_SERVER) return;
-    printf("[lobby-net] ServerResult: room='%.8s', rounds=%d\n",
-           res->room_code, res->rounds_played);
+
+    printf("[lobby-net] ServerResult: room='%.8s', rounds=%d, winners=%d\n",
+           res->room_code, res->rounds_played, res->winner_count);
     lobby_rooms_set_status(g_db, res->room_code, "finished");
+
+    /* Resolve player tokens to account IDs */
+    int32_t account_ids[NET_MAX_PLAYERS];
+    int valid_count = 0;
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        /* Check for zero token (AI or empty slot) */
+        bool is_zero = true;
+        for (int j = 0; j < NET_AUTH_TOKEN_LEN; j++) {
+            if (res->player_tokens[i][j] != 0) { is_zero = false; break; }
+        }
+        if (is_zero) {
+            account_ids[i] = -1;
+            continue;
+        }
+        account_ids[i] = auth_validate_token(g_db, res->player_tokens[i]);
+        if (account_ids[i] >= 0) valid_count++;
+    }
+
+    if (valid_count == 0) {
+        printf("[lobby-net] No valid players in result, skipping recording\n");
+        return;
+    }
+
+    /* Begin transaction for atomic match recording */
+    sqlite3_exec(lobbydb_handle(g_db), "BEGIN", NULL, NULL, NULL);
+
+    /* Insert match_history row */
+    sqlite3_stmt *stmt = lobbydb_stmt(g_db, LOBBY_STMT_INSERT_MATCH);
+    if (!stmt) {
+        fprintf(stderr, "[lobby-net] Failed to get INSERT_MATCH stmt\n");
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, res->room_code, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, res->rounds_played);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        fprintf(stderr, "[lobby-net] Failed to insert match_history: %s\n",
+                sqlite3_errmsg(lobbydb_handle(g_db)));
+        sqlite3_exec(lobbydb_handle(g_db), "ROLLBACK", NULL, NULL, NULL);
+        return;
+    }
+    int64_t match_id = sqlite3_last_insert_rowid(lobbydb_handle(g_db));
+
+    /* Calculate placements (rank by score ascending — lowest is best) */
+    int placements[NET_MAX_PLAYERS];
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        int rank = 1;
+        for (int j = 0; j < NET_MAX_PLAYERS; j++) {
+            if (j != i && res->final_scores[j] < res->final_scores[i])
+                rank++;
+        }
+        placements[i] = rank;
+    }
+
+    /* Determine winner set for stats */
+    bool is_winner[NET_MAX_PLAYERS] = {false};
+    for (int i = 0; i < res->winner_count && i < NET_MAX_PLAYERS; i++) {
+        if (res->winner_seats[i] < NET_MAX_PLAYERS)
+            is_winner[res->winner_seats[i]] = true;
+    }
+
+    /* Insert match_players and update stats for each valid player */
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (account_ids[i] < 0) continue;
+
+        /* Insert match_players row */
+        stmt = lobbydb_stmt(g_db, LOBBY_STMT_INSERT_MATCH_PLAYER);
+        if (stmt) {
+            sqlite3_bind_int64(stmt, 1, match_id);
+            sqlite3_bind_int(stmt, 2, account_ids[i]);
+            sqlite3_bind_int(stmt, 3, i); /* seat */
+            sqlite3_bind_int(stmt, 4, res->final_scores[i]);
+            sqlite3_bind_int(stmt, 5, placements[i]);
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                fprintf(stderr, "[lobby-net] Failed to insert match_player "
+                        "seat %d: %s\n", i,
+                        sqlite3_errmsg(lobbydb_handle(g_db)));
+            }
+        }
+
+        /* Update stats */
+        stmt = lobbydb_stmt(g_db, LOBBY_STMT_UPDATE_STATS);
+        if (stmt) {
+            sqlite3_bind_int(stmt, 1, is_winner[i] ? 1 : 0);
+            sqlite3_bind_int(stmt, 2, res->final_scores[i]);
+            sqlite3_bind_int(stmt, 3, account_ids[i]);
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                fprintf(stderr, "[lobby-net] Failed to update stats "
+                        "account %d: %s\n", account_ids[i],
+                        sqlite3_errmsg(lobbydb_handle(g_db)));
+            }
+        }
+    }
+
+    sqlite3_exec(lobbydb_handle(g_db), "COMMIT", NULL, NULL, NULL);
+
+    printf("[lobby-net] Recorded match %lld: room='%.8s', %d players, "
+           "%d rounds\n", (long long)match_id, res->room_code,
+           valid_count, res->rounds_played);
 }
 
 static void lby_handle_server_heartbeat(int conn_id, const NetMsgServerHeartbeat *hb)
@@ -682,4 +997,24 @@ static void lby_handle_server_heartbeat(int conn_id, const NetMsgServerHeartbeat
 static void lby_on_pending_timeout(int client_conn_id)
 {
     lby_send_error(client_conn_id, 29, "Room creation timed out");
+}
+
+static void lby_on_mm_pending_timeout(const int conn_ids[MM_PLAYERS_PER_MATCH])
+{
+    for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+        if (net_socket_state(&g_net, conn_ids[i]) == NET_CONN_CONNECTED) {
+            lby_send_error(conn_ids[i], 29,
+                           "Matchmaking room creation timed out");
+        }
+    }
+}
+
+static void lby_on_dead_server(int conn_id)
+{
+    printf("[lobby-net] Dead server detected, cleaning up conn %d\n", conn_id);
+    lobby_pending_remove_by_server(conn_id);
+    mm_pending_remove_by_server(conn_id);
+    if (net_socket_state(&g_net, conn_id) != NET_CONN_DISCONNECTED) {
+        net_socket_close(&g_net, conn_id);
+    }
 }

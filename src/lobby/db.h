@@ -48,7 +48,10 @@ typedef enum LobbyStmtID {
     LOBBY_STMT_DELETE_SERVER,
     LOBBY_STMT_UPDATE_HEARTBEAT,
     LOBBY_STMT_PICK_SERVER,
-    /* Steps 17-18 add entries here */
+    /* Match recording (Step 18) */
+    LOBBY_STMT_INSERT_MATCH,
+    LOBBY_STMT_INSERT_MATCH_PLAYER,
+    LOBBY_STMT_UPDATE_STATS,
     LOBBY_STMT__COUNT /* must be last */
 } LobbyStmtID;
 

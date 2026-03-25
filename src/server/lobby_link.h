@@ -7,10 +7,10 @@
  *
  * @deps-exports: lobby_link_init, lobby_link_connect,
  *                lobby_link_update, lobby_link_shutdown,
- *                lobby_link_is_connected
- * @deps-requires: (none — forward-declares only)
- * @deps-used-by: server/server_main.c
- * @deps-last-changed: 2026-03-24 — Step 16: Room Code System
+ *                lobby_link_is_connected, lobby_link_send_result
+ * @deps-requires: net/protocol.h (NET_MAX_PLAYERS, NET_AUTH_TOKEN_LEN)
+ * @deps-used-by: server/server_main.c, server/room.c
+ * @deps-last-changed: 2026-03-25 — Step 18: Added lobby_link_send_result
  * ============================================================ */
 
 #ifndef LOBBY_LINK_H
@@ -18,6 +18,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "net/protocol.h"
 
 /* Initialize the lobby link with connection parameters.
  * Does not connect yet — call lobby_link_connect() after. */
@@ -38,5 +40,15 @@ void lobby_link_shutdown(void);
 
 /* Check if currently connected to lobby. */
 bool lobby_link_is_connected(void);
+
+/* Report game completion to lobby. Called from room.c when game finishes.
+ * Sends final scores, winners, rounds played, and player auth tokens
+ * so the lobby can record match history. Silently drops if not connected. */
+void lobby_link_send_result(const char *room_code,
+                            const int16_t scores[NET_MAX_PLAYERS],
+                            const uint8_t winner_seats[NET_MAX_PLAYERS],
+                            int winner_count,
+                            int rounds_played,
+                            const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN]);
 
 #endif /* LOBBY_LINK_H */

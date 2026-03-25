@@ -1,0 +1,626 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/main.o",
+      "src/main.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/main.c",
+    "output": "/home/xesu/hollow-hearts/src/main.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/input.o",
+      "src/core/input.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/input.c",
+    "output": "/home/xesu/hollow-hearts/src/core/input.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/clock.o",
+      "src/core/clock.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/clock.c",
+    "output": "/home/xesu/hollow-hearts/src/core/clock.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/settings.o",
+      "src/core/settings.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/settings.c",
+    "output": "/home/xesu/hollow-hearts/src/core/settings.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/render/anim.o",
+      "src/render/anim.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/render/anim.c",
+    "output": "/home/xesu/hollow-hearts/src/render/anim.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/render/card_render.o",
+      "src/render/card_render.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/render/card_render.c",
+    "output": "/home/xesu/hollow-hearts/src/render/card_render.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/render/easing.o",
+      "src/render/easing.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/render/easing.c",
+    "output": "/home/xesu/hollow-hearts/src/render/easing.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/render/layout.o",
+      "src/render/layout.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/render/layout.c",
+    "output": "/home/xesu/hollow-hearts/src/render/layout.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/render/particle.o",
+      "src/render/particle.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/render/particle.c",
+    "output": "/home/xesu/hollow-hearts/src/render/particle.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/render/render.o",
+      "src/render/render.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/render/render.c",
+    "output": "/home/xesu/hollow-hearts/src/render/render.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/ai.o",
+      "src/game/ai.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/ai.c",
+    "output": "/home/xesu/hollow-hearts/src/game/ai.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/info_sync.o",
+      "src/game/info_sync.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/info_sync.c",
+    "output": "/home/xesu/hollow-hearts/src/game/info_sync.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/pass_phase.o",
+      "src/game/pass_phase.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/pass_phase.c",
+    "output": "/home/xesu/hollow-hearts/src/game/pass_phase.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/phase_transitions.o",
+      "src/game/phase_transitions.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/phase_transitions.c",
+    "output": "/home/xesu/hollow-hearts/src/game/phase_transitions.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/play_phase.o",
+      "src/game/play_phase.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/play_phase.c",
+    "output": "/home/xesu/hollow-hearts/src/game/play_phase.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/process_input.o",
+      "src/game/process_input.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/process_input.c",
+    "output": "/home/xesu/hollow-hearts/src/game/process_input.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/settings_ui.o",
+      "src/game/settings_ui.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/settings_ui.c",
+    "output": "/home/xesu/hollow-hearts/src/game/settings_ui.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/turn_flow.o",
+      "src/game/turn_flow.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/turn_flow.c",
+    "output": "/home/xesu/hollow-hearts/src/game/turn_flow.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/game/update.o",
+      "src/game/update.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/game/update.c",
+    "output": "/home/xesu/hollow-hearts/src/game/update.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/audio/audio.o",
+      "src/audio/audio.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/audio/audio.c",
+    "output": "/home/xesu/hollow-hearts/src/audio/audio.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/card.o",
+      "src/core/card.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/card.c",
+    "output": "/home/xesu/hollow-hearts/src/core/card.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/hand.o",
+      "src/core/hand.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/hand.c",
+    "output": "/home/xesu/hollow-hearts/src/core/hand.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/deck.o",
+      "src/core/deck.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/deck.c",
+    "output": "/home/xesu/hollow-hearts/src/core/deck.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/trick.o",
+      "src/core/trick.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/trick.c",
+    "output": "/home/xesu/hollow-hearts/src/core/trick.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/player.o",
+      "src/core/player.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/player.c",
+    "output": "/home/xesu/hollow-hearts/src/core/player.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/game_state.o",
+      "src/core/game_state.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/game_state.c",
+    "output": "/home/xesu/hollow-hearts/src/core/game_state.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/core/input_cmd.o",
+      "src/core/input_cmd.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/core/input_cmd.c",
+    "output": "/home/xesu/hollow-hearts/src/core/input_cmd.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/net/client_net.o",
+      "src/net/client_net.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/net/client_net.c",
+    "output": "/home/xesu/hollow-hearts/src/net/client_net.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/net/identity.o",
+      "src/net/identity.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/net/identity.c",
+    "output": "/home/xesu/hollow-hearts/src/net/identity.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/net/protocol.o",
+      "src/net/protocol.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/net/protocol.c",
+    "output": "/home/xesu/hollow-hearts/src/net/protocol.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/net/reconnect.o",
+      "src/net/reconnect.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/net/reconnect.c",
+    "output": "/home/xesu/hollow-hearts/src/net/reconnect.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/net/socket.o",
+      "src/net/socket.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/net/socket.c",
+    "output": "/home/xesu/hollow-hearts/src/net/socket.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/net/state_recv.o",
+      "src/net/state_recv.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/net/state_recv.c",
+    "output": "/home/xesu/hollow-hearts/src/net/state_recv.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/phase2/contract_logic.o",
+      "src/phase2/contract_logic.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/phase2/contract_logic.c",
+    "output": "/home/xesu/hollow-hearts/src/phase2/contract_logic.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/phase2/json_parse.o",
+      "src/phase2/json_parse.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/phase2/json_parse.c",
+    "output": "/home/xesu/hollow-hearts/src/phase2/json_parse.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/phase2/phase2_defs.o",
+      "src/phase2/phase2_defs.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/phase2/phase2_defs.c",
+    "output": "/home/xesu/hollow-hearts/src/phase2/phase2_defs.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/phase2/transmutation_logic.o",
+      "src/phase2/transmutation_logic.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/phase2/transmutation_logic.c",
+    "output": "/home/xesu/hollow-hearts/src/phase2/transmutation_logic.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/vendor/cJSON.o",
+      "src/vendor/cJSON.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/vendor/cJSON.c",
+    "output": "/home/xesu/hollow-hearts/src/vendor/cJSON.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wextra",
+      "-std=c11",
+      "-Isrc",
+      "-c",
+      "-o",
+      "src/vendor/tweetnacl.o",
+      "src/vendor/tweetnacl.c"
+    ],
+    "directory": "/home/xesu/hollow-hearts",
+    "file": "/home/xesu/hollow-hearts/src/vendor/tweetnacl.c",
+    "output": "/home/xesu/hollow-hearts/src/vendor/tweetnacl.o"
+  }
+]

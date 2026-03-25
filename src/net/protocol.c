@@ -864,7 +864,8 @@ static int deser_server_create_room(NetMsgServerCreateRoom *m,
 static int ser_server_result(const NetMsgServerResult *m, uint8_t *buf,
                              size_t len)
 {
-    size_t need = NET_ROOM_CODE_LEN + 8 + 4 + 1 + 2;
+    size_t need = NET_ROOM_CODE_LEN + 8 + 4 + 1 + 2
+                  + (NET_MAX_PLAYERS * NET_AUTH_TOKEN_LEN);
     if (len < need)
         return -1;
     size_t off = 0;
@@ -875,13 +876,16 @@ static int ser_server_result(const NetMsgServerResult *m, uint8_t *buf,
         write_u8(buf, &off, m->winner_seats[i]);
     write_u8(buf, &off, m->winner_count);
     write_u16(buf, &off, m->rounds_played);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        write_bytes(buf, &off, m->player_tokens[i], NET_AUTH_TOKEN_LEN);
     return (int)off;
 }
 
 static int deser_server_result(NetMsgServerResult *m, const uint8_t *buf,
                                size_t len)
 {
-    size_t need = NET_ROOM_CODE_LEN + 8 + 4 + 1 + 2;
+    size_t need = NET_ROOM_CODE_LEN + 8 + 4 + 1 + 2
+                  + (NET_MAX_PLAYERS * NET_AUTH_TOKEN_LEN);
     if (len < need)
         return -1;
     size_t off = 0;
@@ -892,6 +896,8 @@ static int deser_server_result(NetMsgServerResult *m, const uint8_t *buf,
         m->winner_seats[i] = read_u8(buf, &off);
     m->winner_count = read_u8(buf, &off);
     m->rounds_played = read_u16(buf, &off);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        read_bytes(buf, &off, m->player_tokens[i], NET_AUTH_TOKEN_LEN);
     return (int)off;
 }
 

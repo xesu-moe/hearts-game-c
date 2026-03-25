@@ -245,6 +245,16 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
     [LOBBY_STMT_PICK_SERVER] =
         "SELECT addr, port FROM game_servers "
         "WHERE current_rooms < max_rooms ORDER BY current_rooms LIMIT 1",
+    /* Match recording (Step 18) */
+    [LOBBY_STMT_INSERT_MATCH] =
+        "INSERT INTO match_history (room_code, rounds_played) VALUES (?, ?)",
+    [LOBBY_STMT_INSERT_MATCH_PLAYER] =
+        "INSERT INTO match_players (match_id, account_id, seat, final_score, "
+        "placement) VALUES (?, ?, ?, ?, ?)",
+    [LOBBY_STMT_UPDATE_STATS] =
+        "UPDATE stats SET games_played = games_played + 1, "
+        "games_won = games_won + ?, total_score = total_score + ? "
+        "WHERE account_id = ?",
 };
 
 static int lobbydb_prepare_all(LobbyDB *ldb)

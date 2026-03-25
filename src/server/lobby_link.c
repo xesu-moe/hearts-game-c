@@ -253,3 +253,34 @@ bool lobby_link_is_connected(void)
     return g_initialized && g_conn_id >= 0 &&
            net_socket_state(&g_lobby, g_conn_id) == NET_CONN_CONNECTED;
 }
+
+void lobby_link_send_result(const char *room_code,
+                            const int16_t scores[NET_MAX_PLAYERS],
+                            const uint8_t winner_seats[NET_MAX_PLAYERS],
+                            int winner_count,
+                            int rounds_played,
+                            const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN])
+{
+    if (!lobby_link_is_connected()) {
+        printf("[lobby-link] Not connected, dropping result for '%.8s'\n",
+               room_code);
+        return;
+    }
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_SERVER_RESULT;
+    strncpy(msg.server_result.room_code, room_code, NET_ROOM_CODE_LEN - 1);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        msg.server_result.final_scores[i] = scores[i];
+        msg.server_result.winner_seats[i] = winner_seats[i];
+        memcpy(msg.server_result.player_tokens[i], player_tokens[i],
+               NET_AUTH_TOKEN_LEN);
+    }
+    msg.server_result.winner_count = (uint8_t)winner_count;
+    msg.server_result.rounds_played = (uint16_t)rounds_played;
+    net_socket_send_msg(&g_lobby, g_conn_id, &msg);
+
+    printf("[lobby-link] Sent result for room '%.8s' (%d rounds, %d winner(s))\n",
+           room_code, rounds_played, winner_count);
+}

@@ -4,14 +4,17 @@
  *                 lobby/db.h (LobbyDB, LobbyStmtID, lobbydb_stmt),
  *                 net/protocol.h (NetMsgServerRegister, NET_ADDR_LEN),
  *                 sqlite3.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-24 — Step 16: Server Registry
+ * @deps-last-changed: 2026-03-25 — Step 18: Added heartbeat timeout
  * ============================================================ */
+
+#define _POSIX_C_SOURCE 199309L
 
 #include "server_registry.h"
 
 #include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 /* ================================================================
  * File-scope state
@@ -22,6 +25,13 @@ static RegisteredServer g_servers[LOBBY_MAX_GAME_SERVERS];
 /* ================================================================
  * Helpers
  * ================================================================ */
+
+static double svreg_time_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
 
 static void build_server_id(char *id, size_t id_len,
                             const char *addr, uint16_t port)
@@ -94,7 +104,7 @@ int svreg_register(LobbyDB *ldb, int conn_id,
     s->max_rooms = sr->max_rooms;
     s->current_rooms = sr->current_rooms;
     s->conn_id = conn_id;
-    s->last_heartbeat = 0; /* updated on first heartbeat */
+    s->last_heartbeat = svreg_time_now();
 
     /* Persist to DB */
     sqlite3_stmt *stmt = lobbydb_stmt(ldb, LOBBY_STMT_UPSERT_SERVER);
@@ -136,7 +146,7 @@ void svreg_heartbeat(int conn_id, const NetMsgServerHeartbeat *hb)
     if (idx < 0) return;
 
     g_servers[idx].current_rooms = hb->current_rooms;
-    /* last_heartbeat is informational — not using wall time for simplicity */
+    g_servers[idx].last_heartbeat = svreg_time_now();
 }
 
 const RegisteredServer *svreg_pick_server(void)
@@ -170,4 +180,20 @@ int svreg_count(void)
         if (g_servers[i].active) count++;
     }
     return count;
+}
+
+void svreg_expire_dead(LobbyDB *ldb, double now, double timeout,
+                       SvregDeadCb on_dead)
+{
+    for (int i = 0; i < LOBBY_MAX_GAME_SERVERS; i++) {
+        if (!g_servers[i].active) continue;
+        if (now - g_servers[i].last_heartbeat > timeout) {
+            printf("[svreg] Server '%s' timed out (%.0fs since heartbeat)\n",
+                   g_servers[i].id,
+                   now - g_servers[i].last_heartbeat);
+            int dead_conn = g_servers[i].conn_id;
+            svreg_unregister(ldb, dead_conn);
+            if (on_dead) on_dead(dead_conn);
+        }
+    }
 }

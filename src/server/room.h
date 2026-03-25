@@ -64,7 +64,8 @@ typedef struct PlayerSlot {
     SlotStatus status;
     int        conn_id;   /* index into NetSocket.conns[], -1 if not connected */
     int        player_id; /* seat 0-3, same as array index */
-    uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* session token for reconnect */
+    uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* random reconnect token */
+    uint8_t    lobby_token[NET_AUTH_TOKEN_LEN]; /* session token from lobby */
     float      disconnect_timer; /* seconds since disconnect, -1 if N/A */
 } PlayerSlot;
 

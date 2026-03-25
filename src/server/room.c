@@ -4,9 +4,11 @@
  *                 room_update_timers, room_reconnect),
  *                 server/server_game.h (server_game_init, server_game_start,
  *                 server_game_tick, server_game_is_over),
+ *                 server/lobby_link.h (lobby_link_send_result),
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS),
+ *                 core/game_state.h (game_state_get_winners),
  *                 core/clock.h (FIXED_DT), fcntl.h, unistd.h
- * @deps-last-changed: 2026-03-24 — Step 11: Implemented timer/reconnect functions
+ * @deps-last-changed: 2026-03-25 — Step 18: Report results to lobby on game finish
  * ============================================================ */
 
 #include "room.h"
@@ -18,6 +20,8 @@
 #include <unistd.h>
 
 #include "core/clock.h" /* FIXED_DT */
+#include "core/game_state.h"
+#include "lobby_link.h"
 
 /* ================================================================
  * Room Code Alphabet
@@ -203,7 +207,7 @@ int room_join(int room_index, int conn_id,
     slot->status  = SLOT_CONNECTED;
     slot->conn_id = conn_id;
     slot->disconnect_timer = -1.0f;
-    (void)auth_token; /* lobby tokens not used yet */
+    memcpy(slot->lobby_token, auth_token, NET_AUTH_TOKEN_LEN);
     room_generate_session_token(slot->auth_token);
 
     room->connected_count++;
@@ -326,6 +330,25 @@ void room_tick(int room_index)
     server_game_tick(&room->game);
 
     if (server_game_is_over(&room->game)) {
+        /* Report results to lobby before marking finished */
+        int16_t scores[NET_MAX_PLAYERS];
+        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+            scores[i] = (int16_t)room->game.gs.players[i].total_score;
+
+        int winners[NUM_PLAYERS];
+        int winner_count = game_state_get_winners(&room->game.gs, winners);
+        uint8_t winner_seats[NET_MAX_PLAYERS] = {0};
+        for (int i = 0; i < winner_count && i < NET_MAX_PLAYERS; i++)
+            winner_seats[i] = (uint8_t)winners[i];
+
+        uint8_t tokens[NET_MAX_PLAYERS][NET_AUTH_TOKEN_LEN];
+        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+            memcpy(tokens[i], room->slots[i].lobby_token, NET_AUTH_TOKEN_LEN);
+
+        lobby_link_send_result(room->code, scores, winner_seats,
+                               winner_count, room->game.gs.round_number,
+                               tokens);
+
         room->status = ROOM_FINISHED;
         printf("Room %s: game finished\n", room->code);
     }
