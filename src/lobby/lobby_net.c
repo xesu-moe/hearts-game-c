@@ -92,6 +92,10 @@ static void lby_handle_create_room(int conn_id, const NetMsgCreateRoom *cr);
 static void lby_handle_join_room(int conn_id, const NetMsgJoinRoom *jr);
 static void lby_handle_server_room_created(int conn_id, const NetMsgServerRoomCreated *rc);
 
+/* Username change handler (Step 19) */
+static void lby_handle_change_username(int conn_id,
+                                       const NetMsgChangeUsername *cu);
+
 /* Matchmaking handlers (Step 17) */
 static void lby_handle_queue(int conn_id, const NetMsgQueueMatchmake *qm);
 static void lby_handle_queue_cancel(int conn_id);
@@ -261,6 +265,9 @@ static void lby_handle_message(int conn_id, const NetMsg *msg)
         break;
     case NET_MSG_QUEUE_CANCEL:
         lby_handle_queue_cancel(conn_id);
+        break;
+    case NET_MSG_CHANGE_USERNAME:
+        lby_handle_change_username(conn_id, &msg->change_username);
         break;
 
     /* Game Server <-> Lobby messages (stubs) */
@@ -476,6 +483,52 @@ static void lby_handle_logout(int conn_id)
         info->account_id = -1;
     }
     printf("[lobby-net] Logout from conn %d\n", conn_id);
+}
+
+/* ================================================================
+ * Username Change Handler (Step 19)
+ * ================================================================ */
+
+static void lby_handle_change_username(int conn_id,
+                                       const NetMsgChangeUsername *cu)
+{
+    LobbyConnInfo *info = g_net.conns[conn_id].user_data;
+    if (!info || info->auth_state != LOBBY_AUTH_AUTHENTICATED) {
+        lby_send_error(conn_id, 20, "Not authenticated");
+        return;
+    }
+
+    /* Validate token matches this connection */
+    if (memcmp(cu->auth_token, info->session_token, AUTH_TOKEN_LEN) != 0) {
+        lby_send_error(conn_id, 20, "Invalid token");
+        return;
+    }
+
+    AuthResult r = auth_change_username(g_db, info->account_id,
+                                        cu->new_username);
+    switch (r) {
+    case AUTH_OK:
+        printf("[lobby-net] Username changed for account %d -> '%s'\n",
+               info->account_id, cu->new_username);
+        /* Send a generic ACK (reuse REGISTER_ACK — no payload) */
+        {
+            NetMsg ack;
+            memset(&ack, 0, sizeof(ack));
+            ack.type = NET_MSG_REGISTER_ACK;
+            net_socket_send_msg(&g_net, conn_id, &ack);
+        }
+        break;
+    case AUTH_ERR_USERNAME_TAKEN:
+        lby_send_error(conn_id, 1, "Username already taken");
+        break;
+    case AUTH_ERR_INVALID_INPUT:
+        lby_send_error(conn_id, 3,
+                       "Invalid username (3-31 chars, alphanumeric + underscore)");
+        break;
+    default:
+        lby_send_error(conn_id, 10, "Username change failed");
+        break;
+    }
 }
 
 /* ================================================================

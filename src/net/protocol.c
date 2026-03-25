@@ -803,6 +803,31 @@ static int deser_queue_status(NetMsgQueueStatus *m, const uint8_t *buf,
     return (int)off;
 }
 
+static int ser_change_username(const NetMsgChangeUsername *m, uint8_t *buf,
+                               size_t len)
+{
+    size_t need = NET_AUTH_TOKEN_LEN + NET_MAX_NAME_LEN;
+    if (len < need)
+        return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, NET_AUTH_TOKEN_LEN);
+    write_bytes(buf, &off, (const uint8_t *)m->new_username, NET_MAX_NAME_LEN);
+    return (int)off;
+}
+
+static int deser_change_username(NetMsgChangeUsername *m, const uint8_t *buf,
+                                  size_t len)
+{
+    size_t need = NET_AUTH_TOKEN_LEN + NET_MAX_NAME_LEN;
+    if (len < need)
+        return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, NET_AUTH_TOKEN_LEN);
+    read_bytes(buf, &off, (uint8_t *)m->new_username, NET_MAX_NAME_LEN);
+    m->new_username[NET_MAX_NAME_LEN - 1] = '\0';
+    return (int)off;
+}
+
 /* --- Lobby <-> Server messages --- */
 
 static int ser_server_register(const NetMsgServerRegister *m, uint8_t *buf,
@@ -1470,6 +1495,9 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
     case NET_MSG_QUEUE_STATUS:
         n = ser_queue_status(&msg->queue_status, payload, remaining);
         break;
+    case NET_MSG_CHANGE_USERNAME:
+        n = ser_change_username(&msg->change_username, payload, remaining);
+        break;
 
     /* Lobby <-> Server */
     case NET_MSG_SERVER_REGISTER:
@@ -1589,6 +1617,9 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         break;
     case NET_MSG_QUEUE_STATUS:
         n = deser_queue_status(&msg->queue_status, payload, remaining);
+        break;
+    case NET_MSG_CHANGE_USERNAME:
+        n = deser_change_username(&msg->change_username, payload, remaining);
         break;
     case NET_MSG_SERVER_REGISTER:
         n = deser_server_register(&msg->server_register, payload, remaining);

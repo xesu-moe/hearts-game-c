@@ -27,8 +27,9 @@
  * Path helpers
  * ================================================================ */
 
-#define IDENTITY_DIR  ".hollow-hearts"
-#define IDENTITY_FILE "identity.key"
+#define IDENTITY_DIR   ".hollow-hearts"
+#define IDENTITY_FILE  "identity.key"
+#define USERNAME_FILE  "username.txt"
 
 /* Build full path: ~/.hollow-hearts/identity.key
  * Returns true on success. */
@@ -140,5 +141,65 @@ bool identity_sign(const Identity *id,
     }
 
     memcpy(sig_out, sm, 64);
+    return true;
+}
+
+/* ================================================================
+ * Username persistence
+ * ================================================================ */
+
+static bool username_build_path(char *buf, size_t buflen)
+{
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) return false;
+    int n = snprintf(buf, buflen, "%s/%s/%s", home, IDENTITY_DIR, USERNAME_FILE);
+    return n > 0 && (size_t)n < buflen;
+}
+
+bool identity_load_username(char *buf, size_t buflen)
+{
+    char path[512];
+    if (!username_build_path(path, sizeof(path))) return false;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+
+    if (!fgets(buf, (int)buflen, f)) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+
+    /* Trim trailing newline */
+    size_t len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+        buf[--len] = '\0';
+
+    if (len == 0) return false;
+
+    printf("[identity] Loaded username: '%s'\n", buf);
+    return true;
+}
+
+bool identity_save_username(const char *username)
+{
+    char path[512];
+    if (!username_build_path(path, sizeof(path))) return false;
+
+    /* Ensure directory exists */
+    char dir[512];
+    if (!identity_build_dir(dir, sizeof(dir))) return false;
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) return false;
+
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        fprintf(stderr, "[identity] Cannot write '%s': %s\n",
+                path, strerror(errno));
+        return false;
+    }
+    fprintf(f, "%s\n", username);
+    fclose(f);
+
+    printf("[identity] Saved username: '%s'\n", username);
     return true;
 }

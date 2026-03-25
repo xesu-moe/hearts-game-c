@@ -67,6 +67,17 @@ typedef enum InputCmdType {
     /* Pause menu */
     INPUT_CMD_RETURN_TO_MENU,
 
+    /* Login UI */
+    INPUT_CMD_LOGIN_SUBMIT,  /* username entered, attempt register/login */
+    INPUT_CMD_LOGIN_RETRY,   /* retry after error */
+
+    /* Online menu */
+    INPUT_CMD_OPEN_ONLINE,       /* menu → online submenu */
+    INPUT_CMD_ONLINE_CREATE,     /* create room */
+    INPUT_CMD_ONLINE_JOIN,       /* submit room code */
+    INPUT_CMD_ONLINE_QUICKMATCH, /* enter matchmaking queue */
+    INPUT_CMD_ONLINE_CANCEL,     /* cancel/back from any online sub-state */
+
     INPUT_CMD_COUNT
 } InputCmdType;
 

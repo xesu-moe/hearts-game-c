@@ -255,6 +255,9 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
         "UPDATE stats SET games_played = games_played + 1, "
         "games_won = games_won + ?, total_score = total_score + ? "
         "WHERE account_id = ?",
+    /* Username change (Step 19) */
+    [LOBBY_STMT_CHANGE_USERNAME] =
+        "UPDATE accounts SET username = ? WHERE id = ?",
 };
 
 static int lobbydb_prepare_all(LobbyDB *ldb)

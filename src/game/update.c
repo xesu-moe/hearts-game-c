@@ -26,6 +26,7 @@
 
 void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                  PassPhaseState *pps, PlayPhaseState *pls,
+                 LoginUIState *lui, OnlineUIState *oui,
                  SettingsUIState *sui, GameSettings *settings,
                  TurnFlow *flow, float dt, bool *quit_requested)
 {
@@ -100,10 +101,29 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
         }
 
         switch (gs->phase) {
+        case PHASE_LOGIN:
+            /* Login submit/retry handled by main.c lobby state machine. */
+            if (cmd.type == INPUT_CMD_QUIT || cmd.type == INPUT_CMD_CANCEL) {
+                *quit_requested = true;
+            }
+            (void)lui;
+            break;
+
+        case PHASE_ONLINE_MENU:
+            /* Online menu commands handled by main.c state machine. */
+            if (cmd.type == INPUT_CMD_QUIT) {
+                *quit_requested = true;
+            }
+            (void)oui;
+            break;
+
         case PHASE_MENU:
             if (cmd.type == INPUT_CMD_START_GAME ||
                 cmd.type == INPUT_CMD_CONFIRM) {
                 game_state_start_game(gs);
+                rs->sync_needed = true;
+            } else if (cmd.type == INPUT_CMD_OPEN_ONLINE) {
+                gs->phase = PHASE_ONLINE_MENU;
                 rs->sync_needed = true;
             } else if (cmd.type == INPUT_CMD_OPEN_SETTINGS) {
                 rs->settings_return_phase = PHASE_MENU;

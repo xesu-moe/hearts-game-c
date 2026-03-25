@@ -233,6 +233,42 @@ void auth_logout(LobbyDB *ldb, const uint8_t token[AUTH_TOKEN_LEN])
     sqlite3_step(stmt);
 }
 
+AuthResult auth_change_username(LobbyDB *ldb, int32_t account_id,
+                                const char *new_username)
+{
+    if (!auth_validate_username(new_username, 32)) {
+        return AUTH_ERR_INVALID_INPUT;
+    }
+
+    /* Check if the new username is taken by someone else */
+    sqlite3_stmt *stmt = lobbydb_stmt(ldb, LOBBY_STMT_FIND_BY_USERNAME);
+    if (!stmt) return AUTH_ERR_DB_ERROR;
+    sqlite3_bind_text(stmt, 1, new_username, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int32_t existing_id = sqlite3_column_int(stmt, 0);
+        if (existing_id != account_id) {
+            return AUTH_ERR_USERNAME_TAKEN;
+        }
+        /* Same user, same name — no-op */
+        return AUTH_OK;
+    }
+
+    /* Update username */
+    stmt = lobbydb_stmt(ldb, LOBBY_STMT_CHANGE_USERNAME);
+    if (!stmt) return AUTH_ERR_DB_ERROR;
+    sqlite3_bind_text(stmt, 1, new_username, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, account_id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        fprintf(stderr, "[auth] Failed to change username: %s\n",
+                sqlite3_errmsg(lobbydb_handle(ldb)));
+        return AUTH_ERR_DB_ERROR;
+    }
+
+    printf("[auth] Account %d changed username to '%s'\n",
+           account_id, new_username);
+    return AUTH_OK;
+}
+
 void auth_cleanup_expired(LobbyDB *ldb)
 {
     sqlite3_stmt *stmt = lobbydb_stmt(ldb, LOBBY_STMT_DELETE_EXPIRED);

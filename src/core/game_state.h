@@ -31,6 +31,8 @@ typedef enum GamePhase {
     PHASE_SCORING,
     PHASE_GAME_OVER,
     PHASE_SETTINGS,
+    PHASE_LOGIN,       /* Client-only: lobby auth screen (never sent over wire) */
+    PHASE_ONLINE_MENU, /* Client-only: online submenu (create/join/queue) */
     PHASE_COUNT
 } GamePhase;
 

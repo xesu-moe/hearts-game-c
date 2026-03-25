@@ -1,0 +1,384 @@
+/* ============================================================
+ * @deps-implements: net/lobby_client.h
+ * @deps-requires: net/lobby_client.h (LobbyClientState, LobbyClientInfo),
+ *                 net/socket.h (NetSocket, net_socket_*),
+ *                 net/protocol.h (NetMsg, NetMsgType, NET_*),
+ *                 net/identity.h (Identity, identity_sign),
+ *                 stdio.h, string.h
+ * @deps-last-changed: 2026-03-25 — Step 19: Login & Register UI
+ * ============================================================ */
+
+#include "lobby_client.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "net/socket.h"
+
+/* ================================================================
+ * File-scope state
+ * ================================================================ */
+
+static NetSocket        g_net;
+static int              g_conn_id;
+static LobbyClientState g_state;
+static LobbyClientInfo  g_info;
+static char             g_error[128];
+static bool             g_initialized;
+
+/* Auth state */
+static uint8_t g_challenge_nonce[NET_CHALLENGE_LEN];
+static char    g_login_username[NET_MAX_NAME_LEN];
+
+/* Connection params for reconnect */
+static char     g_lobby_addr[NET_ADDR_LEN];
+static uint16_t g_lobby_port;
+
+/* Room assignment (from NET_MSG_ROOM_ASSIGNED) */
+static char     g_assigned_addr[NET_ADDR_LEN];
+static uint16_t g_assigned_port;
+static char     g_assigned_room_code[NET_ROOM_CODE_LEN];
+static uint8_t  g_assigned_token[NET_AUTH_TOKEN_LEN];
+static bool     g_room_assigned;
+
+/* ================================================================
+ * Internal: Handle incoming messages
+ * ================================================================ */
+
+static void lc_handle_message(const NetMsg *msg, const Identity *id)
+{
+    switch (msg->type) {
+    case NET_MSG_REGISTER_ACK:
+        printf("[lobby-client] Registration successful\n");
+        /* Auto-login after registration */
+        if (g_state == LOBBY_REGISTERING) {
+            lobby_client_login(g_login_username);
+        }
+        break;
+
+    case NET_MSG_LOGIN_CHALLENGE:
+        if (g_state != LOBBY_LOGGING_IN) {
+            printf("[lobby-client] Unexpected login challenge\n");
+            break;
+        }
+        /* Sign the nonce */
+        memcpy(g_challenge_nonce, msg->login_challenge.nonce,
+               NET_CHALLENGE_LEN);
+        uint8_t signature[NET_ED25519_SIG_LEN];
+        if (!identity_sign(id, g_challenge_nonce, NET_CHALLENGE_LEN,
+                           signature)) {
+            snprintf(g_error, sizeof(g_error), "Failed to sign challenge");
+            g_state = LOBBY_ERROR;
+            break;
+        }
+        /* Send signed response */
+        NetMsg resp;
+        memset(&resp, 0, sizeof(resp));
+        resp.type = NET_MSG_LOGIN_RESPONSE;
+        memcpy(resp.login_response.signature, signature,
+               NET_ED25519_SIG_LEN);
+        net_socket_send_msg(&g_net, g_conn_id, &resp);
+        g_state = LOBBY_CHALLENGED;
+        printf("[lobby-client] Sent login response\n");
+        break;
+
+    case NET_MSG_LOGIN_ACK:
+        if (g_state != LOBBY_CHALLENGED) {
+            printf("[lobby-client] Unexpected login ACK\n");
+            break;
+        }
+        memcpy(g_info.auth_token, msg->login_ack.auth_token,
+               NET_AUTH_TOKEN_LEN);
+        g_info.elo_rating = msg->login_ack.elo_rating;
+        g_info.games_played = msg->login_ack.games_played;
+        g_info.games_won = msg->login_ack.games_won;
+        strncpy(g_info.username, g_login_username, NET_MAX_NAME_LEN - 1);
+        g_info.username[NET_MAX_NAME_LEN - 1] = '\0';
+        g_state = LOBBY_AUTHENTICATED;
+        printf("[lobby-client] Authenticated as '%s' "
+               "(ELO=%d, played=%u, won=%u)\n",
+               g_info.username, g_info.elo_rating,
+               g_info.games_played, g_info.games_won);
+        break;
+
+    case NET_MSG_ROOM_ASSIGNED:
+        strncpy(g_assigned_addr, msg->room_assigned.server_addr,
+                NET_ADDR_LEN - 1);
+        g_assigned_addr[NET_ADDR_LEN - 1] = '\0';
+        g_assigned_port = msg->room_assigned.server_port;
+        strncpy(g_assigned_room_code, msg->room_assigned.room_code,
+                NET_ROOM_CODE_LEN - 1);
+        g_assigned_room_code[NET_ROOM_CODE_LEN - 1] = '\0';
+        memcpy(g_assigned_token, msg->room_assigned.auth_token,
+               NET_AUTH_TOKEN_LEN);
+        g_room_assigned = true;
+        g_state = LOBBY_AUTHENTICATED;
+        printf("[lobby-client] Room assigned: %s:%d code='%s'\n",
+               g_assigned_addr, g_assigned_port, g_assigned_room_code);
+        break;
+
+    case NET_MSG_QUEUE_STATUS:
+        printf("[lobby-client] Queue position: %d\n",
+               msg->queue_status.position);
+        break;
+
+    case NET_MSG_ERROR:
+        snprintf(g_error, sizeof(g_error), "%s", msg->error.message);
+        /* Stay authenticated if we were in a room/queue operation */
+        if (g_state == LOBBY_CREATING_ROOM || g_state == LOBBY_JOINING_ROOM ||
+            g_state == LOBBY_QUEUED) {
+            g_state = LOBBY_AUTHENTICATED;
+        } else {
+            g_state = LOBBY_ERROR;
+        }
+        printf("[lobby-client] Error: %s\n", g_error);
+        break;
+
+    default:
+        printf("[lobby-client] Unexpected message type %d\n", msg->type);
+        break;
+    }
+}
+
+/* ================================================================
+ * Public API
+ * ================================================================ */
+
+void lobby_client_init(void)
+{
+    net_socket_init(&g_net, 1);
+    g_conn_id = -1;
+    g_state = LOBBY_DISCONNECTED;
+    g_initialized = true;
+    memset(&g_info, 0, sizeof(g_info));
+    memset(g_error, 0, sizeof(g_error));
+    memset(g_lobby_addr, 0, sizeof(g_lobby_addr));
+    g_lobby_port = 0;
+    printf("[lobby-client] Initialized\n");
+}
+
+void lobby_client_shutdown(void)
+{
+    if (!g_initialized) return;
+    if (g_conn_id >= 0 &&
+        net_socket_state(&g_net, g_conn_id) == NET_CONN_CONNECTED) {
+        NetMsg msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.type = NET_MSG_DISCONNECT;
+        msg.disconnect.reason = NET_DISCONNECT_NORMAL;
+        net_socket_send_msg(&g_net, g_conn_id, &msg);
+    }
+    net_socket_shutdown(&g_net);
+    g_initialized = false;
+    g_state = LOBBY_DISCONNECTED;
+    g_conn_id = -1;
+    printf("[lobby-client] Shutdown\n");
+}
+
+void lobby_client_connect(const char *ip, uint16_t port)
+{
+    if (!g_initialized) return;
+
+    /* Store for reconnect */
+    strncpy(g_lobby_addr, ip, NET_ADDR_LEN - 1);
+    g_lobby_port = port;
+
+    g_conn_id = net_socket_connect(&g_net, ip, port);
+    if (g_conn_id < 0) {
+        snprintf(g_error, sizeof(g_error), "Failed to connect to %s:%d",
+                 ip, port);
+        g_state = LOBBY_ERROR;
+        return;
+    }
+    g_state = LOBBY_CONNECTING;
+    printf("[lobby-client] Connecting to %s:%d\n", ip, port);
+}
+
+void lobby_client_disconnect(void)
+{
+    if (!g_initialized) return;
+    if (g_conn_id >= 0) {
+        net_socket_close(&g_net, g_conn_id);
+        g_conn_id = -1;
+    }
+    g_state = LOBBY_DISCONNECTED;
+}
+
+void lobby_client_update(float dt, const Identity *id)
+{
+    (void)dt;
+    if (!g_initialized || g_conn_id < 0) return;
+
+    net_socket_update(&g_net);
+
+    NetConnState cs = net_socket_state(&g_net, g_conn_id);
+
+    /* Check for connection established */
+    if (g_state == LOBBY_CONNECTING && cs == NET_CONN_CONNECTED) {
+        g_state = LOBBY_CONNECTED;
+        printf("[lobby-client] Connected to lobby\n");
+    }
+
+    /* Check for connection lost */
+    if (cs == NET_CONN_DISCONNECTED && g_state != LOBBY_DISCONNECTED &&
+        g_state != LOBBY_ERROR) {
+        snprintf(g_error, sizeof(g_error), "Connection lost");
+        g_state = LOBBY_ERROR;
+        printf("[lobby-client] Connection lost\n");
+        return;
+    }
+
+    /* Process incoming messages */
+    if (cs == NET_CONN_CONNECTED) {
+        NetMsg msg;
+        while (net_socket_recv_msg(&g_net, g_conn_id, &msg)) {
+            lc_handle_message(&msg, id);
+        }
+    }
+}
+
+void lobby_client_register(const char *username, const Identity *id)
+{
+    if (g_state != LOBBY_CONNECTED) return;
+
+    strncpy(g_login_username, username, NET_MAX_NAME_LEN - 1);
+    g_login_username[NET_MAX_NAME_LEN - 1] = '\0';
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_REGISTER;
+    strncpy(msg.reg.username, username, NET_MAX_NAME_LEN - 1);
+    memcpy(msg.reg.public_key, id->public_key, IDENTITY_PK_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_REGISTERING;
+    printf("[lobby-client] Registering as '%s'\n", username);
+}
+
+void lobby_client_login(const char *username)
+{
+    if (g_state != LOBBY_CONNECTED && g_state != LOBBY_REGISTERING) return;
+
+    strncpy(g_login_username, username, NET_MAX_NAME_LEN - 1);
+    g_login_username[NET_MAX_NAME_LEN - 1] = '\0';
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_LOGIN;
+    strncpy(msg.login.username, username, NET_MAX_NAME_LEN - 1);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_LOGGING_IN;
+    printf("[lobby-client] Logging in as '%s'\n", username);
+}
+
+void lobby_client_change_username(const char *new_username)
+{
+    if (g_state != LOBBY_AUTHENTICATED) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_CHANGE_USERNAME;
+    memcpy(msg.change_username.auth_token, g_info.auth_token,
+           NET_AUTH_TOKEN_LEN);
+    strncpy(msg.change_username.new_username, new_username,
+            NET_MAX_NAME_LEN - 1);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    printf("[lobby-client] Requesting username change to '%s'\n",
+           new_username);
+}
+
+void lobby_client_create_room(void)
+{
+    if (g_state != LOBBY_AUTHENTICATED) return;
+    g_error[0] = '\0';
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_CREATE_ROOM;
+    memcpy(msg.create_room.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_CREATING_ROOM;
+    printf("[lobby-client] Creating room\n");
+}
+
+void lobby_client_join_room(const char *code)
+{
+    if (g_state != LOBBY_AUTHENTICATED) return;
+    g_error[0] = '\0';
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_JOIN_ROOM;
+    memcpy(msg.join_room.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    strncpy(msg.join_room.room_code, code, NET_ROOM_CODE_LEN - 1);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_JOINING_ROOM;
+    printf("[lobby-client] Joining room '%s'\n", code);
+}
+
+void lobby_client_queue_matchmake(void)
+{
+    if (g_state != LOBBY_AUTHENTICATED) return;
+    g_error[0] = '\0';
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_QUEUE_MATCHMAKE;
+    memcpy(msg.queue_matchmake.auth_token, g_info.auth_token,
+           NET_AUTH_TOKEN_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_QUEUED;
+    printf("[lobby-client] Entering matchmaking queue\n");
+}
+
+void lobby_client_queue_cancel(void)
+{
+    if (g_state != LOBBY_QUEUED) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_QUEUE_CANCEL;
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_AUTHENTICATED;
+    printf("[lobby-client] Cancelled matchmaking\n");
+}
+
+LobbyClientState lobby_client_state(void)
+{
+    return g_state;
+}
+
+const LobbyClientInfo *lobby_client_info(void)
+{
+    return (g_state == LOBBY_AUTHENTICATED) ? &g_info : NULL;
+}
+
+const char *lobby_client_error_msg(void)
+{
+    return g_error;
+}
+
+bool lobby_client_has_room_assignment(void)
+{
+    return g_room_assigned;
+}
+
+void lobby_client_consume_room_assignment(char *addr_out, uint16_t *port_out,
+                                          char *room_code_out,
+                                          uint8_t *token_out)
+{
+    if (!g_room_assigned) return;
+    strncpy(addr_out, g_assigned_addr, NET_ADDR_LEN - 1);
+    addr_out[NET_ADDR_LEN - 1] = '\0';
+    *port_out = g_assigned_port;
+    strncpy(room_code_out, g_assigned_room_code, NET_ROOM_CODE_LEN - 1);
+    room_code_out[NET_ROOM_CODE_LEN - 1] = '\0';
+    memcpy(token_out, g_assigned_token, NET_AUTH_TOKEN_LEN);
+    g_room_assigned = false;
+}

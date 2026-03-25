@@ -78,6 +78,12 @@ AuthResult auth_verify_and_login(LobbyDB *ldb,
 int32_t auth_validate_token(LobbyDB *ldb,
                             const uint8_t token[AUTH_TOKEN_LEN]);
 
+/* Change username for an account.
+ * Validates new username format and checks uniqueness.
+ * Returns AUTH_OK, AUTH_ERR_USERNAME_TAKEN, or AUTH_ERR_INVALID_INPUT. */
+AuthResult auth_change_username(LobbyDB *ldb, int32_t account_id,
+                                const char *new_username);
+
 /* Delete a session (logout). */
 void auth_logout(LobbyDB *ldb, const uint8_t token[AUTH_TOKEN_LEN]);
 

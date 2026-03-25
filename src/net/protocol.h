@@ -93,6 +93,7 @@ typedef enum NetMsgType {
     NET_MSG_LOGIN_CHALLENGE  = 50,  /* lobby -> client: nonce */
     NET_MSG_LOGIN_RESPONSE   = 51,  /* client -> lobby: signature */
     NET_MSG_REGISTER_ACK     = 52,  /* lobby -> client: success (no payload) */
+    NET_MSG_CHANGE_USERNAME  = 53,  /* client -> lobby: rename */
 
     /* Lobby <-> Game Server messages (60-69) */
     NET_MSG_SERVER_REGISTER    = 60,
@@ -303,6 +304,11 @@ typedef struct NetMsgQueueStatus {
     uint16_t position;
     uint16_t estimated_wait_secs;
 } NetMsgQueueStatus;
+
+typedef struct NetMsgChangeUsername {
+    uint8_t auth_token[NET_AUTH_TOKEN_LEN];
+    char    new_username[NET_MAX_NAME_LEN];
+} NetMsgChangeUsername;
 
 /* ================================================================
  * Lobby <-> Game Server Message Payloads
@@ -524,6 +530,7 @@ typedef struct NetMsg {
         NetMsgRoomAssigned    room_assigned;
         NetMsgQueueMatchmake  queue_matchmake;
         NetMsgQueueStatus     queue_status;
+        NetMsgChangeUsername  change_username;
         NetMsgServerRegister    server_register;
         NetMsgServerCreateRoom  server_create_room;
         NetMsgServerResult      server_result;

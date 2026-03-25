@@ -52,6 +52,8 @@ typedef enum LobbyStmtID {
     LOBBY_STMT_INSERT_MATCH,
     LOBBY_STMT_INSERT_MATCH_PLAYER,
     LOBBY_STMT_UPDATE_STATS,
+    /* Username change (Step 19) */
+    LOBBY_STMT_CHANGE_USERNAME,
     LOBBY_STMT__COUNT /* must be last */
 } LobbyStmtID;
 

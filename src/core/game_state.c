@@ -17,7 +17,7 @@ void game_state_init(GameState *gs)
     for (int i = 0; i < NUM_PLAYERS; i++) {
         player_init(&gs->players[i], i, i == 0);
     }
-    gs->phase = PHASE_MENU;
+    gs->phase = PHASE_LOGIN;
     gs->round_number = 0;
 }
 

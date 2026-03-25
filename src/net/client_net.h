@@ -53,6 +53,10 @@ void client_net_shutdown(void);
  * Connection
  * ================================================================ */
 
+/* Set the auth token to use in the game server handshake.
+ * Call before client_net_connect(). */
+void client_net_set_auth_token(const uint8_t token[NET_AUTH_TOKEN_LEN]);
+
 /* Begin connecting to a game server. ip must be a dotted-quad address
  * (no DNS). room_code may be empty string to create a new room. */
 void client_net_connect(const char *ip, uint16_t port, const char *room_code);

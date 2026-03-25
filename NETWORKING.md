@@ -232,6 +232,14 @@ Hollow Hearts is designed for 4 human players but currently runs as a single-pro
 - Files: `src/game/online_ui.h/c`, modify `src/game/update.c`
 - **Verify**: Full flow — login → create room → share code → 3 others join → game starts
 
+**Step 20.1 — Player Join Notifications & Waiting Room Polish**
+- Game server sends `NET_MSG_SERVER_ROOM_STATUS` to lobby when a player joins/leaves a room (room code + current player count + player names)
+- Lobby forwards player count/names to the room creator's client connection
+- Client updates `OnlineUIState.player_count` and displays individual player slots in the Create Room waiting room
+- Pong timestamp: populate `server_timestamp_ms` in lobby and game server pong responses (currently hardcoded to 0)
+- Files: `src/server/server_net.c`, `src/net/protocol.h/c` (new message type), `src/lobby/lobby_net.c`, `src/game/online_ui.h`, `src/render/render.c`
+- **Verify**: Create room → second client joins → creator sees "2/4 players" update live
+
 ---
 
 ### Phase G: Stats & Polish

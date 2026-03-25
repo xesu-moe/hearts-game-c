@@ -160,10 +160,63 @@ void process_input(GameState *gs, RenderState *rs,
         }
 
         switch (gs->phase) {
+        case PHASE_LOGIN:
+            if (render_hit_test_button(&rs->btn_login_submit, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_LOGIN_SUBMIT,
+                    .source_player = 0,
+                });
+            } else if (render_hit_test_button(&rs->btn_login_retry, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_LOGIN_RETRY,
+                    .source_player = 0,
+                });
+            }
+            break;
+
+        case PHASE_ONLINE_MENU:
+            /* Sub-menu buttons */
+            for (int i = 0; i < ONLINE_BTN_COUNT; i++) {
+                if (render_hit_test_button(&rs->online_btns[i], mouse)) {
+                    InputCmdType types[] = {
+                        INPUT_CMD_ONLINE_CREATE,
+                        INPUT_CMD_ONLINE_JOIN,       /* opens join input */
+                        INPUT_CMD_ONLINE_QUICKMATCH,
+                        INPUT_CMD_ONLINE_CANCEL,     /* Back = cancel */
+                    };
+                    input_cmd_push((InputCmd){
+                        .type = types[i],
+                        .source_player = 0,
+                    });
+                    break;
+                }
+            }
+            /* Join submit */
+            if (render_hit_test_button(&rs->btn_online_join_submit, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_JOIN,
+                    .source_player = 0,
+                });
+            }
+            /* Cancel from sub-states */
+            if (render_hit_test_button(&rs->btn_online_cancel, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_CANCEL,
+                    .source_player = 0,
+                });
+            }
+            break;
+
         case PHASE_MENU:
             for (int i = 0; i < MENU_ITEM_COUNT; i++) {
                 if (render_hit_test_button(&rs->menu_items[i], mouse)) {
                     switch ((MenuItem)i) {
+                    case MENU_PLAY_ONLINE:
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_OPEN_ONLINE,
+                            .source_player = 0,
+                        });
+                        break;
                     case MENU_PLAY_OFFLINE:
                         input_cmd_push((InputCmd){
                             .type = INPUT_CMD_START_GAME,

@@ -19,6 +19,8 @@
 
 #include "card_render.h"
 #include "core/hand.h"
+#include "game/login_ui.h"
+#include "game/online_ui.h"
 #include "phase2/phase2_state.h"
 #include "phase2/phase2_defs.h"
 #include "rlgl.h"
@@ -292,7 +294,7 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             const char *subtitle;
             bool        disabled;
         } menu_defs[MENU_ITEM_COUNT] = {
-            [MENU_PLAY_ONLINE]   = {"Play Online",   "(Coming Soon)", true},
+            [MENU_PLAY_ONLINE]   = {"Play Online",   NULL,            false},
             [MENU_PLAY_OFFLINE]  = {"Play Offline",   NULL,            false},
             [MENU_DECK_BUILDING] = {"Deck Building",  "(Coming Soon)", true},
             [MENU_STATISTICS]    = {"Statistics",      "(Coming Soon)", true},
@@ -328,6 +330,101 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->menu_items[i].visible = false;
             rs->menu_items[i].hovered = false;
         }
+    }
+
+    /* ---- Login UI buttons ---- */
+    if (gs->phase == PHASE_LOGIN) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
+        float btn_w = 200.0f * s;
+        float btn_h = 45.0f * s;
+
+        rs->btn_login_submit.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 30.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_login_submit.label = "Register";
+        rs->btn_login_submit.visible =
+            rs->login_ui && rs->login_ui->show_username_input &&
+            !rs->login_ui->awaiting_response;
+        rs->btn_login_submit.disabled = false;
+
+        rs->btn_login_retry.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 20.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_login_retry.label = "Retry";
+        rs->btn_login_retry.visible =
+            rs->login_ui && rs->login_ui->error_text[0];
+        rs->btn_login_retry.disabled = false;
+    } else {
+        rs->btn_login_submit.visible = false;
+        rs->btn_login_retry.visible = false;
+    }
+
+    /* ---- Online menu buttons ---- */
+    if (gs->phase == PHASE_ONLINE_MENU && rs->online_ui) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
+        float btn_w = 280.0f * s;
+        float btn_h = 50.0f * s;
+        float btn_gap = 12.0f * s;
+
+        static const char *online_labels[ONLINE_BTN_COUNT] = {
+            "Create Room", "Join Room", "Quick Match", "Back"
+        };
+
+        OnlineSubphase sub = rs->online_ui->subphase;
+        bool show_menu = (sub == ONLINE_SUB_MENU);
+
+        float total_h = ONLINE_BTN_COUNT * btn_h +
+                         (ONLINE_BTN_COUNT - 1) * btn_gap;
+        float top_y = screen_cy - total_h * 0.5f + 20.0f * s;
+
+        for (int i = 0; i < ONLINE_BTN_COUNT; i++) {
+            rs->online_btns[i].bounds = (Rectangle){
+                screen_cx - btn_w * 0.5f,
+                top_y + (float)i * (btn_h + btn_gap),
+                btn_w, btn_h
+            };
+            rs->online_btns[i].label = online_labels[i];
+            rs->online_btns[i].visible = show_menu;
+            rs->online_btns[i].disabled = false;
+        }
+
+        /* Join submit button */
+        float small_btn_w = 200.0f * s;
+        float small_btn_h = 45.0f * s;
+        rs->btn_online_join_submit.bounds = (Rectangle){
+            screen_cx - small_btn_w * 0.5f,
+            screen_cy + 30.0f * s,
+            small_btn_w, small_btn_h
+        };
+        rs->btn_online_join_submit.label = "Join";
+        rs->btn_online_join_submit.visible = (sub == ONLINE_SUB_JOIN_INPUT);
+        rs->btn_online_join_submit.disabled = false;
+
+        /* Cancel button (used in multiple sub-states) */
+        rs->btn_online_cancel.bounds = (Rectangle){
+            screen_cx - small_btn_w * 0.5f,
+            screen_cy + 80.0f * s,
+            small_btn_w, small_btn_h
+        };
+        rs->btn_online_cancel.label = (sub == ONLINE_SUB_ERROR) ? "Back" : "Cancel";
+        rs->btn_online_cancel.visible =
+            (sub == ONLINE_SUB_CREATE_WAITING ||
+             sub == ONLINE_SUB_JOIN_INPUT ||
+             sub == ONLINE_SUB_JOIN_WAITING ||
+             sub == ONLINE_SUB_QUEUE_SEARCHING ||
+             sub == ONLINE_SUB_ERROR);
+        rs->btn_online_cancel.disabled = false;
+    } else {
+        for (int i = 0; i < ONLINE_BTN_COUNT; i++)
+            rs->online_btns[i].visible = false;
+        rs->btn_online_join_submit.visible = false;
+        rs->btn_online_cancel.visible = false;
     }
 
     rs->btn_confirm_pass.bounds = btn_rect;
@@ -1220,6 +1317,33 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         }
     }
 
+    /* Update online menu button hover state */
+    if (gs->phase == PHASE_ONLINE_MENU) {
+        Vector2 mouse = GetMousePosition();
+        for (int i = 0; i < ONLINE_BTN_COUNT; i++) {
+            rs->online_btns[i].hovered =
+                rs->online_btns[i].visible &&
+                CheckCollisionPointRec(mouse, rs->online_btns[i].bounds);
+        }
+        rs->btn_online_join_submit.hovered =
+            rs->btn_online_join_submit.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_online_join_submit.bounds);
+        rs->btn_online_cancel.hovered =
+            rs->btn_online_cancel.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_online_cancel.bounds);
+    }
+
+    /* Update login button hover state */
+    if (gs->phase == PHASE_LOGIN) {
+        Vector2 mouse = GetMousePosition();
+        rs->btn_login_submit.hovered =
+            rs->btn_login_submit.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_login_submit.bounds);
+        rs->btn_login_retry.hovered =
+            rs->btn_login_retry.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_login_retry.bounds);
+    }
+
     /* Update menu item hover state */
     if (gs->phase == PHASE_MENU) {
         Vector2 mouse = GetMousePosition();
@@ -1547,6 +1671,224 @@ static const char *player_name(int player_id)
 }
 
 /* ---- Phase-specific drawing ---- */
+
+/* ---- Login Screen ---- */
+
+static void draw_phase_login(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    const LoginUIState *lui = rs->login_ui;
+    float s = rs->layout.scale;
+    float cx = rs->layout.screen_width * 0.5f;
+    float cy = rs->layout.screen_height * 0.5f;
+
+    /* Title */
+    const char *title = "HOLLOW HEARTS";
+    int title_size = (int)(50.0f * s);
+    int tw = MeasureText(title, title_size);
+    DrawText(title, (int)(cx - (float)tw * 0.5f),
+             (int)(cy - 160.0f * s), title_size, RAYWHITE);
+
+    if (!lui) return;
+
+    if (lui->show_username_input && !lui->awaiting_response) {
+        /* Username text field */
+        const char *prompt = "Choose a username:";
+        int prompt_size = (int)(22.0f * s);
+        int pw = MeasureText(prompt, prompt_size);
+        DrawText(prompt, (int)(cx - (float)pw * 0.5f),
+                 (int)(cy - 60.0f * s), prompt_size, LIGHTGRAY);
+
+        float field_w = 300.0f * s;
+        float field_h = 40.0f * s;
+        float field_x = cx - field_w * 0.5f;
+        float field_y = cy - 20.0f * s;
+        DrawRectangle((int)field_x, (int)field_y,
+                      (int)field_w, (int)field_h,
+                      (Color){40, 40, 50, 255});
+        DrawRectangleLines((int)field_x, (int)field_y,
+                           (int)field_w, (int)field_h, LIGHTGRAY);
+
+        int text_size = (int)(24.0f * s);
+        float text_x = field_x + 8.0f * s;
+        float text_y = field_y + (field_h - (float)text_size) * 0.5f;
+        DrawText(lui->username_buf, (int)text_x, (int)text_y,
+                 text_size, WHITE);
+
+        /* Blinking cursor */
+        if (lui->cursor_blink < 0.5f) {
+            int text_w = MeasureText(lui->username_buf, text_size);
+            DrawRectangle((int)(text_x + (float)text_w + 2.0f * s),
+                          (int)text_y, (int)(2.0f * s), text_size, WHITE);
+        }
+
+        /* Register button */
+        draw_button(&rs->btn_login_submit, s);
+
+        /* Username rules hint */
+        const char *hint = "3-31 characters, letters/numbers/underscore";
+        int hint_size = (int)(14.0f * s);
+        int hw = MeasureText(hint, hint_size);
+        DrawText(hint, (int)(cx - (float)hw * 0.5f),
+                 (int)(cy + 80.0f * s), hint_size, GRAY);
+    } else if (lui->error_text[0]) {
+        /* Error display */
+        int err_size = (int)(20.0f * s);
+        int ew = MeasureText(lui->error_text, err_size);
+        DrawText(lui->error_text, (int)(cx - (float)ew * 0.5f),
+                 (int)(cy - 20.0f * s), err_size, RED);
+        draw_button(&rs->btn_login_retry, s);
+    } else {
+        /* Status text (Connecting... / Logging in...) */
+        int status_size = (int)(22.0f * s);
+        int stw = MeasureText(lui->status_text, status_size);
+        DrawText(lui->status_text, (int)(cx - (float)stw * 0.5f),
+                 (int)(cy - 10.0f * s), status_size, LIGHTGRAY);
+    }
+}
+
+/* ---- Online Menu ---- */
+
+static void draw_phase_online(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    const OnlineUIState *oui = rs->online_ui;
+    float s = rs->layout.scale;
+    float cx = rs->layout.screen_width * 0.5f;
+    float cy = rs->layout.screen_height * 0.5f;
+
+    /* Title */
+    const char *title = "PLAY ONLINE";
+    int title_size = (int)(40.0f * s);
+    int tw = MeasureText(title, title_size);
+    DrawText(title, (int)(cx - (float)tw * 0.5f),
+             (int)(cy - 180.0f * s), title_size, RAYWHITE);
+
+    if (!oui) return;
+
+    switch (oui->subphase) {
+    case ONLINE_SUB_MENU:
+        for (int i = 0; i < ONLINE_BTN_COUNT; i++)
+            draw_button(&rs->online_btns[i], s);
+        break;
+
+    case ONLINE_SUB_CREATE_WAITING: {
+        /* Room code large */
+        const char *code_label = "Room Code:";
+        int label_size = (int)(20.0f * s);
+        int lw = MeasureText(code_label, label_size);
+        DrawText(code_label, (int)(cx - (float)lw * 0.5f),
+                 (int)(cy - 80.0f * s), label_size, LIGHTGRAY);
+
+        int code_size = (int)(50.0f * s);
+        int cw = MeasureText(oui->created_room_code, code_size);
+        DrawText(oui->created_room_code, (int)(cx - (float)cw * 0.5f),
+                 (int)(cy - 50.0f * s), code_size, GOLD);
+
+        /* Player count */
+        char slots[32];
+        snprintf(slots, sizeof(slots), "Players: %d / 4", oui->player_count);
+        int slots_size = (int)(22.0f * s);
+        int sw2 = MeasureText(slots, slots_size);
+        DrawText(slots, (int)(cx - (float)sw2 * 0.5f),
+                 (int)(cy + 20.0f * s), slots_size, WHITE);
+
+        /* TODO: show individual player names when server sends join notifications */
+
+        const char *waiting = "Waiting for players...";
+        int wait_size = (int)(18.0f * s);
+        int ww = MeasureText(waiting, wait_size);
+        DrawText(waiting, (int)(cx - (float)ww * 0.5f),
+                 (int)(cy + 50.0f * s), wait_size, GRAY);
+
+        draw_button(&rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_JOIN_INPUT: {
+        const char *prompt = "Enter Room Code:";
+        int prompt_size = (int)(22.0f * s);
+        int pw = MeasureText(prompt, prompt_size);
+        DrawText(prompt, (int)(cx - (float)pw * 0.5f),
+                 (int)(cy - 60.0f * s), prompt_size, LIGHTGRAY);
+
+        /* Text field */
+        float field_w = 200.0f * s;
+        float field_h = 50.0f * s;
+        float field_x = cx - field_w * 0.5f;
+        float field_y = cy - 25.0f * s;
+        DrawRectangle((int)field_x, (int)field_y,
+                      (int)field_w, (int)field_h,
+                      (Color){40, 40, 50, 255});
+        DrawRectangleLines((int)field_x, (int)field_y,
+                           (int)field_w, (int)field_h, LIGHTGRAY);
+
+        int text_size = (int)(30.0f * s);
+        float text_x = field_x + 8.0f * s;
+        float text_y = field_y + (field_h - (float)text_size) * 0.5f;
+        DrawText(oui->room_code_buf, (int)text_x, (int)text_y,
+                 text_size, WHITE);
+
+        /* Blinking cursor */
+        if (oui->cursor_blink < 0.5f) {
+            int text_w = MeasureText(oui->room_code_buf, text_size);
+            DrawRectangle((int)(text_x + (float)text_w + 2.0f * s),
+                          (int)text_y, (int)(2.0f * s), text_size, WHITE);
+        }
+
+        draw_button(&rs->btn_online_join_submit, s);
+        draw_button(&rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_JOIN_WAITING: {
+        const char *joining = "Joining room...";
+        int join_size = (int)(24.0f * s);
+        int jw = MeasureText(joining, join_size);
+        DrawText(joining, (int)(cx - (float)jw * 0.5f),
+                 (int)(cy - 20.0f * s), join_size, LIGHTGRAY);
+        draw_button(&rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_QUEUE_SEARCHING: {
+        const char *searching = "Searching for match...";
+        int search_size = (int)(24.0f * s);
+        int sw2 = MeasureText(searching, search_size);
+        DrawText(searching, (int)(cx - (float)sw2 * 0.5f),
+                 (int)(cy - 20.0f * s), search_size, LIGHTGRAY);
+        draw_button(&rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_MATCH_FOUND: {
+        const char *found = "Game Found!";
+        int found_size = (int)(40.0f * s);
+        int fw = MeasureText(found, found_size);
+        DrawText(found, (int)(cx - (float)fw * 0.5f),
+                 (int)(cy - 20.0f * s), found_size, GREEN);
+        break;
+    }
+
+    case ONLINE_SUB_CONNECTING: {
+        const char *connecting = "Connecting to server...";
+        int conn_size = (int)(22.0f * s);
+        int cw2 = MeasureText(connecting, conn_size);
+        DrawText(connecting, (int)(cx - (float)cw2 * 0.5f),
+                 (int)(cy - 10.0f * s), conn_size, LIGHTGRAY);
+        break;
+    }
+
+    case ONLINE_SUB_ERROR: {
+        int err_size = (int)(20.0f * s);
+        int ew = MeasureText(oui->error_text, err_size);
+        DrawText(oui->error_text, (int)(cx - (float)ew * 0.5f),
+                 (int)(cy - 20.0f * s), err_size, RED);
+        draw_button(&rs->btn_online_cancel, s);
+        break;
+    }
+    }
+}
 
 static void draw_phase_menu(const GameState *gs, const RenderState *rs)
 {
@@ -2563,6 +2905,14 @@ void render_draw(const GameState *gs, const RenderState *rs)
     ClearBackground((Color){20, 60, 20, 255});
 
     switch (gs->phase) {
+    case PHASE_LOGIN:
+        draw_phase_login(gs, rs);
+        break;
+
+    case PHASE_ONLINE_MENU:
+        draw_phase_online(gs, rs);
+        break;
+
     case PHASE_MENU:
         draw_phase_menu(gs, rs);
         break;

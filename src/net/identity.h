@@ -5,7 +5,8 @@
  * at ~/.hollow-hearts/identity.key (64 bytes raw binary).
  * Signs challenge nonces for lobby authentication.
  *
- * @deps-exports: Identity, identity_load_or_create, identity_sign
+ * @deps-exports: Identity, identity_load_or_create, identity_sign,
+ *                identity_load_username, identity_save_username
  * @deps-requires: vendor/tweetnacl.h (crypto_sign_*)
  * @deps-used-by: (client login flow — Steps 19-20)
  * @deps-last-changed: 2026-03-24 — Step 15: Account System
@@ -38,5 +39,13 @@ bool identity_load_or_create(Identity *id);
 bool identity_sign(const Identity *id,
                    const uint8_t *msg, size_t msg_len,
                    uint8_t *sig_out);
+
+/* Load stored username from ~/.hollow-hearts/username.txt.
+ * Returns true if a username was found and copied to buf. */
+bool identity_load_username(char *buf, size_t buflen);
+
+/* Save username to ~/.hollow-hearts/username.txt.
+ * Returns true on success. */
+bool identity_save_username(const char *username);
 
 #endif /* IDENTITY_H */

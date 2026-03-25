@@ -314,6 +314,18 @@ typedef struct RenderState {
 
     /* Particle effects */
     ParticleSystem particles;
+
+    /* Login UI (Step 19) */
+    UIButton btn_login_submit;
+    UIButton btn_login_retry;
+    const struct LoginUIState *login_ui; /* set by main.c, read by render */
+
+    /* Online menu UI (Step 20) */
+#define ONLINE_BTN_COUNT 4 /* Create Room, Join Room, Quick Match, Back */
+    UIButton online_btns[ONLINE_BTN_COUNT];
+    UIButton btn_online_join_submit;
+    UIButton btn_online_cancel;
+    const struct OnlineUIState *online_ui; /* set by main.c, read by render */
 } RenderState;
 
 /* ---- Public API ---- */

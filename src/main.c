@@ -17,6 +17,9 @@
  * ============================================================ */
 
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "raylib.h"
 
@@ -33,6 +36,8 @@
 #include "phase2/transmutation_logic.h"
 
 #include "audio/audio.h"
+#include "game/login_ui.h"
+#include "game/online_ui.h"
 #include "game/play_phase.h"
 #include "game/pass_phase.h"
 #include "game/turn_flow.h"
@@ -42,6 +47,8 @@
 #include "game/info_sync.h"
 #include "game/phase_transitions.h"
 #include "net/client_net.h"
+#include "net/identity.h"
+#include "net/lobby_client.h"
 #include "net/protocol.h"
 #include "net/state_recv.h"
 
@@ -51,9 +58,34 @@
 #define WINDOW_TITLE  "Hollow Hearts"
 #define TARGET_FPS    60
 
-/* ---- Entry point ---- */
-int main(void)
+#define DEFAULT_LOBBY_ADDR "127.0.0.1"
+#define DEFAULT_LOBBY_PORT 7778
+
+/* ---- CLI arg parsing ---- */
+static void parse_args(int argc, char **argv,
+                       char *lobby_addr, uint16_t *lobby_port)
 {
+    strncpy(lobby_addr, DEFAULT_LOBBY_ADDR, NET_ADDR_LEN - 1);
+    *lobby_port = DEFAULT_LOBBY_PORT;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--lobby-addr") == 0 && i + 1 < argc) {
+            strncpy(lobby_addr, argv[++i], NET_ADDR_LEN - 1);
+            lobby_addr[NET_ADDR_LEN - 1] = '\0';
+        } else if (strcmp(argv[i], "--lobby-port") == 0 && i + 1 < argc) {
+            *lobby_port = (uint16_t)atoi(argv[++i]);
+        }
+    }
+}
+
+/* ---- Entry point ---- */
+int main(int argc, char **argv)
+{
+    /* Parse CLI args */
+    char lobby_addr[NET_ADDR_LEN];
+    uint16_t lobby_port;
+    parse_args(argc, argv, lobby_addr, &lobby_port);
+
     /* Load settings before window creation to get resolution */
     GameSettings g_settings;
     settings_load(&g_settings);
@@ -71,6 +103,24 @@ int main(void)
     input_init();
     client_net_init();
 
+    /* Identity + lobby connection */
+    Identity identity;
+    identity_load_or_create(&identity);
+
+    LoginUIState lui;
+    login_ui_init(&lui);
+    if (identity_load_username(lui.username_buf, sizeof(lui.username_buf))) {
+        lui.username_len = (int)strlen(lui.username_buf);
+        lui.has_stored_username = true;
+        lui.show_username_input = false;
+    }
+
+    OnlineUIState oui;
+    online_ui_init(&oui);
+
+    lobby_client_init();
+    lobby_client_connect(lobby_addr, lobby_port);
+
     Phase2State p2;
     phase2_defs_init();
     contract_state_init(&p2);
@@ -86,6 +136,8 @@ int main(void)
 
     RenderState rs;
     render_init(&rs);
+    rs.login_ui = &lui;
+    rs.online_ui = &oui;
 
     /* Apply loaded settings (fullscreen, fps, layout) */
     settings_apply(&g_settings);
@@ -131,6 +183,216 @@ int main(void)
         anim_set_speed(settings_anim_multiplier(g_settings.anim_speed));
         clock_update(&clk);
         client_net_update(clk.raw_dt);
+        lobby_client_update(clk.raw_dt, &identity);
+
+        /* Login screen text input */
+        if (gs.phase == PHASE_LOGIN && lui.show_username_input)
+            login_ui_update_text_input(&lui, clk.raw_dt);
+
+        /* Lobby state machine transitions */
+        if (gs.phase == PHASE_LOGIN) {
+            LobbyClientState lcs = lobby_client_state();
+
+            if (lcs == LOBBY_CONNECTED && !lui.awaiting_response) {
+                if (lui.has_stored_username) {
+                    /* Auto-login with stored username */
+                    snprintf(lui.status_text, sizeof(lui.status_text),
+                             "Logging in...");
+                    lobby_client_login(lui.username_buf);
+                    lui.awaiting_response = true;
+                } else {
+                    /* First launch — show username prompt */
+                    lui.show_username_input = true;
+                    lui.error_text[0] = '\0';
+                }
+            } else if (lcs == LOBBY_AUTHENTICATED) {
+                if (lui.username_len >= 3)
+                    identity_save_username(lui.username_buf);
+                gs.phase = PHASE_MENU;
+                rs.sync_needed = true;
+                lui.awaiting_response = false;
+            } else if (lcs == LOBBY_ERROR) {
+                snprintf(lui.error_text, sizeof(lui.error_text), "%s",
+                         lobby_client_error_msg());
+                lui.show_username_input = false;
+                lui.awaiting_response = false;
+                /* Clear stored username flag so retry shows input field
+                 * instead of re-attempting the same failed auto-login */
+                lui.has_stored_username = false;
+            }
+
+            /* Handle Enter key as submit in username input */
+            if (lui.show_username_input && !lui.awaiting_response &&
+                IsKeyPressed(KEY_ENTER) && lui.username_len >= 3) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_LOGIN_SUBMIT,
+                    .source_player = 0,
+                });
+            }
+
+            /* Handle login submit command */
+            InputCmd cmd;
+            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
+                if (cmd.type == INPUT_CMD_LOGIN_SUBMIT) {
+                    if (lui.username_len < 3) {
+                        snprintf(lui.error_text, sizeof(lui.error_text),
+                                 "Username must be at least 3 characters");
+                    } else if (lui.has_stored_username) {
+                        lobby_client_login(lui.username_buf);
+                        lui.awaiting_response = true;
+                        snprintf(lui.status_text, sizeof(lui.status_text),
+                                 "Logging in...");
+                    } else {
+                        lobby_client_register(lui.username_buf, &identity);
+                        lui.awaiting_response = true;
+                        lui.show_username_input = false;
+                        snprintf(lui.status_text, sizeof(lui.status_text),
+                                 "Registering...");
+                    }
+                } else if (cmd.type == INPUT_CMD_LOGIN_RETRY) {
+                    lui.error_text[0] = '\0';
+                    lui.awaiting_response = false;
+                    snprintf(lui.status_text, sizeof(lui.status_text),
+                             "Connecting...");
+                    lobby_client_disconnect();
+                    lobby_client_connect(lobby_addr, lobby_port);
+                } else if (cmd.type == INPUT_CMD_QUIT ||
+                           cmd.type == INPUT_CMD_CANCEL) {
+                    quit_requested = true;
+                }
+            }
+        }
+
+        /* Online menu state machine */
+        if (gs.phase == PHASE_ONLINE_MENU) {
+            /* Text input for room code join */
+            if (oui.subphase == ONLINE_SUB_JOIN_INPUT)
+                online_ui_update_text_input(&oui, clk.raw_dt);
+
+            /* Check for room assignment from lobby */
+            if (lobby_client_has_room_assignment()) {
+                lobby_client_consume_room_assignment(
+                    oui.server_addr, &oui.server_port,
+                    oui.assigned_room_code, oui.assigned_auth_token);
+                oui.room_assigned = true;
+
+                if (oui.subphase == ONLINE_SUB_CREATE_WAITING) {
+                    /* Show room code in waiting room */
+                    strncpy(oui.created_room_code, oui.assigned_room_code,
+                            NET_ROOM_CODE_LEN - 1);
+                    oui.created_room_code[NET_ROOM_CODE_LEN - 1] = '\0';
+                    /* Stay in CREATE_WAITING — game server will start
+                     * when all 4 players join. We connect now. */
+                    client_net_set_auth_token(oui.assigned_auth_token);
+                    client_net_connect(oui.server_addr, oui.server_port,
+                                       oui.assigned_room_code);
+                } else {
+                    /* Join/Queue — show "Game Found!" then connect */
+                    oui.subphase = ONLINE_SUB_MATCH_FOUND;
+                    oui.match_found_timer = MATCH_FOUND_DURATION;
+                }
+            }
+
+            /* Match found countdown */
+            if (oui.subphase == ONLINE_SUB_MATCH_FOUND) {
+                oui.match_found_timer -= clk.raw_dt;
+                if (oui.match_found_timer <= 0.0f) {
+                    oui.subphase = ONLINE_SUB_CONNECTING;
+                    client_net_set_auth_token(oui.assigned_auth_token);
+                    client_net_connect(oui.server_addr, oui.server_port,
+                                       oui.assigned_room_code);
+                }
+            }
+
+            /* Check game server connection (also handles CREATE_WAITING after connect) */
+            if (oui.subphase == ONLINE_SUB_CONNECTING ||
+                oui.subphase == ONLINE_SUB_CREATE_WAITING) {
+                ClientNetState cns = client_net_state();
+                if (cns == CLIENT_NET_CONNECTED) {
+                    /* Server drives game start — just leave PHASE_ONLINE_MENU.
+                     * The server state update will set the correct game phase. */
+                    gs.phase = PHASE_MENU; /* temporary until server sends state */
+                    rs.sync_needed = true;
+                    online_ui_init(&oui);
+                } else if (cns == CLIENT_NET_ERROR) {
+                    snprintf(oui.error_text, sizeof(oui.error_text),
+                             "Failed to connect to game server");
+                    oui.subphase = ONLINE_SUB_ERROR;
+                }
+            }
+
+            /* Check for lobby errors during room/queue operations */
+            LobbyClientState lcs = lobby_client_state();
+            if (oui.subphase != ONLINE_SUB_ERROR &&
+                oui.subphase != ONLINE_SUB_MENU &&
+                oui.subphase != ONLINE_SUB_MATCH_FOUND &&
+                oui.subphase != ONLINE_SUB_CONNECTING) {
+                if (oui.error_text[0] == '\0') {
+                    /* Check if lobby reported an error */
+                    const char *err = lobby_client_error_msg();
+                    if (err[0] && lcs == LOBBY_AUTHENTICATED) {
+                        /* Error was consumed, lobby went back to authenticated */
+                        snprintf(oui.error_text, sizeof(oui.error_text),
+                                 "%s", err);
+                        oui.subphase = ONLINE_SUB_ERROR;
+                    }
+                }
+            }
+
+            /* Handle Enter key for join code submission */
+            if (oui.subphase == ONLINE_SUB_JOIN_INPUT &&
+                IsKeyPressed(KEY_ENTER) && oui.room_code_len == 4) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_JOIN,
+                    .source_player = 0,
+                });
+            }
+
+            /* Process online menu commands */
+            InputCmd cmd;
+            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
+                if (cmd.type == INPUT_CMD_ONLINE_CREATE) {
+                    lobby_client_create_room();
+                    oui.subphase = ONLINE_SUB_CREATE_WAITING;
+                    oui.player_count = 1;
+                    oui.error_text[0] = '\0';
+                } else if (cmd.type == INPUT_CMD_ONLINE_JOIN) {
+                    if (oui.subphase == ONLINE_SUB_MENU) {
+                        /* Switch to join input sub-state */
+                        oui.subphase = ONLINE_SUB_JOIN_INPUT;
+                        oui.room_code_len = 0;
+                        oui.room_code_buf[0] = '\0';
+                        oui.error_text[0] = '\0';
+                    } else if (oui.subphase == ONLINE_SUB_JOIN_INPUT) {
+                        /* Submit the room code */
+                        if (oui.room_code_len == 4) {
+                            lobby_client_join_room(oui.room_code_buf);
+                            oui.subphase = ONLINE_SUB_JOIN_WAITING;
+                            oui.error_text[0] = '\0';
+                        }
+                    }
+                } else if (cmd.type == INPUT_CMD_ONLINE_QUICKMATCH) {
+                    lobby_client_queue_matchmake();
+                    oui.subphase = ONLINE_SUB_QUEUE_SEARCHING;
+                    oui.error_text[0] = '\0';
+                } else if (cmd.type == INPUT_CMD_ONLINE_CANCEL ||
+                           cmd.type == INPUT_CMD_CANCEL) {
+                    if (oui.subphase == ONLINE_SUB_QUEUE_SEARCHING) {
+                        lobby_client_queue_cancel();
+                    }
+                    if (oui.subphase == ONLINE_SUB_MENU ||
+                        cmd.type == INPUT_CMD_CANCEL) {
+                        gs.phase = PHASE_MENU;
+                        rs.sync_needed = true;
+                    }
+                    oui.subphase = ONLINE_SUB_MENU;
+                    oui.error_text[0] = '\0';
+                } else if (cmd.type == INPUT_CMD_QUIT) {
+                    quit_requested = true;
+                }
+            }
+        }
+
         process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
 
         /* Route commands: online → server, offline → local */
@@ -193,8 +455,8 @@ int main(void)
 
         GamePhase phase_before_update = gs.phase;
         while (clk.accumulator >= FIXED_DT) {
-            game_update(&gs, &rs, &p2, &pps, &pls, &sui, &g_settings,
-                        &flow, FIXED_DT, &quit_requested);
+            game_update(&gs, &rs, &p2, &pps, &pls, &lui, &oui, &sui,
+                        &g_settings, &flow, FIXED_DT, &quit_requested);
             clk.accumulator -= FIXED_DT;
         }
 
@@ -283,6 +545,7 @@ int main(void)
         render_draw(&gs, &rs);
     }
 
+    lobby_client_shutdown();
     client_net_shutdown();
     audio_shutdown(&audio);
     card_render_transmute_shutdown();

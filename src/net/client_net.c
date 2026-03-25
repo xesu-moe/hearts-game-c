@@ -91,6 +91,11 @@ static void reset_state(void)
     g_has_error = false;
 }
 
+void client_net_set_auth_token(const uint8_t token[NET_AUTH_TOKEN_LEN])
+{
+    memcpy(g_session_token, token, NET_AUTH_TOKEN_LEN);
+}
+
 static void send_handshake(void)
 {
     NetMsg msg;
