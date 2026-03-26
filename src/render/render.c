@@ -1,13 +1,10 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (draft UI fields, info_contract_count,
- *                 contract_result_*, RenderState fields),
- *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to,
- *                 CardVisual.inverted), layout.h (layout_scoring_*, layout_wipe_boundary_x),
- *                 card_render.h, phase2/phase2_defs.h,
- *                 core/game_state.h (GamePhase, PHASE_SCORING),
+ * @deps-requires: render.h, online_ui.h, particle.h, anim.h, layout.h,
+ *                 card_render.h, phase2/phase2_defs.h, net/lobby_client.h,
+ *                 core/game_state.h (PHASE_STATS, PHASE_ONLINE_MENU, PASS_SUB_TRANSMUTE),
  *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-22 — Uses SETTINGS_ROW_COUNT and SETTINGS_ACTIVE_COUNT (now 9)
+ * @deps-last-changed: 2026-03-26 — Step 22.3: Added PASS_SUB_TRANSMUTE draw case
  * ============================================================ */
 
 #include "render.h"
@@ -297,7 +294,7 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             [MENU_PLAY_ONLINE]   = {"Play Online",   NULL,            false},
             [MENU_PLAY_OFFLINE]  = {"Play Offline",   NULL,            false},
             [MENU_DECK_BUILDING] = {"Deck Building",  "(Coming Soon)", true},
-            [MENU_STATISTICS]    = {"Statistics",      "(Coming Soon)", true},
+            [MENU_STATISTICS]    = {"My Stats",        NULL,            false},
             [MENU_SETTINGS]      = {"Settings",        NULL,            false},
             [MENU_EXIT]          = {"Exit",            NULL,            false},
         };
@@ -425,6 +422,24 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->online_btns[i].visible = false;
         rs->btn_online_join_submit.visible = false;
         rs->btn_online_cancel.visible = false;
+    }
+
+    /* ---- Stats screen button ---- */
+    if (gs->phase == PHASE_STATS) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
+        float btn_w = 200.0f * s;
+        float btn_h = 45.0f * s;
+        rs->btn_stats_back.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 130.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_stats_back.label = "Back";
+        rs->btn_stats_back.visible = true;
+        rs->btn_stats_back.disabled = false;
+    } else {
+        rs->btn_stats_back.visible = false;
     }
 
     rs->btn_confirm_pass.bounds = btn_rect;
@@ -1333,6 +1348,14 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             CheckCollisionPointRec(mouse, rs->btn_online_cancel.bounds);
     }
 
+    /* Update stats button hover state */
+    if (gs->phase == PHASE_STATS) {
+        Vector2 mouse = GetMousePosition();
+        rs->btn_stats_back.hovered =
+            rs->btn_stats_back.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_stats_back.bounds);
+    }
+
     /* Update login button hover state */
     if (gs->phase == PHASE_LOGIN) {
         Vector2 mouse = GetMousePosition();
@@ -1785,21 +1808,39 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         DrawText(oui->created_room_code, (int)(cx - (float)cw * 0.5f),
                  (int)(cy - 50.0f * s), code_size, GOLD);
 
-        /* Player count */
+        /* Player slots */
+        int name_size = (int)(18.0f * s);
+        float slot_y = cy + 10.0f * s;
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            char slot_text[48];
+            Color slot_color;
+            if (oui->player_names[i][0] != '\0') {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: %s",
+                         i + 1, oui->player_names[i]);
+                slot_color = WHITE;
+            } else {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: ---", i + 1);
+                slot_color = DARKGRAY;
+            }
+            int stw = MeasureText(slot_text, name_size);
+            DrawText(slot_text, (int)(cx - (float)stw * 0.5f),
+                     (int)slot_y, name_size, slot_color);
+            slot_y += 24.0f * s;
+        }
+
+        /* Player count summary */
         char slots[32];
         snprintf(slots, sizeof(slots), "Players: %d / 4", oui->player_count);
-        int slots_size = (int)(22.0f * s);
+        int slots_size = (int)(20.0f * s);
         int sw2 = MeasureText(slots, slots_size);
         DrawText(slots, (int)(cx - (float)sw2 * 0.5f),
-                 (int)(cy + 20.0f * s), slots_size, WHITE);
-
-        /* TODO: show individual player names when server sends join notifications */
+                 (int)(slot_y + 8.0f * s), slots_size, LIGHTGRAY);
 
         const char *waiting = "Waiting for players...";
-        int wait_size = (int)(18.0f * s);
+        int wait_size = (int)(16.0f * s);
         int ww = MeasureText(waiting, wait_size);
         DrawText(waiting, (int)(cx - (float)ww * 0.5f),
-                 (int)(cy + 50.0f * s), wait_size, GRAY);
+                 (int)(slot_y + 36.0f * s), wait_size, GRAY);
 
         draw_button(&rs->btn_online_cancel, s);
         break;
@@ -1879,6 +1920,15 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         break;
     }
 
+    case ONLINE_SUB_CONNECTED_WAITING: {
+        const char *waiting = "Connected — waiting for game...";
+        int wait_size = (int)(22.0f * s);
+        int ww = MeasureText(waiting, wait_size);
+        DrawText(waiting, (int)(cx - (float)ww * 0.5f),
+                 (int)(cy - 10.0f * s), wait_size, LIGHTGRAY);
+        break;
+    }
+
     case ONLINE_SUB_ERROR: {
         int err_size = (int)(20.0f * s);
         int ew = MeasureText(oui->error_text, err_size);
@@ -1888,6 +1938,66 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         break;
     }
     }
+}
+
+static void draw_phase_stats(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    float s = rs->layout.scale;
+    float cx = rs->layout.screen_width * 0.5f;
+    float cy = rs->layout.screen_height * 0.5f;
+
+    /* Title */
+    const char *title = "My Stats";
+    int title_size = (int)(40.0f * s);
+    int tw = MeasureText(title, title_size);
+    DrawText(title, (int)(cx - (float)tw * 0.5f),
+             (int)(cy - 140.0f * s), title_size, RAYWHITE);
+
+    if (!rs->stats_available) {
+        const char *msg = "Log in to view stats";
+        int msg_size = (int)(22.0f * s);
+        int mw = MeasureText(msg, msg_size);
+        DrawText(msg, (int)(cx - (float)mw * 0.5f),
+                 (int)(cy - 20.0f * s), msg_size, LIGHTGRAY);
+    } else {
+        int label_size = (int)(22.0f * s);
+        int value_size = (int)(28.0f * s);
+        float row_y = cy - 80.0f * s;
+        float row_spacing = 50.0f * s;
+
+        struct { const char *label; char value[32]; } rows[4];
+        snprintf(rows[0].value, sizeof(rows[0].value), "%d", rs->stat_elo);
+        rows[0].label = "ELO Rating";
+        snprintf(rows[1].value, sizeof(rows[1].value), "%u", rs->stat_games_played);
+        rows[1].label = "Games Played";
+        snprintf(rows[2].value, sizeof(rows[2].value), "%u", rs->stat_games_won);
+        rows[2].label = "Games Won";
+        float win_pct = rs->stat_games_played > 0
+            ? 100.0f * (float)rs->stat_games_won / (float)rs->stat_games_played
+            : 0.0f;
+        snprintf(rows[3].value, sizeof(rows[3].value), "%.1f%%", win_pct);
+        rows[3].label = "Win Rate";
+
+        for (int i = 0; i < 4; i++) {
+            int lw = MeasureText(rows[i].label, label_size);
+            DrawText(rows[i].label, (int)(cx - (float)lw * 0.5f),
+                     (int)row_y, label_size, LIGHTGRAY);
+            int vw = MeasureText(rows[i].value, value_size);
+            DrawText(rows[i].value, (int)(cx - (float)vw * 0.5f),
+                     (int)(row_y + (float)label_size + 4.0f * s),
+                     value_size, WHITE);
+            row_y += row_spacing;
+        }
+
+        const char *note = "(updates on next login)";
+        int note_size = (int)(14.0f * s);
+        int nw = MeasureText(note, note_size);
+        DrawText(note, (int)(cx - (float)nw * 0.5f),
+                 (int)(row_y + 10.0f * s), note_size, GRAY);
+    }
+
+    draw_button(&rs->btn_stats_back, s);
 }
 
 static void draw_phase_menu(const GameState *gs, const RenderState *rs)
@@ -2177,6 +2287,10 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
     case PASS_SUB_REVEAL:
     case PASS_SUB_RECEIVE:
         /* No UI overlay during pass animation — just show cards */
+        break;
+
+    case PASS_SUB_TRANSMUTE:
+        /* TODO: transmutation selection UI for online play */
         break;
     }
 
@@ -2915,6 +3029,10 @@ void render_draw(const GameState *gs, const RenderState *rs)
 
     case PHASE_MENU:
         draw_phase_menu(gs, rs);
+        break;
+
+    case PHASE_STATS:
+        draw_phase_stats(gs, rs);
         break;
 
     case PHASE_DEALING:

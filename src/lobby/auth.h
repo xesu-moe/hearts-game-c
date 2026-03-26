@@ -4,13 +4,10 @@
  * Ed25519 challenge-response auth: register with public key,
  * login by signing a nonce, session token management.
  *
- * @deps-exports: AuthResult, AuthAccountInfo, auth_register,
- *                auth_find_account, auth_generate_challenge,
- *                auth_verify_and_login, auth_validate_token,
- *                auth_logout, auth_cleanup_expired
+ * @deps-exports: AuthResult, AuthAccountInfo (elo_rating: int32_t)
  * @deps-requires: lobby/db.h (LobbyDB)
  * @deps-used-by: lobby/lobby_net.c
- * @deps-last-changed: 2026-03-24 — Step 15: Account System
+ * @deps-last-changed: 2026-03-26 — Step 22.5: AuthAccountInfo.elo_rating uint16_t→int32_t
  * ============================================================ */
 
 #ifndef LOBBY_AUTH_H
@@ -39,7 +36,7 @@ typedef enum AuthResult {
 
 typedef struct AuthAccountInfo {
     int32_t  account_id;
-    uint16_t elo_rating;
+    int32_t  elo_rating;
     uint32_t games_played;
     uint32_t games_won;
 } AuthAccountInfo;
@@ -59,8 +56,8 @@ AuthResult auth_find_account(LobbyDB *ldb,
                              int32_t *account_id_out,
                              uint8_t pk_out[AUTH_PK_LEN]);
 
-/* Generate a random 32-byte challenge nonce. */
-void auth_generate_challenge(uint8_t nonce_out[AUTH_CHALLENGE_LEN]);
+/* Generate a random 32-byte challenge nonce. Returns false on RNG failure. */
+bool auth_generate_challenge(uint8_t nonce_out[AUTH_CHALLENGE_LEN]);
 
 /* Verify a signed challenge and create a session if valid.
  * On success: writes session token to token_out, fills info_out.

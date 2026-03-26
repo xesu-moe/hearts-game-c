@@ -2,16 +2,11 @@
 #define INPUT_CMD_H
 
 /* ============================================================
- * Raylib-free command types and queue for input commands.
- * Shared by client, server, and lobby.
- *
- * @deps-exports: InputCmdType, InputCmd, InputCmdQueue,
- *                INPUT_CMD_QUEUE_CAPACITY,
- *                input_cmd_push/pop/cmd_queue_empty/clear()
+ * @deps-exports: enum InputCmdType (includes INPUT_CMD_OPEN_STATS),
+ *                struct InputCmd, struct InputCmdQueue
  * @deps-requires: card.h (Card)
- * @deps-used-by: input_cmd.c, input.h, protocol.c, update.c,
- *                process_input.c, main.c, server_game.c
- * @deps-last-changed: 2026-03-22 — Split from input.h for server compatibility
+ * @deps-used-by: protocol.c, update.c, process_input.c
+ * @deps-last-changed: 2026-03-26 — Step 21: Added INPUT_CMD_OPEN_STATS for stats screen
  * ============================================================ */
 
 #include <stdbool.h>
@@ -77,6 +72,9 @@ typedef enum InputCmdType {
     INPUT_CMD_ONLINE_JOIN,       /* submit room code */
     INPUT_CMD_ONLINE_QUICKMATCH, /* enter matchmaking queue */
     INPUT_CMD_ONLINE_CANCEL,     /* cancel/back from any online sub-state */
+
+    /* Stats screen */
+    INPUT_CMD_OPEN_STATS,        /* menu → stats screen */
 
     INPUT_CMD_COUNT
 } InputCmdType;

@@ -1,10 +1,10 @@
 /* ============================================================
  * @deps-implements: process_input.h
- * @deps-requires: input.h (INPUT_CMD_DUEL_PICK/GIVE/RETURN), game_state.h,
- *                 hand.h, render.h (hit_test_opponent_card, drag, pause fields),
- *                 layout.h, pass_phase.h, play_phase.h,
- *                 turn_flow.h (FLOW_DUEL_PICK_OPPONENT/OWN), math.h
- * @deps-last-changed: 2026-03-20 — Added Duel opponent+own card hit-testing
+ * @deps-requires: process_input.h, input.h (INPUT_CMD_ONLINE_*, INPUT_CMD_DUEL_*,
+ *                 INPUT_CMD_OPEN_STATS), game_state.h (PHASE_ONLINE_MENU, PHASE_STATS),
+ *                 hand.h, render.h (hit_test_opponent_card, drag, pause, btn_stats_back),
+ *                 layout.h, pass_phase.h, play_phase.h, turn_flow.h, online_ui.h, math.h
+ * @deps-last-changed: 2026-03-26 — Step 21: Added PHASE_STATS back button and INPUT_CMD_OPEN_STATS handling
  * ============================================================ */
 
 #include "process_input.h"
@@ -220,6 +220,12 @@ void process_input(GameState *gs, RenderState *rs,
                     case MENU_PLAY_OFFLINE:
                         input_cmd_push((InputCmd){
                             .type = INPUT_CMD_START_GAME,
+                            .source_player = 0,
+                        });
+                        break;
+                    case MENU_STATISTICS:
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_OPEN_STATS,
                             .source_player = 0,
                         });
                         break;
@@ -472,6 +478,15 @@ void process_input(GameState *gs, RenderState *rs,
             }
             break;
         }
+
+        case PHASE_STATS:
+            if (render_hit_test_button(&rs->btn_stats_back, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_CANCEL,
+                    .source_player = 0,
+                });
+            }
+            break;
 
         case PHASE_SETTINGS: {
             /* Tab switching */

@@ -3,14 +3,14 @@
  *                room_manager_init(), room_create(), room_destroy(),
  *                room_join(), room_leave(), room_find_by_code(),
  *                room_find_by_conn(), room_get(), room_active_count(),
- *                room_tick(), room_tick_all(), room_update_timers(),
- *                room_reconnect(), ROOM_CODE_LEN, MAX_ROOMS,
+ *                room_tick(), room_tick_all(), room_cleanup_finished(),
+ *                room_update_timers(), room_reconnect(), ROOM_CODE_LEN, MAX_ROOMS,
  *                DISCONNECT_GRACE_SEC, ROOM_ABANDON_SEC
  * @deps-requires: server/server_game.h (ServerGame, server_game_init,
  *                 server_game_start, server_game_tick, server_game_is_over),
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS),
  *                 core/clock.h (FIXED_DT)
- * @deps-last-changed: 2026-03-24 — Step 11: Added disconnect/reconnect timers
+ * @deps-last-changed: 2026-03-26 — Step 20.2: Added room_cleanup_finished() to extract finished room destruction
  * ============================================================ */
 
 #ifndef ROOM_H
@@ -67,6 +67,7 @@ typedef struct PlayerSlot {
     uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* random reconnect token */
     uint8_t    lobby_token[NET_AUTH_TOKEN_LEN]; /* session token from lobby */
     float      disconnect_timer; /* seconds since disconnect, -1 if N/A */
+    char       name[NET_MAX_NAME_LEN]; /* display name from handshake */
 } PlayerSlot;
 
 typedef struct Room {
@@ -105,7 +106,8 @@ void room_destroy(int room_index);
  * If all 4 slots fill, auto-starts the game (WAITING → PLAYING).
  * Returns assigned seat (0-3) on success, -1 if full or not WAITING. */
 int room_join(int room_index, int conn_id,
-              const uint8_t auth_token[NET_AUTH_TOKEN_LEN]);
+              const uint8_t auth_token[NET_AUTH_TOKEN_LEN],
+              const char *name);
 
 /* Remove a player from a room.
  * WAITING: sets slot EMPTY; destroys room if all left.
@@ -138,8 +140,12 @@ int room_active_count(void);
  * If game ends, transitions to FINISHED. */
 void room_tick(int room_index);
 
-/* Tick all PLAYING rooms, then destroy all FINISHED rooms. */
+/* Tick all PLAYING rooms. FINISHED rooms are left intact for
+ * one broadcast cycle so clients receive the game-over state. */
 void room_tick_all(void);
+
+/* Destroy all FINISHED rooms. Call after broadcasting final state. */
+void room_cleanup_finished(void);
 
 /* ================================================================
  * Disconnect & Reconnect (Step 11)

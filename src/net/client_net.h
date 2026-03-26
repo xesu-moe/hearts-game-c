@@ -11,13 +11,14 @@
  * @deps-exports: ClientNetState (+ CLIENT_NET_RECONNECTING), client_net_init/shutdown/
  *                connect/disconnect/update/state/seat/has_new_state/
  *                consume_state/ping_ms/reject_reason/send_cmd/is_reconnecting/
- *                reconnect_attempt/reconnect_time_remaining
+ *                reconnect_attempt/reconnect_time_remaining/
+ *                has_room_status/consume_room_status/set_username
  * @deps-requires: net/protocol.h (NetPlayerView, NetRejectReason,
  *                 PROTOCOL_VERSION, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN),
  *                 net/reconnect.h (ReconnectState, reconnect_*),
  *                 core/input_cmd.h (InputCmd)
  * @deps-used-by: main.c, cmd_send.c, state_recv.c
- * @deps-last-changed: 2026-03-24 — Step 11: Added reconnect state machine
+ * @deps-last-changed: 2026-03-26 — Step 20.1: Added room status + username API
  * ============================================================ */
 
 #include <stdbool.h>
@@ -103,6 +104,15 @@ int client_net_reconnect_attempt(void);
 
 /* Seconds until next reconnect attempt. 0 if not reconnecting. */
 float client_net_reconnect_time_remaining(void);
+
+/* True if a room status update has been received since last consume. */
+bool client_net_has_room_status(void);
+
+/* Copy the latest room status and clear the flag. */
+void client_net_consume_room_status(NetMsgRoomStatus *out);
+
+/* Set the username to include in the handshake. Call before connect. */
+void client_net_set_username(const char *name);
 
 /* True if a server error message has been received since last consume. */
 bool client_net_has_error(void);

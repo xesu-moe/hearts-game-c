@@ -5,17 +5,11 @@
  * Handles registration, challenge-response login, and
  * username changes. Runs alongside client_net (game server).
  *
- * @deps-exports: LobbyClientState, LobbyClientInfo,
- *                lobby_client_init, lobby_client_shutdown,
- *                lobby_client_connect, lobby_client_disconnect,
- *                lobby_client_update, lobby_client_register,
- *                lobby_client_login, lobby_client_change_username,
- *                lobby_client_state, lobby_client_info,
- *                lobby_client_error_msg
+ * @deps-exports: LobbyClientState, LobbyClientInfo (elo_rating: int32_t)
  * @deps-requires: net/identity.h (Identity),
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN)
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-25 — Step 19: Login & Register UI
+ * @deps-last-changed: 2026-03-26 — Step 22.5: LobbyClientInfo.elo_rating uint16_t→int32_t
  * ============================================================ */
 
 #ifndef LOBBY_CLIENT_H
@@ -51,7 +45,7 @@ typedef enum LobbyClientState {
 
 typedef struct LobbyClientInfo {
     uint8_t  auth_token[NET_AUTH_TOKEN_LEN];
-    uint16_t elo_rating;
+    int32_t  elo_rating;
     uint32_t games_played;
     uint32_t games_won;
     char     username[NET_MAX_NAME_LEN];

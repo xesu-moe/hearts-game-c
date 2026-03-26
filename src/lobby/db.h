@@ -1,15 +1,9 @@
 /* ============================================================
- * Lobby Server — SQLite Database Layer
- *
- * Manages connection lifecycle, schema migrations, and a
- * prepared statement cache.  Only db.c includes <sqlite3.h>;
- * consumers use the opaque LobbyDB handle.
- *
  * @deps-exports: LobbyDB, LobbyStmtID, lobbydb_open, lobbydb_close,
  *                lobbydb_stmt, lobbydb_handle
  * @deps-requires: (none — forward-declares sqlite3 types)
- * @deps-used-by: lobby/lobby_main.c, lobby/lobby_net.c, lobby/auth.c
- * @deps-last-changed: 2026-03-24 — Step 15: Auth prepared statements
+ * @deps-used-by: lobby/lobby_main.c, lobby/lobby_net.c, lobby/auth.c, lobby/rooms.c, lobby/server_registry.c
+ * @deps-last-changed: 2026-03-26 — Step 21: Added LOBBY_STMT_UPDATE_ELO for ELO updates
  * ============================================================ */
 
 #ifndef LOBBY_DB_H
@@ -54,6 +48,8 @@ typedef enum LobbyStmtID {
     LOBBY_STMT_UPDATE_STATS,
     /* Username change (Step 19) */
     LOBBY_STMT_CHANGE_USERNAME,
+    /* ELO update (Step 21) */
+    LOBBY_STMT_UPDATE_ELO,
     LOBBY_STMT__COUNT /* must be last */
 } LobbyStmtID;
 

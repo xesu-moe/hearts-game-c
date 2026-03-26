@@ -9,7 +9,7 @@
  * @deps-requires: net/protocol.h (NET_ROOM_CODE_LEN, NET_ADDR_LEN,
  *                 NET_AUTH_TOKEN_LEN)
  * @deps-used-by: main.c, game/update.c, render/render.c
- * @deps-last-changed: 2026-03-25 — Step 20: Online Menu & Room UI
+ * @deps-last-changed: 2026-03-26 — Step 20.1: Added player_names to OnlineUIState
  * ============================================================ */
 
 #ifndef ONLINE_UI_H
@@ -28,6 +28,7 @@ typedef enum OnlineSubphase {
     ONLINE_SUB_QUEUE_SEARCHING, /* Quick Match searching... */
     ONLINE_SUB_MATCH_FOUND,     /* Brief "Game Found!" (2-3s) */
     ONLINE_SUB_CONNECTING,      /* Connecting to game server */
+    ONLINE_SUB_CONNECTED_WAITING, /* Connected, waiting for first state update */
     ONLINE_SUB_ERROR,           /* Error with retry */
 } OnlineSubphase;
 
@@ -50,9 +51,9 @@ typedef struct OnlineUIState {
     float match_found_timer;
 #define MATCH_FOUND_DURATION 2.0f
 
-    /* Player slots in waiting room
-     * TODO: populate from server player-join notifications */
-    int player_count;
+    /* Player slots in waiting room (populated from NET_MSG_ROOM_STATUS) */
+    int  player_count;
+    char player_names[NET_MAX_PLAYERS][NET_MAX_NAME_LEN];
 
     /* Server connection info (from ROOM_ASSIGNED) */
     char     server_addr[NET_ADDR_LEN];

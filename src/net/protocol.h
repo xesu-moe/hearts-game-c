@@ -8,19 +8,13 @@
  * This header does NOT include Raylib. It includes only core/card.h
  * and core/input_cmd.h (both Raylib-free) and standard library headers.
  *
- * @deps-exports: NetMsgType (including NET_MSG_LOGIN_CHALLENGE,
- *                NET_MSG_LOGIN_RESPONSE, NET_MSG_REGISTER_ACK),
- *                NetMsg, NetCard, NetInputCmd, NetPlayerView,
- *                NetMsgLoginChallenge, NetMsgLoginResponse,
- *                net_frame_write/read, net_msg_serialize/deserialize,
- *                net_build_player_view, net_input_cmd_is_relevant,
- *                net_input_cmd_to_local, net_input_cmd_from_local
- * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, card_to_index),
- *                 core/input_cmd.h (InputCmd, InputCmdType),
- *                 stdbool.h, stdint.h
- * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.h,
- *                reconnect.h, lobby_net.c
- * @deps-last-changed: 2026-03-24 — Step 15: Added challenge-response auth messages
+ * @deps-exports: NetMsgType, NetMsg, NetCard, NetInputCmd, NetPlayerView,
+ *                NetMsgLoginAck (elo_rating: int32_t),
+ *                net_frame_write/read, net_msg_serialize/deserialize
+ * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS),
+ *                 core/input_cmd.h (InputCmd, InputCmdType)
+ * @deps-used-by: protocol.c, socket.c, server_net.c, lobby_client.c
+ * @deps-last-changed: 2026-03-26 — Step 22.5: NetMsgLoginAck.elo_rating uint16_t→int32_t, wire size +2 bytes
  * ============================================================ */
 
 #include <stdbool.h>
@@ -34,7 +28,7 @@
  * Constants
  * ================================================================ */
 
-#define PROTOCOL_VERSION       1
+#define PROTOCOL_VERSION       3
 #define NET_MAX_MSG_SIZE       8192 /* 8KB max payload */
 #define NET_FRAME_HEADER_SIZE  4    /* uint32_t length prefix */
 #define NET_MAX_PLAYERS        4
@@ -46,8 +40,16 @@
 #define NET_DRAFT_GROUP_SIZE   4
 #define NET_DRAFT_PICKS        3
 #define NET_MAX_CHAT_LEN       128
-/* Conservative upper bound for serialized NetPlayerView (with phase2) */
-#define NET_PLAYER_VIEW_MAX_SIZE 4096
+/* Upper bound for serialized NetPlayerView (with phase2).
+ * Derived from field sizes — update if NetPlayerView changes.
+ *
+ * Base: seat(1) + phase(3*1) + round(2+5*1) + hand(1+13*2) + hand_counts(4)
+ *       + scores(2*4*2) + trick(4*2+4+3) + pass(4+4*2) + dealer(1+1+4) + p2flag(1)
+ *     = 4 + 7 + 27 + 4 + 16 + 15 + 12 + 6 + 1 = 92
+ * Phase2: contracts(1 + 3*23) + opp_contracts(4*13) + inv(1 + 8*2) + transmutes(13*7)
+ *       + draft(31+2) + trick_transmute(20) + effects(1 + 32*9) + game_scoped(24) = 590
+ * Total: 92 + 590 = 682. Use 1024 for headroom. */
+#define NET_PLAYER_VIEW_MAX_SIZE 1024
 #define NET_MAX_NAME_LEN       32
 #define NET_AUTH_TOKEN_LEN     32
 #define NET_ROOM_CODE_LEN      8
@@ -70,6 +72,7 @@ typedef enum NetMsgType {
     NET_MSG_DISCONNECT       = 5,
     NET_MSG_ERROR            = 6,
     NET_MSG_CHAT             = 7,
+    NET_MSG_ROOM_STATUS      = 8,  /* server -> clients: waiting room player list */
 
     /* Game server messages (20-39) */
     NET_MSG_INPUT_CMD        = 20,
@@ -149,6 +152,7 @@ typedef struct NetMsgHandshake {
     uint16_t protocol_version;
     uint8_t  auth_token[NET_AUTH_TOKEN_LEN];
     char     room_code[NET_ROOM_CODE_LEN];
+    char     username[NET_MAX_NAME_LEN]; /* display name for waiting room */
 } NetMsgHandshake;
 
 typedef struct NetMsgHandshakeAck {
@@ -186,6 +190,12 @@ typedef struct NetMsgChat {
     uint8_t seat;
     char    text[NET_MAX_CHAT_LEN];
 } NetMsgChat;
+
+typedef struct NetMsgRoomStatus {
+    uint8_t player_count;                                  /* 0-4 connected */
+    char    player_names[NET_MAX_PLAYERS][NET_MAX_NAME_LEN]; /* per-seat names */
+    uint8_t slot_occupied[NET_MAX_PLAYERS];                /* 1=occupied, 0=empty */
+} NetMsgRoomStatus;
 
 /* ================================================================
  * Game Message Payloads
@@ -275,7 +285,7 @@ typedef struct NetMsgLoginResponse {
 
 typedef struct NetMsgLoginAck {
     uint8_t  auth_token[NET_AUTH_TOKEN_LEN];
-    uint16_t elo_rating;
+    int32_t  elo_rating;
     uint32_t games_played;
     uint32_t games_won;
 } NetMsgLoginAck;
@@ -514,6 +524,7 @@ typedef struct NetMsg {
         NetMsgDisconnect      disconnect;
         NetMsgError           error;
         NetMsgChat            chat;
+        NetMsgRoomStatus      room_status;
         NetInputCmd           input_cmd;
         NetPlayerView         state_update;
         NetMsgRoundStart      round_start;

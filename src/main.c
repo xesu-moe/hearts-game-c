@@ -6,14 +6,14 @@
  *                 render/layout.h, render/render.h, render/card_render.h,
  *                 audio/audio.h, phase2/phase2_defs.h,
  *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
- *                 game/ai.h, game/play_phase.h, game/pass_phase.h
- *                 (pass_subphase_update takes &g_settings),
+ *                 game/ai.h, game/play_phase.h, game/pass_phase.h,
  *                 game/turn_flow.h, game/process_input.h, game/update.h,
  *                 game/settings_ui.h, game/info_sync.h,
- *                 game/phase_transitions.h, net/client_net.h,
- *                 net/protocol.h (net_input_cmd_is_relevant),
- *                 net/state_recv.h (state_recv_apply), raylib.h
- * @deps-last-changed: 2026-03-23 — Step 10: Pass bool online to phase/flow/pass functions
+ *                 game/phase_transitions.h, game/online_ui.h, game/login_ui.h,
+ *                 net/client_net.h, net/protocol.h (net_input_cmd_is_relevant),
+ *                 net/state_recv.h, net/lobby_client.h, net/identity.h,
+ *                 raylib.h
+ * @deps-last-changed: 2026-03-26 — Step 20.1: Room status from client_net, set username
  * ============================================================ */
 
 #include <stdbool.h>
@@ -284,6 +284,7 @@ int main(int argc, char **argv)
                     /* Stay in CREATE_WAITING — game server will start
                      * when all 4 players join. We connect now. */
                     client_net_set_auth_token(oui.assigned_auth_token);
+                    client_net_set_username(lobby_client_info()->username);
                     client_net_connect(oui.server_addr, oui.server_port,
                                        oui.assigned_room_code);
                 } else {
@@ -299,25 +300,63 @@ int main(int argc, char **argv)
                 if (oui.match_found_timer <= 0.0f) {
                     oui.subphase = ONLINE_SUB_CONNECTING;
                     client_net_set_auth_token(oui.assigned_auth_token);
+                    client_net_set_username(lobby_client_info()->username);
                     client_net_connect(oui.server_addr, oui.server_port,
                                        oui.assigned_room_code);
                 }
             }
 
-            /* Check game server connection (also handles CREATE_WAITING after connect) */
-            if (oui.subphase == ONLINE_SUB_CONNECTING ||
-                oui.subphase == ONLINE_SUB_CREATE_WAITING) {
+            /* Check game server connection */
+            if (oui.subphase == ONLINE_SUB_CONNECTING) {
                 ClientNetState cns = client_net_state();
                 if (cns == CLIENT_NET_CONNECTED) {
-                    /* Server drives game start — just leave PHASE_ONLINE_MENU.
-                     * The server state update will set the correct game phase. */
-                    gs.phase = PHASE_MENU; /* temporary until server sends state */
-                    rs.sync_needed = true;
-                    online_ui_init(&oui);
+                    /* Stay in online menu showing "waiting for game" */
+                    oui.subphase = ONLINE_SUB_CONNECTED_WAITING;
                 } else if (cns == CLIENT_NET_ERROR) {
                     snprintf(oui.error_text, sizeof(oui.error_text),
                              "Failed to connect to game server");
                     oui.subphase = ONLINE_SUB_ERROR;
+                }
+            }
+
+            /* CREATE_WAITING: stay in waiting room, consume room status,
+             * exit only when game starts (first state update from server) */
+            if (oui.subphase == ONLINE_SUB_CREATE_WAITING) {
+                ClientNetState cns = client_net_state();
+                if (cns == CLIENT_NET_ERROR) {
+                    snprintf(oui.error_text, sizeof(oui.error_text),
+                             "Failed to connect to game server");
+                    oui.subphase = ONLINE_SUB_ERROR;
+                } else if (cns == CLIENT_NET_CONNECTED) {
+                    /* Consume room status updates */
+                    if (client_net_has_room_status()) {
+                        NetMsgRoomStatus rs_msg;
+                        client_net_consume_room_status(&rs_msg);
+                        oui.player_count = rs_msg.player_count;
+                        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+                            memcpy(oui.player_names[i],
+                                   rs_msg.player_names[i], NET_MAX_NAME_LEN);
+                    }
+                    /* Game started — server sent first state update.
+                     * Exit the online UI; the state_recv apply block later
+                     * in this frame will consume and set gs.phase. */
+                    if (client_net_has_new_state()) {
+                        oui.subphase = ONLINE_SUB_MENU;
+                    }
+                }
+            }
+
+            /* CONNECTED_WAITING: game server connected, waiting for game start */
+            if (oui.subphase == ONLINE_SUB_CONNECTED_WAITING) {
+                ClientNetState cns = client_net_state();
+                if (cns == CLIENT_NET_ERROR) {
+                    snprintf(oui.error_text, sizeof(oui.error_text),
+                             "Lost connection to game server");
+                    oui.subphase = ONLINE_SUB_ERROR;
+                } else if (client_net_has_new_state()) {
+                    /* First state update arrived — game is starting.
+                     * Exit online UI; state_recv apply block sets gs.phase. */
+                    oui.subphase = ONLINE_SUB_MENU;
                 }
             }
 
@@ -326,7 +365,8 @@ int main(int argc, char **argv)
             if (oui.subphase != ONLINE_SUB_ERROR &&
                 oui.subphase != ONLINE_SUB_MENU &&
                 oui.subphase != ONLINE_SUB_MATCH_FOUND &&
-                oui.subphase != ONLINE_SUB_CONNECTING) {
+                oui.subphase != ONLINE_SUB_CONNECTING &&
+                oui.subphase != ONLINE_SUB_CONNECTED_WAITING) {
                 if (oui.error_text[0] == '\0') {
                     /* Check if lobby reported an error */
                     const char *err = lobby_client_error_msg();
@@ -380,12 +420,17 @@ int main(int argc, char **argv)
                     if (oui.subphase == ONLINE_SUB_QUEUE_SEARCHING) {
                         lobby_client_queue_cancel();
                     }
+                    /* Disconnect from game server if connected
+                     * (e.g., canceling from waiting room) */
+                    if (client_net_state() != CLIENT_NET_DISCONNECTED) {
+                        client_net_disconnect();
+                    }
                     if (oui.subphase == ONLINE_SUB_MENU ||
                         cmd.type == INPUT_CMD_CANCEL) {
                         gs.phase = PHASE_MENU;
                         rs.sync_needed = true;
                     }
-                    oui.subphase = ONLINE_SUB_MENU;
+                    online_ui_init(&oui);
                     oui.error_text[0] = '\0';
                 } else if (cmd.type == INPUT_CMD_QUIT) {
                     quit_requested = true;
@@ -525,6 +570,19 @@ int main(int argc, char **argv)
 
         /* Apply audio settings each frame (cheap, keeps volumes in sync) */
         audio_apply_settings(&audio, &g_settings);
+
+        /* Sync stats from lobby client into RenderState for stats screen */
+        {
+            const LobbyClientInfo *lci = lobby_client_info();
+            if (lci && (lci->games_played > 0 || lci->elo_rating > 0)) {
+                rs.stats_available = true;
+                rs.stat_elo = lci->elo_rating;
+                rs.stat_games_played = lci->games_played;
+                rs.stat_games_won = lci->games_won;
+            } else {
+                rs.stats_available = false;
+            }
+        }
 
         render_update(&gs, &rs, clk.raw_dt);
 

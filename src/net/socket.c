@@ -456,10 +456,6 @@ void net_socket_update(NetSocket *ns)
     if (ret <= 0)
         return;
 
-    /* Accept new connections */
-    if (ns->pollfds[0].revents & POLLIN)
-        net_socket_accept(ns);
-
     /* Process each connection */
     for (int i = 0; i < ns->max_conns; i++) {
         NetConn *c = &ns->conns[i];
@@ -592,7 +588,7 @@ int net_socket_count(const NetSocket *ns)
 
 int net_socket_send_msg(NetSocket *ns, int conn_id, const NetMsg *msg)
 {
-    uint8_t buf[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
+    static uint8_t buf[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
     int len = net_msg_write_framed(msg, buf, sizeof(buf));
     if (len < 0)
         return -1;
@@ -610,7 +606,7 @@ bool net_socket_recv_msg(NetSocket *ns, int conn_id, NetMsg *msg)
         return false;
 
     /* Linearize recv buffer for frame parsing */
-    uint8_t linear[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
+    static uint8_t linear[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
     size_t to_peek = avail < sizeof(linear) ? avail : sizeof(linear);
     ringbuf_peek(&c->recv_buf, linear, to_peek);
 

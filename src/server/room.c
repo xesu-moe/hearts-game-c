@@ -1,14 +1,14 @@
 /* ============================================================
  * @deps-implements: server/room.h
  * @deps-requires: server/room.h (Room, PlayerSlot, SlotStatus, RoomStatus,
- *                 room_update_timers, room_reconnect),
+ *                 room_update_timers, room_reconnect, NET_MAX_NAME_LEN),
  *                 server/server_game.h (server_game_init, server_game_start,
  *                 server_game_tick, server_game_is_over),
  *                 server/lobby_link.h (lobby_link_send_result),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS),
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN),
  *                 core/game_state.h (game_state_get_winners),
- *                 core/clock.h (FIXED_DT), fcntl.h, unistd.h
- * @deps-last-changed: 2026-03-25 — Step 18: Report results to lobby on game finish
+ *                 core/clock.h (FIXED_DT), string.h, fcntl.h, unistd.h
+ * @deps-last-changed: 2026-03-26 — Step 20.2: Extracted finished room cleanup loop into room_cleanup_finished()
  * ============================================================ */
 
 #include "room.h"
@@ -127,6 +127,12 @@ int room_create(void)
 
 int room_create_with_code(const char *code)
 {
+    /* Reject duplicate codes */
+    if (room_find_by_code(code) >= 0) {
+        printf("room_create_with_code: code '%s' already in use\n", code);
+        return -1;
+    }
+
     /* Find first inactive slot */
     int idx = -1;
     for (int i = 0; i < MAX_ROOMS; i++) {
@@ -185,7 +191,8 @@ void room_destroy(int room_index)
  * ================================================================ */
 
 int room_join(int room_index, int conn_id,
-              const uint8_t auth_token[NET_AUTH_TOKEN_LEN])
+              const uint8_t auth_token[NET_AUTH_TOKEN_LEN],
+              const char *name)
 {
     if (room_index < 0 || room_index >= MAX_ROOMS) return -1;
 
@@ -209,6 +216,12 @@ int room_join(int room_index, int conn_id,
     slot->disconnect_timer = -1.0f;
     memcpy(slot->lobby_token, auth_token, NET_AUTH_TOKEN_LEN);
     room_generate_session_token(slot->auth_token);
+    if (name) {
+        strncpy(slot->name, name, NET_MAX_NAME_LEN - 1);
+        slot->name[NET_MAX_NAME_LEN - 1] = '\0';
+    } else {
+        slot->name[0] = '\0';
+    }
 
     room->connected_count++;
     printf("Room %s: player joined seat %d (conn %d, connected: %d/%d)\n",
@@ -374,7 +387,13 @@ void room_tick_all(void)
         }
     }
 
-    /* Destroy all finished rooms (immediate cleanup) */
+    /* NOTE: FINISHED rooms are NOT destroyed here.
+     * server_net.c broadcasts the final game-over state to FINISHED rooms,
+     * then calls room_cleanup_finished() to destroy them. */
+}
+
+void room_cleanup_finished(void)
+{
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (g_rooms[i].status == ROOM_FINISHED) {
             room_destroy(i);

@@ -3,22 +3,27 @@
  * @deps-requires: server/server_net.h, server/room.h (Room, ConnSlotInfo,
  *                 room_manager_init, room_create, room_join, room_leave,
  *                 room_find_by_code, room_find_by_conn, room_get, room_tick_all,
- *                 room_reconnect, room_update_timers, MAX_ROOMS),
+ *                 room_cleanup_finished, room_reconnect, room_update_timers,
+ *                 MAX_ROOMS, PlayerSlot),
  *                 server/server_game.h (ServerGame, server_game_apply_cmd),
  *                 net/socket.h (NetSocket, net_socket_*),
- *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView,
- *                 net_build_player_view, net_input_cmd_to_local),
+ *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView, NetMsgRoomStatus,
+ *                 NET_MAX_PLAYERS, NET_MAX_NAME_LEN, net_build_player_view,
+ *                 net_input_cmd_to_local),
  *                 core/game_state.h (PassSubphase, game_state_current_player),
  *                 core/input_cmd.h (InputCmd),
- *                 stdio.h, stdlib.h, string.h
- * @deps-last-changed: 2026-03-24 — Step 11: Call room_reconnect on handshake
+ *                 stdio.h, stdlib.h, string.h, time.h
+ * @deps-last-changed: 2026-03-26 — Step 22.3: Added SV_PASS_TRANSMUTE_WAIT state mapping
  * ============================================================ */
+
+#define _POSIX_C_SOURCE 199309L /* clock_gettime */
 
 #include "server_net.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "room.h"
 #include "server_game.h"
@@ -44,7 +49,16 @@ static void sv_handle_input_cmd(int conn_id, const NetInputCmd *net_cmd);
 static void sv_handle_ping(int conn_id, const NetMsgPing *ping);
 static void sv_cleanup_connection(int conn_id);
 static void sv_broadcast_state(void);
+static void sv_broadcast_room_status(int room_index);
+static void sv_cleanup_finished_rooms(void);
 static uint8_t sv_pass_substate_to_client(ServerPassSubstate ss);
+
+static uint32_t get_monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
 
 /* ================================================================
  * Public API
@@ -111,10 +125,13 @@ void server_net_update(void)
     /* Stage 4: Tick all rooms */
     room_tick_all();
 
-    /* Stage 5: Broadcast state updates */
+    /* Stage 5: Broadcast state updates (includes FINISHED rooms for game-over) */
     sv_broadcast_state();
 
-    /* Stage 6: Detect and handle disconnected connections */
+    /* Stage 6: Clean up finished rooms and their stale ConnSlotInfo */
+    sv_cleanup_finished_rooms();
+
+    /* Stage 7: Detect and handle disconnected connections */
     for (int i = 0; i < g_net.max_conns; i++) {
         if (net_socket_state(&g_net, i) == NET_CONN_DISCONNECTED &&
             g_net.conns[i].user_data != NULL) {
@@ -258,7 +275,7 @@ static void sv_handle_handshake(int conn_id, const NetMsgHandshake *hs)
     }
 
     /* Join the room */
-    int seat = room_join(room_idx, conn_id, hs->auth_token);
+    int seat = room_join(room_idx, conn_id, hs->auth_token, hs->username);
     if (seat < 0) {
         printf("[net] Room full, rejecting conn %d\n", conn_id);
         NetMsg reply;
@@ -304,6 +321,13 @@ static void sv_handle_handshake(int conn_id, const NetMsgHandshake *hs)
 
     printf("[net] Conn %d joined room %s seat %d\n",
            conn_id, room ? room->code : "???", seat);
+
+    /* Notify all clients in WAITING room about the updated player list.
+     * Note: when the 4th player joins, room_join() auto-starts the game
+     * (WAITING→PLAYING), so sv_broadcast_room_status() is a no-op.
+     * This is fine — clients exit the waiting room on the first
+     * NET_MSG_STATE_UPDATE which arrives in the same server tick. */
+    sv_broadcast_room_status(room_idx);
 }
 
 /* ================================================================
@@ -355,8 +379,38 @@ static void sv_handle_ping(int conn_id, const NetMsgPing *ping)
     reply.type = NET_MSG_PONG;
     reply.pong.sequence = ping->sequence;
     reply.pong.echo_timestamp_ms = ping->timestamp_ms;
-    reply.pong.server_timestamp_ms = 0; /* TODO: add server time */
+    reply.pong.server_timestamp_ms = get_monotonic_ms();
     net_socket_send_msg(&g_net, conn_id, &reply);
+}
+
+/* ================================================================
+ * Room Status Broadcast (waiting room player list)
+ * ================================================================ */
+
+static void sv_broadcast_room_status(int room_index)
+{
+    Room *room = room_get(room_index);
+    if (!room || room->status != ROOM_WAITING) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_ROOM_STATUS;
+    msg.room_status.player_count = (uint8_t)room->connected_count;
+
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (room->slots[i].status == SLOT_CONNECTED) {
+            msg.room_status.slot_occupied[i] = 1;
+            memcpy(msg.room_status.player_names[i], room->slots[i].name,
+                   NET_MAX_NAME_LEN);
+        }
+    }
+
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (room->slots[i].status != SLOT_CONNECTED) continue;
+        int cid = room->slots[i].conn_id;
+        if (cid >= 0)
+            net_socket_send_msg(&g_net, cid, &msg);
+    }
 }
 
 /* ================================================================
@@ -367,7 +421,8 @@ static void sv_broadcast_state(void)
 {
     for (int r = 0; r < MAX_ROOMS; r++) {
         Room *room = room_get(r);
-        if (!room || room->status != ROOM_PLAYING) continue;
+        if (!room || (room->status != ROOM_PLAYING &&
+                      room->status != ROOM_FINISHED)) continue;
         if (room->connected_count == 0) continue;
 
         for (int s = 0; s < NET_MAX_PLAYERS; s++) {
@@ -392,6 +447,19 @@ static void sv_broadcast_state(void)
                 s /* seat */
             );
 
+            /* Fill trick transmute info from server game state */
+            const TrickTransmuteInfo *tti = &room->game.current_tti;
+            for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                msg.state_update.trick_transmutes.transmutation_ids[i] =
+                    (int16_t)tti->transmutation_ids[i];
+                msg.state_update.trick_transmutes.transmuter_player[i] =
+                    (int8_t)tti->transmuter_player[i];
+                msg.state_update.trick_transmutes.resolved_effects[i] =
+                    (uint8_t)tti->resolved_effects[i];
+                msg.state_update.trick_transmutes.fogged[i] =
+                    tti->fogged[i];
+            }
+
             net_socket_send_msg(&g_net, conn_id, &msg);
         }
     }
@@ -408,8 +476,34 @@ static uint8_t sv_pass_substate_to_client(ServerPassSubstate ss)
         return PASS_SUB_CONTRACT;
     case SV_PASS_CARD_SELECT:
         return PASS_SUB_CARD_PASS;
+    case SV_PASS_TRANSMUTE_WAIT:
+        return PASS_SUB_TRANSMUTE;
     default:
         return 0;
+    }
+}
+
+/* ================================================================
+ * Finished Room Cleanup
+ * ================================================================ */
+
+static void sv_cleanup_finished_rooms(void)
+{
+    for (int r = 0; r < MAX_ROOMS; r++) {
+        Room *room = room_get(r);
+        if (!room || room->status != ROOM_FINISHED) continue;
+
+        /* Free stale ConnSlotInfo for all connections pointing at this room */
+        for (int i = 0; i < g_net.max_conns; i++) {
+            ConnSlotInfo *info = (ConnSlotInfo *)g_net.conns[i].user_data;
+            if (!info || info->room_index != r) continue;
+
+            free(info);
+            g_net.conns[i].user_data = NULL;
+            net_socket_close(&g_net, i);
+        }
+
+        room_destroy(r);
     }
 }
 
@@ -421,14 +515,20 @@ static void sv_cleanup_connection(int conn_id)
 {
     ConnSlotInfo *info = (ConnSlotInfo *)g_net.conns[conn_id].user_data;
     if (info) {
-        Room *room = room_get(info->room_index);
+        int room_idx = info->room_index;
+        Room *room = room_get(room_idx);
         printf("[net] Cleaning up conn %d (room %s, seat %d)\n",
                conn_id,
                room ? room->code : "???",
                info->seat);
-        room_leave(info->room_index, info->seat);
+        room_leave(room_idx, info->seat);
         free(info);
         g_net.conns[conn_id].user_data = NULL;
+
+        /* Notify remaining clients if still in waiting room */
+        Room *after = room_get(room_idx);
+        if (after && after->status == ROOM_WAITING)
+            sv_broadcast_room_status(room_idx);
     }
     net_socket_close(&g_net, conn_id);
 }

@@ -3,15 +3,15 @@
  * @deps-requires: net/client_net.h (ClientNetState, client_net_*),
  *                 net/socket.h (NetSocket, net_socket_*),
  *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView,
- *                 NetInputCmd, NET_ADDR_LEN, PROTOCOL_VERSION,
- *                 NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN,
+ *                 NetMsgRoomStatus, NetInputCmd, NET_ADDR_LEN, PROTOCOL_VERSION,
+ *                 NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN,
  *                 net_input_cmd_is_relevant, net_input_cmd_from_local),
  *                 net/reconnect.h (ReconnectState, reconnect_init,
  *                 reconnect_begin, reconnect_update, reconnect_cancel,
  *                 reconnect_is_active, RECONNECT_MAX_ATTEMPTS),
  *                 core/input_cmd.h (InputCmd),
  *                 string.h, stdio.h, time.h
- * @deps-last-changed: 2026-03-24 — Step 11: Exponential backoff reconnect logic
+ * @deps-last-changed: 2026-03-26 — Step 20.1: Room status handling, username in handshake
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L /* clock_gettime */
@@ -59,6 +59,11 @@ static char           g_last_ip[NET_ADDR_LEN];
 static uint16_t       g_last_port;
 static uint8_t        g_session_token[NET_AUTH_TOKEN_LEN];
 
+/* Room status (Step 20.1) */
+static NetMsgRoomStatus g_room_status;
+static bool             g_has_room_status;
+static char             g_username[NET_MAX_NAME_LEN];
+
 /* Error display (Step 13) */
 static char           g_error_msg[NET_MAX_CHAT_LEN];
 static bool           g_has_error;
@@ -87,6 +92,8 @@ static void reset_state(void)
     memset(g_room_code, 0, sizeof(g_room_code));
     memset(g_session_token, 0, sizeof(g_session_token));
     reconnect_init(&g_reconnect);
+    g_has_room_status = false;
+    memset(&g_room_status, 0, sizeof(g_room_status));
     g_error_msg[0] = '\0';
     g_has_error = false;
 }
@@ -103,6 +110,7 @@ static void send_handshake(void)
     msg.type = NET_MSG_HANDSHAKE;
     msg.handshake.protocol_version = PROTOCOL_VERSION;
     memcpy(msg.handshake.room_code, g_room_code, NET_ROOM_CODE_LEN);
+    memcpy(msg.handshake.username, g_username, NET_MAX_NAME_LEN);
 
     /* If reconnecting, send session token so server can match our seat */
     if (reconnect_is_active(&g_reconnect))
@@ -157,6 +165,11 @@ static void handle_message(const NetMsg *msg)
     case NET_MSG_STATE_UPDATE:
         memcpy(&g_latest_view, &msg->state_update, sizeof(NetPlayerView));
         g_has_new_state = true;
+        break;
+
+    case NET_MSG_ROOM_STATUS:
+        memcpy(&g_room_status, &msg->room_status, sizeof(NetMsgRoomStatus));
+        g_has_room_status = true;
         break;
 
     case NET_MSG_PONG: {
@@ -231,7 +244,15 @@ void client_net_connect(const char *ip, uint16_t port, const char *room_code)
     if (g_state != CLIENT_NET_DISCONNECTED && g_state != CLIENT_NET_ERROR)
         client_net_disconnect();
 
+    /* Preserve auth token and username across reset — they are set by
+     * the caller before connect() and needed for the handshake. */
+    uint8_t saved_token[NET_AUTH_TOKEN_LEN];
+    char    saved_username[NET_MAX_NAME_LEN];
+    memcpy(saved_token, g_session_token, NET_AUTH_TOKEN_LEN);
+    memcpy(saved_username, g_username, NET_MAX_NAME_LEN);
     reset_state();
+    memcpy(g_session_token, saved_token, NET_AUTH_TOKEN_LEN);
+    memcpy(g_username, saved_username, NET_MAX_NAME_LEN);
 
     /* Store connection params for potential reconnect */
     if (ip)
@@ -445,6 +466,28 @@ int client_net_reconnect_attempt(void)
 float client_net_reconnect_time_remaining(void)
 {
     return reconnect_time_remaining(&g_reconnect);
+}
+
+bool client_net_has_room_status(void)
+{
+    return g_has_room_status;
+}
+
+void client_net_consume_room_status(NetMsgRoomStatus *out)
+{
+    if (out)
+        memcpy(out, &g_room_status, sizeof(NetMsgRoomStatus));
+    g_has_room_status = false;
+}
+
+void client_net_set_username(const char *name)
+{
+    if (name) {
+        strncpy(g_username, name, NET_MAX_NAME_LEN - 1);
+        g_username[NET_MAX_NAME_LEN - 1] = '\0';
+    } else {
+        g_username[0] = '\0';
+    }
 }
 
 bool client_net_has_error(void)

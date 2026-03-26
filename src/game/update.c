@@ -1,16 +1,11 @@
 /* ============================================================
  * @deps-implements: update.h
- * @deps-requires: input.h (INPUT_CMD_SELECT_CONTRACT, INPUT_CMD_DUEL_PICK/GIVE/RETURN),
- *                 game_state.h, settings.h, render.h (pause_state, settings_return_*,
- *                 is_ingame_phase, sync_needed), anim.h,
- *                 pass_phase.h (setup_draft_ui, draft_finish_round, PASS_CONTRACT_TIME),
- *                 play_phase.h, settings_ui.h, turn_flow.h,
- *                 phase2/contract_logic.h (draft_pick, draft_all_picked,
- *                   contract_evaluate_all, contract_apply_rewards_all),
- *                 phase2/phase2_state.h (DraftState, DraftPlayerState),
- *                 phase2/transmutation_logic.h,
- *                 phase2/phase2_defs.h
- * @deps-last-changed: 2026-03-21 — Added draft input handling, updated scoring to use contract_evaluate_all/contract_apply_rewards_all
+ * @deps-requires: update.h, input.h (INPUT_CMD_SELECT_CONTRACT, INPUT_CMD_DUEL_*,
+ *                 INPUT_CMD_OPEN_STATS, INPUT_CMD_ONLINE_*), game_state.h (PHASE_STATS),
+ *                 settings.h, render.h, anim.h, pass_phase.h, play_phase.h,
+ *                 settings_ui.h, turn_flow.h, online_ui.h, phase2/contract_logic.h,
+ *                 phase2/phase2_state.h, phase2/transmutation_logic.h, phase2/phase2_defs.h
+ * @deps-last-changed: 2026-03-26 — Step 21: Added INPUT_CMD_OPEN_STATS handler for PHASE_STATS transition
  * ============================================================ */
 
 #include "update.h"
@@ -18,6 +13,7 @@
 #include <stdio.h>
 
 #include "core/input.h"
+#include "net/client_net.h"
 #include "render/render.h"
 #include "ai.h"
 #include "phase2/contract_logic.h"
@@ -125,6 +121,9 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             } else if (cmd.type == INPUT_CMD_OPEN_ONLINE) {
                 gs->phase = PHASE_ONLINE_MENU;
                 rs->sync_needed = true;
+            } else if (cmd.type == INPUT_CMD_OPEN_STATS) {
+                gs->phase = PHASE_STATS;
+                rs->sync_needed = true;
             } else if (cmd.type == INPUT_CMD_OPEN_SETTINGS) {
                 rs->settings_return_phase = PHASE_MENU;
                 rs->settings_return_paused = false;
@@ -134,6 +133,15 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 sync_settings_values(sui, settings, rs);
             } else if (cmd.type == INPUT_CMD_QUIT ||
                        cmd.type == INPUT_CMD_CANCEL) {
+                *quit_requested = true;
+            }
+            break;
+
+        case PHASE_STATS:
+            if (cmd.type == INPUT_CMD_CANCEL) {
+                gs->phase = PHASE_MENU;
+                rs->sync_needed = true;
+            } else if (cmd.type == INPUT_CMD_QUIT) {
                 *quit_requested = true;
             }
             break;
@@ -384,6 +392,9 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
 
         case PHASE_GAME_OVER:
             if (cmd.type == INPUT_CMD_CONFIRM) {
+                /* Disconnect from game server if this was an online game */
+                if (client_net_state() == CLIENT_NET_CONNECTED)
+                    client_net_disconnect();
                 game_state_reset_to_menu(gs);
                 rs->sync_needed = true;
             }

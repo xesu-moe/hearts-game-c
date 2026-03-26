@@ -2,14 +2,10 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: struct RenderState (draft_btn_labels[][], draft_btn_subtitles[][],
- *                draft_round_display, draft_picks_made, contract_result_*[],
- *                info_contract_*[][], info_contract_count, fog_shader,
- *                fog_loc_time, fog_loc_opacity, hand_fog_mode[], trick_fog_mode[])
- * @deps-requires: raylib.h (Shader), anim.h (CardVisual), layout.h,
- *                 core/card.h, core/game_state.h, phase2/effect.h
- * @deps-used-by: render.c, pass_phase.c, info_sync.c, main.c
- * @deps-last-changed: 2026-03-22 — SETTINGS_ROW_COUNT and SETTINGS_ACTIVE_COUNT increased from 8 to 9
+ * @deps-exports: struct RenderState (stat_elo: int32_t, stat_games_played: uint32_t, stat_games_won: uint32_t)
+ * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/game_state.h
+ * @deps-used-by: render.c, game/update.c, game/process_input.c, main.c
+ * @deps-last-changed: 2026-03-26 — Step 22.5: RenderState.stat_elo uint16_t→int32_t
  * ============================================================ */
 
 #include <stdbool.h>
@@ -326,6 +322,13 @@ typedef struct RenderState {
     UIButton btn_online_join_submit;
     UIButton btn_online_cancel;
     const struct OnlineUIState *online_ui; /* set by main.c, read by render */
+
+    /* Stats screen (Step 21) */
+    UIButton btn_stats_back;
+    bool     stats_available;  /* true if lobby_client_info() was valid */
+    int32_t  stat_elo;
+    uint32_t stat_games_played;
+    uint32_t stat_games_won;
 } RenderState;
 
 /* ---- Public API ---- */

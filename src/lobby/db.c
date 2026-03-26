@@ -220,7 +220,7 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
     [LOBBY_STMT_INIT_STATS] =
         "INSERT OR IGNORE INTO stats (account_id) VALUES (?)",
     [LOBBY_STMT_GET_STATS] =
-        "SELECT games_played, games_won, CAST(elo_rating AS INTEGER) "
+        "SELECT games_played, games_won, elo_rating "
         "FROM stats WHERE account_id = ?",
     /* Rooms (Step 16) */
     [LOBBY_STMT_INSERT_ROOM] =
@@ -258,6 +258,9 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
     /* Username change (Step 19) */
     [LOBBY_STMT_CHANGE_USERNAME] =
         "UPDATE accounts SET username = ? WHERE id = ?",
+    /* ELO update (Step 21) */
+    [LOBBY_STMT_UPDATE_ELO] =
+        "UPDATE stats SET elo_rating = ? WHERE account_id = ?",
 };
 
 static int lobbydb_prepare_all(LobbyDB *ldb)

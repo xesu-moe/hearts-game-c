@@ -128,6 +128,16 @@ static void lc_handle_message(const NetMsg *msg, const Identity *id)
         if (g_state == LOBBY_CREATING_ROOM || g_state == LOBBY_JOINING_ROOM ||
             g_state == LOBBY_QUEUED) {
             g_state = LOBBY_AUTHENTICATED;
+        } else if (g_state == LOBBY_REGISTERING) {
+            /* Registration failed (e.g. pubkey already taken) — try login
+             * instead since the key is already registered. */
+            printf("[lobby-client] Registration failed (%s), trying login\n",
+                   g_error);
+            g_state = LOBBY_CONNECTED; /* allow lobby_client_login guard */
+            g_error[0] = '\0';
+            lobby_client_login(g_login_username);
+            printf("[lobby-client] After auto-login: state=%d conn=%d\n",
+                   g_state, g_conn_id);
         } else {
             g_state = LOBBY_ERROR;
         }
@@ -234,6 +244,16 @@ void lobby_client_update(float dt, const Identity *id)
         while (net_socket_recv_msg(&g_net, g_conn_id, &msg)) {
             lc_handle_message(&msg, id);
         }
+    }
+
+    /* Debug: log if stuck in login states */
+    static int dbg_frames = 0;
+    if (g_state == LOBBY_LOGGING_IN || g_state == LOBBY_CHALLENGED) {
+        if (++dbg_frames <= 5 || dbg_frames % 60 == 0)
+            printf("[lobby-client] DBG frame %d: state=%d cs=%d\n",
+                   dbg_frames, g_state, (int)cs);
+    } else {
+        dbg_frames = 0;
     }
 }
 

@@ -232,34 +232,146 @@ Hollow Hearts is designed for 4 human players but currently runs as a single-pro
 - Files: `src/game/online_ui.h/c`, modify `src/game/update.c`
 - **Verify**: Full flow — login → create room → share code → 3 others join → game starts
 
-**Step 20.1 — Player Join Notifications & Waiting Room Polish**
-- Game server sends `NET_MSG_SERVER_ROOM_STATUS` to lobby when a player joins/leaves a room (room code + current player count + player names)
-- Lobby forwards player count/names to the room creator's client connection
-- Client updates `OnlineUIState.player_count` and displays individual player slots in the Create Room waiting room
-- Pong timestamp: populate `server_timestamp_ms` in lobby and game server pong responses (currently hardcoded to 0)
-- Files: `src/server/server_net.c`, `src/net/protocol.h/c` (new message type), `src/lobby/lobby_net.c`, `src/game/online_ui.h`, `src/render/render.c`
-- **Verify**: Create room → second client joins → creator sees "2/4 players" update live
+**Implementation Status: Steps 1–21 COMPLETE (as of 2026-03-26)**
+
+All macro steps from Phases A through G have been implemented. The networking stack, game server, lobby server, client integration, accounts, matchmaking, room codes, stats, and UI are all wired. However, a full-stack audit on 2026-03-26 revealed critical bugs, warnings, and missing pieces that must be fixed before the game is playable online. These are tracked in **Phase H** below.
+
+**Architectural notes (carried from implementation):**
+- `lobby_client.c` manages lobby TCP connection (auth + room/queue). `client_net.c` manages game server TCP connection. Both can be active simultaneously.
+- `game_update()` signature takes `LoginUIState *lui` and `OnlineUIState *oui` parameters (added in Steps 19-20). All callers updated.
+- `PlayerSlot` in `room.h` has both `auth_token` (random reconnect token) and `lobby_token` (session token from lobby) — use `lobby_token` for result reporting to lobby.
+- `NetMsgServerResult` includes `player_tokens[4][32]` so the lobby can map seats to accounts via `auth_validate_token()`.
+- Match recording uses `BEGIN`/`COMMIT` transaction in `lby_handle_server_result()`.
+- The `ONLINE_SUB_CREATE_WAITING` flow connects to the game server immediately on `ROOM_ASSIGNED` while staying in the waiting room UI until the first `NET_MSG_STATE_UPDATE` (game start). `ONLINE_SUB_JOIN_WAITING` waits for lobby response before showing "Game Found!".
+- `PROTOCOL_VERSION` bumped to 2 in Step 20.1. Game server sends `NET_MSG_ROOM_STATUS` (type 8) directly to connected clients in WAITING rooms. Username is carried in `NetMsgHandshake.username` and stored in `PlayerSlot.name`.
+- `client_net_connect()` preserves auth token and username across its internal `reset_state()` — callers must set them before calling connect.
 
 ---
 
-### Phase G: Stats & Polish
+### Phase H: Audit Fixes — Pre-Release (Step 22)
 
-**Step 21 — Stats & Match History**
-- After game ends, server reports to lobby: winner, scores, rounds played, duration
-- Lobby records in `match_history` table, updates player stats
-- Stats table: `player_id`, `games_played`, `games_won`, `total_score`, `elo_rating`
-- ELO calculation: standard formula, K-factor tuned for Hearts
-- Client can view own stats from menu
-- Files: `src/lobby/stats.h/c`, `src/game/stats_ui.h/c`
-- **Verify**: Play a game → stats update in DB → viewable in client
+Full-stack audit conducted 2026-03-26 across protocol, server, lobby, and game state layers. The original Step 22 (polish) is replaced by this concrete fix plan derived from audit findings.
 
-**Step 22 — Final Polish**
-- Connection quality indicator (ping display)
-- Graceful server shutdown (notify clients)
-- Rate limiting (prevent command spam)
-- Input validation hardening (fuzzing)
-- Test with real network conditions (latency, packet loss simulation)
-- **Verify**: Full end-to-end test with 4 clients across network
+**What works well (confirmed by audit):**
+- Anti-cheat boundary enforced correctly: `net_build_player_view` sends opponents' card counts only, never identities
+- Zero SQL injection risk — all queries use parameterized prepared statements
+- Ed25519 challenge-response auth correctly implemented with proper nonce generation
+- Migration system with `PRAGMA user_version` is production-grade
+- Matchmaking module is cleanly separated as pure data structure
+- Connection cleanup (`lby_cleanup_connection`) properly removes from all subsystems before freeing
+- Fixed-timestep loops on both server and lobby are correct with catch-up limiting
+
+---
+
+#### Step 22.1 — Server Loop: Broadcast-Before-Destroy (CRITICAL)
+
+**Problem**: `server_net_update()` calls `room_tick_all` (which destroys finished rooms) *before* `sv_broadcast_state`. Clients never receive `PHASE_GAME_OVER`. After `room_destroy` memsets a room to zero, connected players retain `ConnSlotInfo` with stale `room_index` — next message routes to garbage.
+
+**Fix**:
+- Reorder `server_net_update()`: broadcast state first, then tick rooms
+- OR: split room destruction into a deferred step — `room_tick_all` marks rooms as `ROOM_STATUS_FINISHED` but doesn't destroy; a separate `room_cleanup_finished()` runs after broadcast
+- Add a `ROOM_STATUS_CLOSING` state: broadcast final game-over state, then destroy on next tick
+- When a room is destroyed, iterate all connections and clear stale `room_index` references
+- Files: `src/server/server_net.c:124-127`, `src/server/room.c`, `src/server/room.h`
+- **Verify**: Play a game to completion → all 4 clients receive `PHASE_GAME_OVER` → room cleans up without stale pointer access
+
+#### Step 22.2 — Protocol Safety: Null-Termination & Bounds Checks (CRITICAL)
+
+**Problem**: `deser_error` and `deser_chat` read fixed-size byte arrays treated as C strings without ensuring NUL terminator. Sub-struct deserializers (`deser_contract_view`, `deser_effect_view`, etc.) in `deser_player_view` read bytes without verifying buffer remaining — a truncated payload reads past buffer end.
+
+**Fix**:
+- In `deser_error` and `deser_chat`: always force `buf[len-1] = '\0'` after reading string fields, or use a `deser_string` helper that null-terminates
+- Add remaining-length checks at the start of every sub-deserializer: `if (pos + REQUIRED_BYTES > len) return -1`
+- Derive `NET_PLAYER_VIEW_MAX_SIZE` from actual field sizes with a compile-time expression, not a magic number
+- Add `_Static_assert` to catch size drift
+- Files: `src/net/protocol.c:339,359,1308-1428`, `src/net/protocol.h`
+- **Verify**: Feed truncated/malformed payloads → deserializer returns error, no crash, no read-past-end
+
+#### Step 22.3 — InputCmd Sync: INPUT_RELEVANT Array & Transmutation Handling (CRITICAL)
+
+**Problem**: `INPUT_RELEVANT[]` array is missing 8 entries relative to the `InputCmdType` enum — no `_Static_assert` guards this. Transmutation commands (`CMD_APPLY_TRANSMUTATION`, `CMD_SELECT_TRANSMUTATION`, etc.) have no `case` in the server's command validator, making all Phase 2 features broken online.
+
+**Fix**:
+- Add `_Static_assert(ARRAY_LEN(INPUT_RELEVANT) == INPUT_CMD_COUNT, ...)` to catch desync at compile time
+- Fill in the missing `INPUT_RELEVANT` entries for all new command types
+- Add `case` handlers for every transmutation/Phase 2 command in `server_game.c`'s command validator and processor
+- Files: `src/core/input_cmd.h`, `src/server/server_game.c`
+- **Verify**: Client sends transmutation commands online → server validates and applies correctly; adding a new `InputCmdType` without updating `INPUT_RELEVANT` → compile error
+
+#### Step 22.4 — Room Code Deduplication (CRITICAL)
+
+**Problem**: `room_create_with_code` doesn't check if a room code is already in use. Lobby can silently create overlapping rooms, routing players to the wrong game.
+
+**Fix**:
+- Add a code-uniqueness check in `room_create_with_code`: scan existing rooms for duplicate codes before creating
+- Return an error to the lobby if the code collides (lobby can retry with a new code)
+- Files: `src/server/room.c:128-167`
+- **Verify**: Attempt to create two rooms with the same code → second creation fails with error
+
+#### Step 22.5 — ELO Type Consistency (CRITICAL)
+
+**Problem**: ELO is stored as `REAL` (double) in SQLite, computed as `double` in `stats.c`, but transported as `uint16_t` across `AuthAccountInfo`, `NetMsgLoginAck`, and protocol serialization. Fractional values lost, negative intermediates wrap around.
+
+**Fix**:
+- Change `elo_rating` to `int32_t` (or `double`) across `AuthAccountInfo`, `NetMsgLoginAck`, `LobbyClientInfo`, and their serialization in `protocol.c`
+- Read with `sqlite3_column_int` (for int32) or `sqlite3_column_double` consistently
+- Update all serialization/deserialization paths to match the new type
+- Files: `src/lobby/auth.h`, `src/lobby/auth.c:203`, `src/net/protocol.h`, `src/net/protocol.c:709/722`, `src/net/lobby_client.h`
+- **Verify**: Player with ELO 1523.7 → stored correctly → transmitted correctly → displayed correctly on client
+
+#### Step 22.6 — Lobby Safety: Send-After-Disconnect & Transaction Guards (WARNING)
+
+**Problem**: `lby_on_pending_timeout` sends to potentially dead/reused connections without checking state. Raw `sqlite3_exec("BEGIN")` bypasses error-logging wrapper — silent failure means partial writes. Dead server removal doesn't notify waiting clients.
+
+**Fix**:
+- Add `net_socket_state()` guard before `lby_send_error` in `lby_on_pending_timeout`
+- Replace raw `sqlite3_exec("BEGIN"/"COMMIT")` with `lobbydb_exec` wrapper or explicit return-value checks
+- When a server dies (`lby_on_dead_server`), iterate pending entries for that server and send immediate errors to waiting clients
+- Files: `src/lobby/lobby_net.c:962,1088-1091,1103-1111`
+- **Verify**: Kill game server → waiting clients get immediate error (not 15s timeout); force a transaction failure → error is logged
+
+#### Step 22.7 — Client: Waiting-for-Server State (WARNING)
+
+**Problem**: Client sets `PHASE_MENU` on connection success, causing a brief menu flash before the server's first state update arrives.
+
+**Fix**:
+- Add `ONLINE_SUB_CONNECTED_WAITING` substate (or similar) that shows "Connected — waiting for game to start..." instead of flashing the main menu
+- Transition to actual gameplay only on first `NET_MSG_STATE_UPDATE`
+- Files: `src/main.c:312-316`, `src/game/online_ui.h`
+- **Verify**: Connect to game server → see "Waiting..." message → game starts cleanly with no menu flash
+
+#### Step 22.8 — Socket & Protocol Hardening (WARNING)
+
+**Problem**: 8KB stack buffers in hot-path send/recv calls. `getrandom` partial reads fall back to `rand()` instead of retrying. `NET_PLAYER_VIEW_MAX_SIZE` is a magic number not derived from actual struct sizes.
+
+**Fix**:
+- Move 8KB stack buffers in `socket.c:595,613` to `static` or per-connection heap allocation
+- Fix `getrandom` partial read handling in `rooms.c:29-31`: retry in a loop (match `auth_random_bytes` pattern)
+- Derive `NET_PLAYER_VIEW_MAX_SIZE` from field sizes with a compile-time expression
+- Files: `src/net/socket.c`, `src/lobby/rooms.c:29-31`, `src/net/protocol.h`
+- **Verify**: Compile with `-Wstack-usage=4096` → no warnings in socket.c hot paths
+
+---
+
+#### Execution Order
+
+```
+Priority 1 (game-breaking):
+  22.1 — Broadcast-before-destroy    (server loop race)
+  22.2 — Protocol null-term + bounds  (crash vectors)
+  22.3 — INPUT_RELEVANT + transmute   (Phase 2 broken online)
+
+Priority 2 (data integrity):
+  22.4 — Room code dedup              (routing corruption)
+  22.5 — ELO type consistency         (data truncation)
+
+Priority 3 (robustness):
+  22.6 — Lobby send-after-disconnect  (edge case crashes)
+  22.7 — Client waiting-for-server    (UX flash)
+  22.8 — Socket & protocol hardening  (stack safety, magic numbers)
+```
+
+After all 22.x steps: full end-to-end test with 4 clients across network, including disconnect/reconnect, transmutation cards, matchmaking, and stats recording.
 
 ---
 

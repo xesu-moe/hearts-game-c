@@ -1,17 +1,10 @@
 /* ============================================================
  * @deps-implements: lobby/lobby_net.h
- * @deps-requires: lobby/lobby_net.h,
- *                 lobby/db.h (LobbyDB),
- *                 lobby/auth.h (auth_register, auth_find_account,
- *                 auth_generate_challenge, auth_verify_and_login,
- *                 auth_logout, auth_cleanup_expired),
- *                 lobby/rooms.h (lobby_rooms_*, lobby_pending_*),
- *                 lobby/server_registry.h (svreg_*),
- *                 lobby/matchmaking.h (mm_*),
- *                 net/socket.h (NetSocket, net_socket_*),
- *                 net/protocol.h (NetMsg, NetMsgType, NET_MAX_CHAT_LEN),
- *                 stdio.h, stdlib.h, string.h, time.h
- * @deps-last-changed: 2026-03-25 — Step 17: Matchmaking queue
+ * @deps-requires: lobby/lobby_net.h, lobby/db.h, lobby/auth.h,
+ *                 lobby/rooms.h, lobby/server_registry.h,
+ *                 lobby/matchmaking.h, lobby/stats.h (stats_calc_elo_deltas),
+ *                 net/socket.h, net/protocol.h, stdio.h, stdlib.h, string.h, time.h
+ * @deps-last-changed: 2026-03-26 — Step 21: Integrated ELO calculation in server result handler
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L
@@ -28,6 +21,7 @@
 #include "db.h"
 #include "matchmaking.h"
 #include "rooms.h"
+#include "stats.h"
 #include "server_registry.h"
 #include "net/socket.h"
 #include "net/protocol.h"
@@ -311,7 +305,12 @@ static void lby_handle_ping(int conn_id, const NetMsgPing *ping)
     reply.type = NET_MSG_PONG;
     reply.pong.sequence = ping->sequence;
     reply.pong.echo_timestamp_ms = ping->timestamp_ms;
-    reply.pong.server_timestamp_ms = 0; /* TODO: add lobby time */
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        reply.pong.server_timestamp_ms =
+            (uint32_t)((uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    }
     net_socket_send_msg(&g_net, conn_id, &reply);
 }
 
@@ -409,6 +408,9 @@ static void lby_handle_login(int conn_id, const NetMsgLogin *login)
     uint8_t pk[AUTH_PK_LEN];
     AuthResult r = auth_find_account(g_db, login->username, &account_id, pk);
     if (r != AUTH_OK) {
+        printf("[lobby-net] Login failed for conn %d (user='%.32s'): %s\n",
+               conn_id, login->username,
+               r == AUTH_ERR_UNKNOWN_USER ? "unknown user" : "db error");
         lby_send_error(conn_id, 4, "Unknown username");
         return;
     }
@@ -416,7 +418,17 @@ static void lby_handle_login(int conn_id, const NetMsgLogin *login)
     /* Store state for challenge verification */
     info->account_id = account_id;
     memcpy(info->pending_pk, pk, AUTH_PK_LEN);
-    auth_generate_challenge(info->challenge_nonce);
+    if (!auth_generate_challenge(info->challenge_nonce)) {
+        fprintf(stderr, "[lobby-net] RNG failure generating challenge for conn %d\n",
+                conn_id);
+        NetMsg err;
+        memset(&err, 0, sizeof(err));
+        err.type = NET_MSG_ERROR;
+        snprintf(err.error.message, NET_MAX_CHAT_LEN,
+                 "Internal server error");
+        net_socket_send_msg(&g_net, conn_id, &err);
+        return;
+    }
     info->auth_state = LOBBY_AUTH_CHALLENGE_SENT;
 
     /* Send challenge */
@@ -960,12 +972,18 @@ static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res)
     }
 
     /* Begin transaction for atomic match recording */
-    sqlite3_exec(lobbydb_handle(g_db), "BEGIN", NULL, NULL, NULL);
+    if (sqlite3_exec(lobbydb_handle(g_db), "BEGIN", NULL, NULL, NULL)
+        != SQLITE_OK) {
+        fprintf(stderr, "[lobby-net] Failed to BEGIN transaction: %s\n",
+                sqlite3_errmsg(lobbydb_handle(g_db)));
+        return;
+    }
 
     /* Insert match_history row */
     sqlite3_stmt *stmt = lobbydb_stmt(g_db, LOBBY_STMT_INSERT_MATCH);
     if (!stmt) {
         fprintf(stderr, "[lobby-net] Failed to get INSERT_MATCH stmt\n");
+        sqlite3_exec(lobbydb_handle(g_db), "ROLLBACK", NULL, NULL, NULL);
         return;
     }
     sqlite3_bind_text(stmt, 1, res->room_code, -1, SQLITE_TRANSIENT);
@@ -1002,38 +1020,83 @@ static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res)
 
         /* Insert match_players row */
         stmt = lobbydb_stmt(g_db, LOBBY_STMT_INSERT_MATCH_PLAYER);
-        if (stmt) {
-            sqlite3_bind_int64(stmt, 1, match_id);
-            sqlite3_bind_int(stmt, 2, account_ids[i]);
-            sqlite3_bind_int(stmt, 3, i); /* seat */
-            sqlite3_bind_int(stmt, 4, res->final_scores[i]);
-            sqlite3_bind_int(stmt, 5, placements[i]);
-            if (sqlite3_step(stmt) != SQLITE_DONE) {
-                fprintf(stderr, "[lobby-net] Failed to insert match_player "
-                        "seat %d: %s\n", i,
-                        sqlite3_errmsg(lobbydb_handle(g_db)));
-            }
+        if (!stmt) goto rollback;
+        sqlite3_bind_int64(stmt, 1, match_id);
+        sqlite3_bind_int(stmt, 2, account_ids[i]);
+        sqlite3_bind_int(stmt, 3, i); /* seat */
+        sqlite3_bind_int(stmt, 4, res->final_scores[i]);
+        sqlite3_bind_int(stmt, 5, placements[i]);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            fprintf(stderr, "[lobby-net] Failed to insert match_player "
+                    "seat %d: %s\n", i,
+                    sqlite3_errmsg(lobbydb_handle(g_db)));
+            goto rollback;
         }
 
         /* Update stats */
         stmt = lobbydb_stmt(g_db, LOBBY_STMT_UPDATE_STATS);
-        if (stmt) {
-            sqlite3_bind_int(stmt, 1, is_winner[i] ? 1 : 0);
-            sqlite3_bind_int(stmt, 2, res->final_scores[i]);
-            sqlite3_bind_int(stmt, 3, account_ids[i]);
-            if (sqlite3_step(stmt) != SQLITE_DONE) {
-                fprintf(stderr, "[lobby-net] Failed to update stats "
-                        "account %d: %s\n", account_ids[i],
-                        sqlite3_errmsg(lobbydb_handle(g_db)));
-            }
+        if (!stmt) goto rollback;
+        sqlite3_bind_int(stmt, 1, is_winner[i] ? 1 : 0);
+        sqlite3_bind_int(stmt, 2, res->final_scores[i]);
+        sqlite3_bind_int(stmt, 3, account_ids[i]);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            fprintf(stderr, "[lobby-net] Failed to update stats "
+                    "account %d: %s\n", account_ids[i],
+                    sqlite3_errmsg(lobbydb_handle(g_db)));
+            goto rollback;
         }
     }
 
-    sqlite3_exec(lobbydb_handle(g_db), "COMMIT", NULL, NULL, NULL);
+    /* ELO rating update (Step 21) */
+    double current_elos[NET_MAX_PLAYERS] = {0};
+    int elo_placements[NET_MAX_PLAYERS] = {0};
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (account_ids[i] < 0) continue;
+        elo_placements[i] = placements[i];
+        stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_STATS);
+        if (!stmt) goto rollback;
+        sqlite3_bind_int(stmt, 1, account_ids[i]);
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+            current_elos[i] = sqlite3_column_double(stmt, 2); /* col 2 = elo */
+        else
+            current_elos[i] = ELO_DEFAULT;
+    }
+
+    double elo_deltas[NET_MAX_PLAYERS] = {0};
+    stats_calc_elo_deltas(elo_placements, current_elos, elo_deltas);
+
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (account_ids[i] < 0) continue;
+        double new_elo = current_elos[i] + elo_deltas[i];
+        if (new_elo < ELO_MIN) new_elo = ELO_MIN;
+        if (new_elo > ELO_MAX) new_elo = ELO_MAX;
+        stmt = lobbydb_stmt(g_db, LOBBY_STMT_UPDATE_ELO);
+        if (!stmt) goto rollback;
+        sqlite3_bind_double(stmt, 1, new_elo);
+        sqlite3_bind_int(stmt, 2, account_ids[i]);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            fprintf(stderr, "[lobby-net] Failed to update ELO "
+                    "account %d: %s\n", account_ids[i],
+                    sqlite3_errmsg(lobbydb_handle(g_db)));
+            goto rollback;
+        }
+    }
+
+    if (sqlite3_exec(lobbydb_handle(g_db), "COMMIT", NULL, NULL, NULL)
+        != SQLITE_OK) {
+        fprintf(stderr, "[lobby-net] Failed to COMMIT transaction: %s\n",
+                sqlite3_errmsg(lobbydb_handle(g_db)));
+        goto rollback;
+    }
 
     printf("[lobby-net] Recorded match %lld: room='%.8s', %d players, "
            "%d rounds\n", (long long)match_id, res->room_code,
            valid_count, res->rounds_played);
+    return;
+
+rollback:
+    fprintf(stderr, "[lobby-net] Transaction failed, rolling back\n");
+    sqlite3_exec(lobbydb_handle(g_db), "ROLLBACK", NULL, NULL, NULL);
 }
 
 static void lby_handle_server_heartbeat(int conn_id, const NetMsgServerHeartbeat *hb)
@@ -1049,7 +1112,9 @@ static void lby_handle_server_heartbeat(int conn_id, const NetMsgServerHeartbeat
 
 static void lby_on_pending_timeout(int client_conn_id)
 {
-    lby_send_error(client_conn_id, 29, "Room creation timed out");
+    if (net_socket_state(&g_net, client_conn_id) == NET_CONN_CONNECTED) {
+        lby_send_error(client_conn_id, 29, "Room creation timed out");
+    }
 }
 
 static void lby_on_mm_pending_timeout(const int conn_ids[MM_PLAYERS_PER_MATCH])
@@ -1065,6 +1130,33 @@ static void lby_on_mm_pending_timeout(const int conn_ids[MM_PLAYERS_PER_MATCH])
 static void lby_on_dead_server(int conn_id)
 {
     printf("[lobby-net] Dead server detected, cleaning up conn %d\n", conn_id);
+
+    /* Notify clients waiting on private room creation from this server */
+    for (int i = 0; i < LOBBY_MAX_PENDING; i++) {
+        const PendingRoomRequest *pr = lobby_pending_get(i);
+        if (pr && pr->server_conn_id == conn_id) {
+            if (net_socket_state(&g_net, pr->client_conn_id)
+                == NET_CONN_CONNECTED) {
+                lby_send_error(pr->client_conn_id, 30,
+                               "Game server went down");
+            }
+        }
+    }
+
+    /* Notify clients waiting on matchmade room creation from this server */
+    for (int i = 0; i < MM_MAX_PENDING; i++) {
+        const MmPendingMatch *pm = mm_pending_get(i);
+        if (pm && pm->server_conn_id == conn_id) {
+            for (int j = 0; j < MM_PLAYERS_PER_MATCH; j++) {
+                if (net_socket_state(&g_net, pm->conn_ids[j])
+                    == NET_CONN_CONNECTED) {
+                    lby_send_error(pm->conn_ids[j], 30,
+                                   "Game server went down");
+                }
+            }
+        }
+    }
+
     lobby_pending_remove_by_server(conn_id);
     mm_pending_remove_by_server(conn_id);
     if (net_socket_state(&g_net, conn_id) != NET_CONN_DISCONNECTED) {

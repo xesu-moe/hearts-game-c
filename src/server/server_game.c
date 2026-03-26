@@ -5,7 +5,8 @@
  *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
  *                 phase2/phase2_state.h,
  *                 stdlib.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-23 — Step 6: State machine refactor + apply_cmd
+ * @deps-last-changed: 2026-03-26 — Step 22.3: Handlers for INPUT_CMD_SELECT_TRANSMUTATION,
+ *                 INPUT_CMD_APPLY_TRANSMUTATION; SV_PASS_TRANSMUTE_WAIT logic
  * ============================================================ */
 
 #include "server_game.h"
@@ -305,11 +306,67 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         }
         return true;
 
+    case INPUT_CMD_SELECT_TRANSMUTATION:
+        if (sg->pass_substate != SV_PASS_TRANSMUTE_WAIT) {
+            REJECT("Cannot select transmutations now");
+        }
+        if (sg->transmute_confirmed[seat]) {
+            REJECT("Already confirmed transmutations");
+        }
+        {
+            int slot = cmd->transmute_select.inv_slot;
+            TransmuteInventory *inv = &p2->players[seat].transmute_inv;
+            if (slot < -1 || slot >= inv->count) {
+                REJECT("Invalid inventory slot");
+            }
+            sg->selected_transmute_slot[seat] = slot;
+            printf("Seat %d selected transmutation slot %d\n", seat, slot);
+        }
+        return true;
+
+    case INPUT_CMD_APPLY_TRANSMUTATION:
+        if (sg->pass_substate != SV_PASS_TRANSMUTE_WAIT) {
+            REJECT("Cannot apply transmutations now");
+        }
+        if (sg->transmute_confirmed[seat]) {
+            REJECT("Already confirmed transmutations");
+        }
+        {
+            int hand_idx = cmd->transmute_apply.hand_index;
+            int sel_slot = sg->selected_transmute_slot[seat];
+            if (sel_slot < 0) {
+                REJECT("No transmutation selected");
+            }
+            TransmuteInventory *inv = &p2->players[seat].transmute_inv;
+            if (sel_slot >= inv->count) {
+                REJECT("Invalid inventory slot");
+            }
+            if (hand_idx < 0 || hand_idx >= gs->players[seat].hand.count) {
+                REJECT("Invalid hand index");
+            }
+            int tmut_id = inv->items[sel_slot];
+            if (!transmute_apply(&gs->players[seat].hand,
+                                 &p2->players[seat].hand_transmutes,
+                                 inv, hand_idx, tmut_id, seat)) {
+                REJECT("Cannot apply that transmutation");
+            }
+            printf("Seat %d applied transmutation %d to hand card %d\n",
+                   seat, tmut_id, hand_idx);
+            sg->selected_transmute_slot[seat] = -1;
+        }
+        return true;
+
     case INPUT_CMD_CONFIRM:
         if (sg->pass_substate == SV_PASS_CARD_SELECT) {
             if (gs->pass_ready[seat])
                 return true; /* Already ready, confirm is a no-op */
             REJECT("Select your pass cards first");
+        }
+        if (sg->pass_substate == SV_PASS_TRANSMUTE_WAIT) {
+            sg->transmute_confirmed[seat] = true;
+            sg->selected_transmute_slot[seat] = -1;
+            printf("Seat %d confirmed transmutations\n", seat);
+            return true;
         }
         /* Silent rejection for other phases — CONFIRM is benign */
         return false;
@@ -559,17 +616,54 @@ static void sv_do_pass_phase(ServerGame *sg)
         }
         game_state_execute_pass(gs);
         printf("Pass complete\n");
+
+        /* Check if any human player has transmutations to apply */
+        if (p2->enabled) {
+            bool any_human_has_inv = false;
+            for (int p = 0; p < NUM_PLAYERS; p++) {
+                sg->selected_transmute_slot[p] = -1;
+                if (gs->players[p].is_human &&
+                    p2->players[p].transmute_inv.count > 0) {
+                    sg->transmute_confirmed[p] = false;
+                    any_human_has_inv = true;
+                } else {
+                    sg->transmute_confirmed[p] = true; /* AI or no inv */
+                }
+            }
+            if (any_human_has_inv) {
+                sg->pass_substate = SV_PASS_TRANSMUTE_WAIT;
+                printf("Waiting for human transmutation selections\n");
+                break;
+            }
+        }
         sg->pass_substate = SV_PASS_TRANSMUTE;
         break;
     }
 
-    case SV_PASS_TRANSMUTE:
-        /* Apply transmutations AFTER pass, to the final hand */
+    case SV_PASS_TRANSMUTE_WAIT: {
+        /* Check if all humans have confirmed */
+        bool all_confirmed = true;
         for (int p = 0; p < NUM_PLAYERS; p++) {
-            transmute_ai_apply(&gs->players[p].hand,
-                               &p2->players[p].hand_transmutes,
-                               &p2->players[p].transmute_inv,
-                               false, p);
+            if (!sg->transmute_confirmed[p]) {
+                all_confirmed = false;
+                break;
+            }
+        }
+        if (all_confirmed) {
+            sg->pass_substate = SV_PASS_TRANSMUTE;
+        }
+        break;
+    }
+
+    case SV_PASS_TRANSMUTE:
+        /* Apply AI transmutations for non-human players */
+        for (int p = 0; p < NUM_PLAYERS; p++) {
+            if (!gs->players[p].is_human) {
+                transmute_ai_apply(&gs->players[p].hand,
+                                   &p2->players[p].hand_transmutes,
+                                   &p2->players[p].transmute_inv,
+                                   false, p);
+            }
         }
         printf("Transmutations applied\n");
         sg->pass_done = true;

@@ -2,19 +2,13 @@
 #define GAME_STATE_H
 
 /* ============================================================
- * @deps-exports: enum GamePhase, enum PassDirection, enum PassSubphase,
- *                struct GameState, game_state_init(), game_state_start_game(),
- *                game_state_reset_to_menu(), game_state_new_round(),
- *                game_state_current_player(), game_state_play_card(),
- *                game_state_complete_trick(), game_state_complete_trick_with(),
- *                game_state_is_valid_play(), game_state_is_game_over(),
- *                game_state_advance_scoring(), game_state_get_winners()
+ * @deps-exports: enum GamePhase (PHASE_MENU, PHASE_DEALING, PHASE_PASSING, PHASE_PLAYING,
+ *                PHASE_SCORING, PHASE_GAME_OVER, PHASE_SETTINGS, PHASE_LOGIN,
+ *                PHASE_ONLINE_MENU, PHASE_STATS), enum PassSubphase (added
+ *                PASS_SUB_TRANSMUTE), struct GameState
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: game_state.c, render.h, render.c, ai.h, play_phase.h,
- *                pass_phase.h, pass_phase.c, turn_flow.h, turn_flow.c,
- *                process_input.h, process_input.c, update.h, update.c,
- *                info_sync.h, info_sync.c, phase_transitions.h, main.c
- * @deps-last-changed: 2026-03-22 — Added PASS_SUB_REVEAL to PassSubphase, skip_human_pass_sort to GameState
+ * @deps-used-by: render.h, render.c, game/update.c, game/process_input.c, game/phase_transitions.c
+ * @deps-last-changed: 2026-03-26 — Step 22.3: Added PASS_SUB_TRANSMUTE enum value
  * ============================================================ */
 
 #include <stdbool.h>
@@ -33,6 +27,7 @@ typedef enum GamePhase {
     PHASE_SETTINGS,
     PHASE_LOGIN,       /* Client-only: lobby auth screen (never sent over wire) */
     PHASE_ONLINE_MENU, /* Client-only: online submenu (create/join/queue) */
+    PHASE_STATS,       /* Client-only: stats display screen */
     PHASE_COUNT
 } GamePhase;
 
@@ -59,6 +54,7 @@ typedef enum PassSubphase {
     PASS_SUB_TOSS_WAIT  = 4,  /* cards landed, brief hold */
     PASS_SUB_REVEAL     = 5,  /* received cards shown face-up in staging */
     PASS_SUB_RECEIVE    = 6,  /* staged cards animate into hands */
+    PASS_SUB_TRANSMUTE  = 7,  /* apply transmutations to hand (online) */
 } PassSubphase;
 
 #define DEFAULT_PASS_CARD_COUNT 3

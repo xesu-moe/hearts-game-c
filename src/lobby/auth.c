@@ -140,9 +140,9 @@ AuthResult auth_find_account(LobbyDB *ldb,
  * Challenge Generation
  * ================================================================ */
 
-void auth_generate_challenge(uint8_t nonce_out[AUTH_CHALLENGE_LEN])
+bool auth_generate_challenge(uint8_t nonce_out[AUTH_CHALLENGE_LEN])
 {
-    auth_random_bytes(nonce_out, AUTH_CHALLENGE_LEN);
+    return auth_random_bytes(nonce_out, AUTH_CHALLENGE_LEN);
 }
 
 /* ================================================================
@@ -162,8 +162,8 @@ AuthResult auth_verify_and_login(LobbyDB *ldb,
     memcpy(sm, signature, AUTH_SIG_LEN);
     memcpy(sm + AUTH_SIG_LEN, nonce, AUTH_CHALLENGE_LEN);
 
-    /* Verify signature */
-    uint8_t m[AUTH_CHALLENGE_LEN];
+    /* Verify signature — m must be >= sizeof(sm) for crypto_sign_open */
+    uint8_t m[AUTH_SIG_LEN + AUTH_CHALLENGE_LEN];
     unsigned long long mlen = 0;
     if (crypto_sign_open(m, &mlen, sm, sizeof(sm), stored_pk) != 0) {
         printf("[auth] Invalid signature for account %d\n", account_id);
@@ -171,7 +171,8 @@ AuthResult auth_verify_and_login(LobbyDB *ldb,
     }
 
     /* Generate session token */
-    auth_random_bytes(token_out, AUTH_TOKEN_LEN);
+    if (!auth_random_bytes(token_out, AUTH_TOKEN_LEN))
+        return AUTH_ERR_DB_ERROR;
 
     /* Insert session */
     sqlite3_stmt *stmt = lobbydb_stmt(ldb, LOBBY_STMT_CREATE_SESSION);
@@ -200,7 +201,7 @@ AuthResult auth_verify_and_login(LobbyDB *ldb,
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             info_out->games_played = (uint32_t)sqlite3_column_int(stmt, 0);
             info_out->games_won = (uint32_t)sqlite3_column_int(stmt, 1);
-            info_out->elo_rating = (uint16_t)sqlite3_column_int(stmt, 2);
+            info_out->elo_rating = (int32_t)sqlite3_column_int(stmt, 2);
         }
     }
 

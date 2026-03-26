@@ -26,9 +26,19 @@ bool lobby_rooms_generate_code(LobbyDB *ldb, char out[LOBBY_ROOM_CODE_LEN])
     uint8_t rand_bytes[4];
 
     for (int attempt = 0; attempt < 20; attempt++) {
-        if (getrandom(rand_bytes, sizeof(rand_bytes), 0) < (ssize_t)sizeof(rand_bytes)) {
-            /* Fallback to less random source */
-            for (int i = 0; i < 4; i++) rand_bytes[i] = (uint8_t)(rand() % 256);
+        {
+            ssize_t got = 0, total = 0;
+            while (total < (ssize_t)sizeof(rand_bytes)) {
+                got = getrandom(rand_bytes + total,
+                                sizeof(rand_bytes) - (size_t)total, 0);
+                if (got < 0) break;
+                total += got;
+            }
+            if (total < (ssize_t)sizeof(rand_bytes)) {
+                /* Fallback to less random source */
+                for (int i = 0; i < 4; i++)
+                    rand_bytes[i] = (uint8_t)(rand() % 256);
+            }
         }
 
         for (int i = 0; i < 4; i++) {

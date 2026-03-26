@@ -1,12 +1,15 @@
 /* ============================================================
  * @deps-implements: pass_phase.h
- * @deps-requires: pass_phase.h, core/game_state.h, core/hand.h, core/settings.h,
- *                 ai.h, render/anim.h (anim_start_scaled, anim_get_speed, ANIM_PASS_HAND_SLIDE_DURATION, ANIM_PASS_RECEIVE_GAP_DELAY),
- *                 render/layout.h (layout_pass_preview_positions, layout_board_center, LayoutConfig),
- *                 render/render.h, phase2/phase2_state.h, phase2/contract_logic.h,
- *                 phase2/phase2_defs.h, phase2/transmutation_logic.h,
- *                 phase2/transmutation.h, assert.h, stdio.h
- * @deps-last-changed: 2026-03-22 — Hand slide timing: use ANIM_PASS_HAND_SLIDE_DURATION in pass_start_toss_anim/pass_start_receive_anim, ANIM_PASS_RECEIVE_GAP_DELAY in pass_start_receive_anim
+ * @deps-requires: pass_phase.h, core/game_state.h (PASS_SUB_TRANSMUTE),
+ *                 core/hand.h, core/settings.h, ai.h, render/anim.h
+ *                 (anim_start_scaled, anim_get_speed, ANIM_PASS_HAND_SLIDE_DURATION,
+ *                 ANIM_PASS_RECEIVE_GAP_DELAY), render/layout.h
+ *                 (layout_pass_preview_positions, layout_board_center, LayoutConfig),
+ *                 render/render.h, phase2/phase2_state.h,
+ *                 phase2/contract_logic.h, phase2/phase2_defs.h,
+ *                 phase2/transmutation_logic.h, phase2/transmutation.h, assert.h
+ * @deps-last-changed: 2026-03-26 — Step 22.3: Added PASS_SUB_TRANSMUTE cases in time_limit,
+ *                 advance, update
  * ============================================================ */
 
 #include "pass_phase.h"
@@ -34,6 +37,7 @@ float pass_subphase_time_limit(PassSubphase sub)
     case PASS_SUB_TOSS_WAIT: return ANIM_PASS_WAIT_DURATION * anim_get_speed();
     case PASS_SUB_REVEAL:    return PASS_REVEAL_DURATION * anim_get_speed();
     case PASS_SUB_RECEIVE:   return 0.0f;  /* driven by animation completion */
+    case PASS_SUB_TRANSMUTE: return 0.0f; /* server-driven, no local timer */
     }
     return 0.0f;
 }
@@ -201,7 +205,8 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_TOSS_WAIT:
     case PASS_SUB_REVEAL:
     case PASS_SUB_RECEIVE:
-        break;  /* animation subphases don't need setup here */
+    case PASS_SUB_TRANSMUTE:
+        break;  /* animation/server-driven subphases don't need setup here */
     case PASS_SUB_DEALER: {
         int dp = gs->players[0].total_score; /* dummy — actual dealer id from phase_transitions */
         (void)dp;
@@ -973,6 +978,9 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
             rs->sync_needed = true;
             gs->phase = PHASE_PLAYING;
         }
+        break;
+    case PASS_SUB_TRANSMUTE:
+        /* Server-driven online subphase — no local logic */
         break;
     }
 }
