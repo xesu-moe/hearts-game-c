@@ -7,7 +7,7 @@
  * @deps-requires: core/game_state.h (GameState), core/input_cmd.h (InputCmd),
  *                 phase2/phase2_state.h (Phase2State),
  *                 phase2/transmutation.h (TrickTransmuteInfo, TransmuteEffect)
- * @deps-last-changed: 2026-03-27 — Removed SV_PASS_TRANSMUTE_WAIT; transmutations during SV_PASS_CARD_SELECT
+ * @deps-last-changed: 2026-03-28 — Added SV_PLAY_TRICK_BROADCAST to ServerPlaySubstate
  * ============================================================ */
 
 #ifndef SERVER_GAME_H
@@ -39,6 +39,7 @@ typedef enum ServerPassSubstate {
 typedef enum ServerPlaySubstate {
     SV_PLAY_IDLE = 0,          /* Not in play phase */
     SV_PLAY_WAIT_TURN,         /* Wait for current player to act */
+    SV_PLAY_TRICK_BROADCAST,   /* Trick complete, broadcast num_played=4 first */
     SV_PLAY_TRICK_DONE,        /* Trick complete, resolve */
     SV_PLAY_ROGUE_WAIT,        /* Wait for human rogue pick */
     SV_PLAY_DUEL_PICK_WAIT,    /* Wait for human duel opponent pick */
@@ -72,6 +73,7 @@ typedef struct ServerGame {
     int                 draft_round; /* current draft round 0..DRAFT_ROUNDS-1 */
     bool                draft_initialized; /* has draft_generate_pool been called */
     bool                state_dirty;     /* triggers broadcast for changes invisible to detector */
+    bool                scoring_evaluated; /* two-tick SCORING: true after contracts evaluated */
 
     /* Duel target storage (between DUEL_PICK and DUEL_GIVE) */
     int                 duel_target_player;     /* opponent selected in DUEL_PICK */

@@ -13,7 +13,7 @@
  *                 net/client_net.h, net/protocol.h (net_input_cmd_is_relevant),
  *                 net/state_recv.h, net/lobby_client.h (lobby_client_cancel_create, lobby_client_cancel_join),
  *                 net/identity.h, raylib.h
- * @deps-last-changed: 2026-03-28 — Updated state_recv_apply() call with new defer_trick parameter
+ * @deps-last-changed: 2026-03-28 — Added client_net_peek_state() call before state_recv_apply()
  * ============================================================ */
 
 #include <stdbool.h>
@@ -396,7 +396,11 @@ int main(int argc, char **argv)
              * Dealer commands go to both server AND local queue
              * so the client gets immediate visual feedback. */
             while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
-                if (net_input_cmd_is_relevant((uint8_t)cmd.type)) {
+                /* CONFIRM during SCORING is client-only (UI navigation) */
+                bool scoring_confirm = (cmd.type == INPUT_CMD_CONFIRM &&
+                                        gs.phase == PHASE_SCORING);
+                if (net_input_cmd_is_relevant((uint8_t)cmd.type) &&
+                    !scoring_confirm) {
                     cmd.source_player = client_net_seat();
                     client_net_send_cmd(&cmd);
                     /* Dealer commands also need local processing for UI */
@@ -536,6 +540,29 @@ int main(int argc, char **argv)
             bool would_defer = (flow.step != FLOW_IDLE &&
                                 flow.step != FLOW_WAITING_FOR_HUMAN);
             if (would_defer) goto skip_state_apply;
+
+            /* Defer non-SCORING states while the scoring screen is active.
+             * Allow consuming additional SCORING states (to get evaluated
+             * contract data from the server's second SCORING broadcast). */
+            if (gs.phase == PHASE_SCORING && online && !rs.scoring_screen_done) {
+                const NetPlayerView *peek = client_net_peek_state();
+                if (peek && peek->phase != PHASE_SCORING) {
+                    goto skip_state_apply;
+                }
+            }
+
+            /* Also defer if consuming would disrupt in-progress card animations.
+             * Between card animations, flow returns to IDLE but we still have
+             * saved trick cards to animate. Don't consume a state that would
+             * change the phase or trick count — it would reset the visuals. */
+            if (flow.has_saved_trick &&
+                flow.prev_trick_count < flow.saved_trick.num_played) {
+                const NetPlayerView *peek = client_net_peek_state();
+                if (peek && (peek->phase != (uint8_t)gs.phase ||
+                             peek->tricks_played != gs.tricks_played)) {
+                    goto skip_state_apply;
+                }
+            }
 
             NetPlayerView view;
             client_net_consume_state(&view);

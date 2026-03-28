@@ -9,7 +9,7 @@
  * storage. Steps 8-9 consume the stored NetPlayerView.
  *
  * @deps-exports: ClientNetState (+ CLIENT_NET_RECONNECTING), client_net_init/shutdown/
- *                connect/disconnect/update/state/seat/has_new_state/
+ *                connect/disconnect/update/state/seat/has_new_state/peek_state/
  *                consume_state/ping_ms/reject_reason/send_cmd/is_reconnecting/
  *                reconnect_attempt/reconnect_time_remaining/
  *                has_room_status/consume_room_status/set_username
@@ -18,7 +18,7 @@
  *                 net/reconnect.h (ReconnectState, reconnect_*),
  *                 core/input_cmd.h (InputCmd)
  * @deps-used-by: main.c, cmd_send.c, state_recv.c
- * @deps-last-changed: 2026-03-26 — Step 20.1: Added room status + username API
+ * @deps-last-changed: 2026-03-28 — Added client_net_peek_state() for non-consuming state inspection
  * ============================================================ */
 
 #include <stdbool.h>
@@ -86,6 +86,9 @@ int client_net_seat(void);
 
 /* True if a new NetPlayerView has been received since last consume. */
 bool client_net_has_new_state(void);
+
+/* Peek at the next queued state without consuming it. Returns NULL if empty. */
+const NetPlayerView *client_net_peek_state(void);
 
 /* Copy the latest NetPlayerView into out and clear the flag. */
 void client_net_consume_state(NetPlayerView *out);

@@ -41,6 +41,8 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         rs->score_countup_timer = 0.0f;
         rs->score_tick_pending = false;
         rs->btn_continue.visible = false;
+        rs->scoring_screen_done = false;
+        rs->score_auto_timer = 0.0f;
 
         /* Snapshot scores: displayed_total shows pre-round total */
         for (int i = 0; i < NUM_PLAYERS; i++) {

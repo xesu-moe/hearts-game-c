@@ -11,7 +11,7 @@
  *                 reconnect_is_active, RECONNECT_MAX_ATTEMPTS),
  *                 core/input_cmd.h (InputCmd),
  *                 string.h, stdio.h, time.h
- * @deps-last-changed: 2026-03-26 — Step 20.1: Room status handling, username in handshake
+ * @deps-last-changed: 2026-03-28 — Added client_net_peek_state(), increased STATE_QUEUE_CAP to 16
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L /* clock_gettime */
@@ -49,7 +49,7 @@ static char           g_room_code[NET_ROOM_CODE_LEN];
 
 /* State update ring queue — buffers rapid server snapshots so the client
  * can consume them one-per-frame and animate each card individually. */
-#define STATE_QUEUE_CAP 8
+#define STATE_QUEUE_CAP 16
 static NetPlayerView  g_view_queue[STATE_QUEUE_CAP];
 static int            g_vq_head;   /* next slot to read  */
 static int            g_vq_count;  /* entries in queue    */
@@ -474,6 +474,12 @@ int client_net_seat(void)
 bool client_net_has_new_state(void)
 {
     return g_vq_count > 0;
+}
+
+const NetPlayerView *client_net_peek_state(void)
+{
+    if (g_vq_count <= 0) return NULL;
+    return &g_view_queue[g_vq_head];
 }
 
 void client_net_consume_state(NetPlayerView *out)

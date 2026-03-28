@@ -1936,10 +1936,10 @@ void net_build_player_view(NetPlayerView *out, const struct GameState *gs,
                 const ContractInstance *ci = &pp->contracts[i];
                 oc->revealed[i] = ci->revealed;
                 oc->completed[i] = ci->completed;
-                /* Only reveal contract_id if the contract is revealed
-                 * or this is the player's own data */
+                /* Reveal contract_id if own data, revealed, or completed
+                 * (completed contracts become public at scoring) */
                 oc->contract_ids[i] =
-                    (p == seat || ci->revealed)
+                    (p == seat || ci->revealed || ci->completed)
                         ? (int16_t)ci->contract_id
                         : -1;
             } else {

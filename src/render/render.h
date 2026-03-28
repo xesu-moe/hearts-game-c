@@ -259,6 +259,8 @@ typedef struct RenderState {
     bool            score_tick_pending;     /* flag for main.c to play SFX */
     int             contract_reveal_count;  /* how many rows revealed (0..contract_result_count) */
     float           contract_reveal_timer;  /* countdown to next reveal */
+    bool            scoring_screen_done;    /* online: true when scoring UI completes */
+    float           score_auto_timer;       /* 15s auto-advance countdown (online) */
 
     /* Trick pile visuals — separate from cards[], survives sync_hands() */
     CardVisual pile_cards[MAX_PILE_CARDS];

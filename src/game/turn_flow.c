@@ -311,7 +311,9 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
         rs->trick_visible_count = 0;
         flow->has_saved_trick = false;
         flow->step = FLOW_IDLE;
+#ifdef DEBUG
         if (old_step != FLOW_IDLE) { FLOW_DBG(old_step, flow); }
+#endif
         return;
     }
 

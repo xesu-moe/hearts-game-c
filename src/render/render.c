@@ -2820,6 +2820,27 @@ static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
 
     /* Buttons drawn outside scissor so they're always visible */
     draw_button(&rs->btn_continue, s);
+
+    /* Online auto-advance timer (top-right corner) */
+    if (rs->online && rs->score_auto_timer > 0.0f) {
+        bool awaiting =
+            (rs->score_subphase == SCORE_SUB_DISPLAY) ||
+            (rs->score_subphase == SCORE_SUB_DONE) ||
+            (rs->score_subphase == SCORE_SUB_CONTRACTS &&
+             rs->contract_reveal_count >= rs->contract_result_count);
+        if (awaiting) {
+            int secs = (int)ceilf(15.0f - rs->score_auto_timer);
+            if (secs < 0) secs = 0;
+            char timer_text[16];
+            snprintf(timer_text, sizeof(timer_text), "%d", secs);
+            int timer_size = (int)(32.0f * s);
+            Color timer_col = (secs <= 3) ? RED : GOLD;
+            int tw = MeasureText(timer_text, timer_size);
+            float bx = cfg->screen_width - (float)tw - 10.0f * s;
+            float by = 6.0f * s;
+            DrawText(timer_text, (int)bx, (int)by, timer_size, timer_col);
+        }
+    }
 }
 
 static void draw_phase_game_over(const GameState *gs, const RenderState *rs)

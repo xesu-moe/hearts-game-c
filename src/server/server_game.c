@@ -403,11 +403,11 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             }
             sv_log_play(sg, seat);
 
-            /* If trick is now complete, advance to trick resolution */
+            /* If trick is now complete, broadcast num_played=4 before resolving */
             if (trick_is_complete(&gs->current_trick)) {
                 DBG(DBG_SERVER, "trick complete: tricks_played=%d num_played=%d",
                     gs->tricks_played, gs->current_trick.num_played);
-                sg->play_substate = SV_PLAY_TRICK_DONE;
+                sg->play_substate = SV_PLAY_TRICK_BROADCAST;
             }
         }
         return true;
@@ -679,7 +679,7 @@ static void sv_do_play_phase(ServerGame *sg)
     case SV_PLAY_WAIT_TURN: {
         /* Check if trick is complete first */
         if (trick_is_complete(&gs->current_trick)) {
-            sg->play_substate = SV_PLAY_TRICK_DONE;
+            sg->play_substate = SV_PLAY_TRICK_BROADCAST;
             break;
         }
 
@@ -713,12 +713,17 @@ static void sv_do_play_phase(ServerGame *sg)
 
         sv_log_play(sg, current);
 
-        /* If trick now complete, transition to trick resolution */
+        /* If trick now complete, broadcast num_played=4 before resolving */
         if (trick_is_complete(&gs->current_trick)) {
-            sg->play_substate = SV_PLAY_TRICK_DONE;
+            sg->play_substate = SV_PLAY_TRICK_BROADCAST;
         }
         break;
     }
+
+    case SV_PLAY_TRICK_BROADCAST:
+        /* One tick delay: let the next broadcast send num_played=4 before resolving */
+        sg->play_substate = SV_PLAY_TRICK_DONE;
+        break;
 
     case SV_PLAY_TRICK_DONE:
         sv_resolve_trick(sg);
@@ -1043,49 +1048,60 @@ static void sv_do_scoring(ServerGame *sg)
     GameState *gs = &sg->gs;
     Phase2State *p2 = &sg->p2;
 
-    /* Save round points before they get zeroed */
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        sg->prev_round_points[i] = gs->players[i].round_points;
-    }
+    /* Two-tick SCORING: tick 1 evaluates and broadcasts results,
+     * tick 2 advances to DEALING. This gives clients time to
+     * receive the evaluated contract data before the phase changes. */
+    if (!sg->scoring_evaluated) {
+        /* ---- Tick 1: evaluate, stay in SCORING ---- */
 
-    /* Contract evaluation and rewards */
-    if (p2->enabled) {
-        for (int p = 0; p < NUM_PLAYERS; p++) {
-            contract_evaluate_all(p2, p);
-            contract_apply_rewards_all(p2, p);
-        }
-
-        /* Round-end transmutation effects */
-        int rp[NUM_PLAYERS], ts[NUM_PLAYERS];
+        /* Save round points before they get zeroed */
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            rp[i] = gs->players[i].round_points;
-            ts[i] = gs->players[i].total_score;
+            sg->prev_round_points[i] = gs->players[i].round_points;
         }
-        transmute_apply_round_end(p2, rp, ts);
+
+        /* Contract evaluation and rewards */
+        if (p2->enabled) {
+            for (int p = 0; p < NUM_PLAYERS; p++) {
+                contract_evaluate_all(p2, p);
+                contract_apply_rewards_all(p2, p);
+            }
+
+            /* Round-end transmutation effects */
+            int rp[NUM_PLAYERS], ts[NUM_PLAYERS];
+            for (int i = 0; i < NUM_PLAYERS; i++) {
+                rp[i] = gs->players[i].round_points;
+                ts[i] = gs->players[i].total_score;
+            }
+            transmute_apply_round_end(p2, rp, ts);
+            for (int i = 0; i < NUM_PLAYERS; i++) {
+                gs->players[i].round_points = rp[i];
+                gs->players[i].total_score = ts[i];
+            }
+        }
+
+        /* Print round scores */
+        printf("Round %d scores: [", gs->round_number);
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            gs->players[i].round_points = rp[i];
-            gs->players[i].total_score = ts[i];
+            printf("%d%s", gs->players[i].round_points,
+                   i < NUM_PLAYERS - 1 ? ", " : "");
         }
+        printf("]\n");
+
+        /* Print total scores */
+        printf("Total scores:   [");
+        for (int i = 0; i < NUM_PLAYERS; i++) {
+            printf("%d%s", gs->players[i].total_score,
+                   i < NUM_PLAYERS - 1 ? ", " : "");
+        }
+        printf("]\n");
+
+        sg->scoring_evaluated = true;
+        sg->state_dirty = true;
+        return; /* Stay in SCORING — broadcast evaluated results */
     }
 
-    /* Print round scores */
-    printf("Round %d scores: [", gs->round_number);
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        printf("%d%s", gs->players[i].round_points,
-               i < NUM_PLAYERS - 1 ? ", " : "");
-    }
-    printf("]\n");
-
-    /* Advance scoring */
+    /* ---- Tick 2: advance to next round or game over ---- */
     game_state_advance_scoring(gs);
-
-    /* Print total scores */
-    printf("Total scores:   [");
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        printf("%d%s", gs->players[i].total_score,
-               i < NUM_PLAYERS - 1 ? ", " : "");
-    }
-    printf("]\n");
 
     if (gs->phase == PHASE_GAME_OVER) {
         int winners[NUM_PLAYERS];
@@ -1102,6 +1118,7 @@ static void sv_do_scoring(ServerGame *sg)
     /* Reset sub-states for next round */
     sg->pass_substate = SV_PASS_IDLE;
     sg->play_substate = SV_PLAY_IDLE;
+    sg->scoring_evaluated = false;
 }
 
 /* ================================================================

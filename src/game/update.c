@@ -26,7 +26,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                  SettingsUIState *sui, GameSettings *settings,
                  TurnFlow *flow, float dt, bool *quit_requested)
 {
-    (void)dt;
+
 
 #ifdef DEBUG
     /* F5: skip to last trick of the round */
@@ -49,6 +49,25 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
         input_cmd_queue_clear();
     }
 #endif
+
+    /* Online scoring auto-advance: push synthetic CONFIRM after 15s.
+     * Must be outside the command loop so it ticks every frame. */
+    if (rs->online && gs->phase == PHASE_SCORING) {
+        bool awaiting_input =
+            (rs->score_subphase == SCORE_SUB_DISPLAY) ||
+            (rs->score_subphase == SCORE_SUB_DONE) ||
+            (rs->score_subphase == SCORE_SUB_CONTRACTS &&
+             rs->contract_reveal_count >= rs->contract_result_count);
+        if (awaiting_input) {
+            rs->score_auto_timer += dt;
+            if (rs->score_auto_timer >= 15.0f) {
+                InputCmd auto_cmd = {0};
+                auto_cmd.type = INPUT_CMD_CONFIRM;
+                input_cmd_push(auto_cmd);
+                rs->score_auto_timer = 0.0f;
+            }
+        }
+    }
 
     InputCmd cmd;
     for (int n = 0; n < INPUT_CMD_QUEUE_CAPACITY &&
@@ -315,16 +334,23 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     rs->score_subphase = SCORE_SUB_COUNT_UP;
                     rs->btn_continue.visible = false;
                     rs->score_countup_timer = 0.0f;
+                    rs->score_auto_timer = 0.0f;
                 } else if (rs->score_subphase == SCORE_SUB_DONE) {
                     /* Advance to next round (show contracts if Phase 2) */
                     if (p2->enabled && !game_state_is_game_over(gs)) {
-                        /* Evaluate all contracts and populate result fields
-                         * (only completed contracts are shown) */
+                        /* In online mode, server already evaluated contracts —
+                         * skip local evaluation and use server-provided data.
+                         * In offline mode, evaluate locally as before. */
+                        if (!rs->online) {
+                            for (int i = 0; i < NUM_PLAYERS; i++) {
+                                contract_evaluate_all(p2, i);
+                                contract_apply_rewards_all(p2, i);
+                            }
+                        }
+
+                        /* Populate result fields from p2 (works for both modes) */
                         int result_idx = 0;
                         for (int i = 0; i < NUM_PLAYERS; i++) {
-                            contract_evaluate_all(p2, i);
-                            contract_apply_rewards_all(p2, i);
-
                             PlayerPhase2 *pp = &p2->players[i];
                             for (int c = 0; c < pp->num_active_contracts && result_idx < MAX_CONTRACT_RESULTS; c++) {
                                 const ContractInstance *ci = &pp->contracts[c];
@@ -371,8 +397,13 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                             ANIM_CONTRACT_REVEAL_STAGGER * anim_get_speed();
                         rs->btn_continue.visible = false;
                         rs->btn_continue.label = "Next Round";
+                        rs->score_auto_timer = 0.0f;
                     } else {
-                        game_state_advance_scoring(gs);
+                        if (rs->online) {
+                            rs->scoring_screen_done = true;
+                        } else {
+                            game_state_advance_scoring(gs);
+                        }
                         rs->sync_needed = true;
                     }
                 } else if (rs->score_subphase == SCORE_SUB_CONTRACTS) {
@@ -380,13 +411,17 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     if (rs->contract_reveal_count < rs->contract_result_count) break;
                     /* Advance to next round */
                     rs->show_contract_results = false;
-                    if (p2->enabled) {
+                    if (p2->enabled && !rs->online) {
                         for (int i = 0; i < NUM_PLAYERS; i++) {
                             p2->round.prev_round_points[i] =
                                 gs->players[i].round_points;
                         }
                     }
-                    game_state_advance_scoring(gs);
+                    if (rs->online) {
+                        rs->scoring_screen_done = true;
+                    } else {
+                        game_state_advance_scoring(gs);
+                    }
                     rs->sync_needed = true;
                 }
                 input_cmd_queue_clear();

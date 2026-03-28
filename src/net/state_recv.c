@@ -198,6 +198,25 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
             p2->players[0].contracts[i].contract_id = -1;
     }
 
+    /* ---- 6b. Opponent contracts (remapped) ---- */
+    for (int s = 0; s < NUM_PLAYERS; s++) {
+        int local = remap_seat(s, my);
+        if (local == 0) continue; /* player 0 handled above */
+        const NetOpponentContracts *oc = &view->opponent_contracts[s];
+        int onc = oc->num_contracts;
+        if (onc > MAX_ACTIVE_CONTRACTS) onc = MAX_ACTIVE_CONTRACTS;
+        p2->players[local].num_active_contracts = onc;
+        for (int i = 0; i < MAX_ACTIVE_CONTRACTS; i++) {
+            if (i < onc) {
+                p2->players[local].contracts[i].contract_id = oc->contract_ids[i];
+                p2->players[local].contracts[i].completed   = oc->completed[i];
+                p2->players[local].contracts[i].paired_transmutation_id = -1;
+            } else {
+                p2->players[local].contracts[i].contract_id = -1;
+            }
+        }
+    }
+
     /* ---- 7. Transmutation inventory (player 0) ---- */
     int inv_count = view->transmute_inv_count;
     if (inv_count > MAX_TRANSMUTE_INVENTORY) inv_count = MAX_TRANSMUTE_INVENTORY;
