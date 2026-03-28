@@ -5,11 +5,19 @@
  * Handles registration, challenge-response login, and
  * username changes. Runs alongside client_net (game server).
  *
- * @deps-exports: LobbyClientState, LobbyClientInfo (elo_rating: int32_t)
+ * @deps-exports: LobbyClientState, LobbyClientInfo (elo_rating: int32_t),
+ *                lobby_client_init/shutdown, lobby_client_connect/disconnect,
+ *                lobby_client_update, lobby_client_register, lobby_client_login,
+ *                lobby_client_change_username, lobby_client_create_room,
+ *                lobby_client_join_room, lobby_client_queue_matchmake,
+ *                lobby_client_queue_cancel, lobby_client_cancel_create,
+ *                lobby_client_cancel_join, lobby_client_state, lobby_client_info,
+ *                lobby_client_error_msg, lobby_client_has_room_assignment,
+ *                lobby_client_consume_room_assignment
  * @deps-requires: net/identity.h (Identity),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN)
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN, NET_CHALLENGE_LEN, NET_ROOM_CODE_LEN, NET_ADDR_LEN)
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-26 — Step 22.5: LobbyClientInfo.elo_rating uint16_t→int32_t
+ * @deps-last-changed: 2026-03-27 — Step 23: Added lobby_client_cancel_create() and lobby_client_cancel_join() functions
  * ============================================================ */
 
 #ifndef LOBBY_CLIENT_H
@@ -80,6 +88,8 @@ void lobby_client_create_room(void);
 void lobby_client_join_room(const char *code);
 void lobby_client_queue_matchmake(void);
 void lobby_client_queue_cancel(void);
+void lobby_client_cancel_create(void);
+void lobby_client_cancel_join(void);
 
 /* Query state */
 LobbyClientState       lobby_client_state(void);

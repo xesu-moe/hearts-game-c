@@ -77,6 +77,13 @@ typedef struct Room {
     ServerGame  game;
     int         connected_count; /* number of SLOT_CONNECTED players */
     float       abandon_timer;   /* counts up when 0 humans connected */
+
+    /* Broadcast change detection — skip sending when nothing changed */
+    struct {
+        int phase, num_played, tricks_played, round_number;
+        int hand_counts[NET_MAX_PLAYERS];
+    } last_broadcast;
+    bool force_broadcast;
 } Room;
 
 /* ================================================================
@@ -103,11 +110,20 @@ void room_destroy(int room_index);
  * ================================================================ */
 
 /* Join a player to a room. Finds first EMPTY slot, sets CONNECTED.
- * If all 4 slots fill, auto-starts the game (WAITING → PLAYING).
  * Returns assigned seat (0-3) on success, -1 if full or not WAITING. */
 int room_join(int room_index, int conn_id,
               const uint8_t auth_token[NET_AUTH_TOKEN_LEN],
               const char *name);
+
+/* Add an AI player to the next empty slot in a WAITING room.
+ * Sets status to SLOT_AI, assigns name "Bot N".
+ * Returns assigned seat (0-3) on success, -1 if no empty slot or not WAITING. */
+int room_add_ai(int room_index);
+
+/* Start the game in a WAITING room. All 4 slots must be filled.
+ * Transitions room to PLAYING. Only the room creator should call this.
+ * Returns 0 on success, -1 on error. */
+int room_start(int room_index);
 
 /* Remove a player from a room.
  * WAITING: sets slot EMPTY; destroys room if all left.

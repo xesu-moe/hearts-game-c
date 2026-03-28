@@ -125,6 +125,14 @@ bool client_net_consume_error(char *out, size_t len);
  * Command Sending (used by Step 8)
  * ================================================================ */
 
+/* Send a request to add an AI player to the waiting room.
+ * Returns 0 on success, -1 on error (not connected). */
+int client_net_send_add_ai(void);
+
+/* Send a request to start the game (room creator only).
+ * Returns 0 on success, -1 on error (not connected). */
+int client_net_send_start_game(void);
+
 /* Serialize and send an InputCmd to the server. Client-only commands
  * (hover, drag, settings) are silently filtered out.
  * Returns 0 on success, -1 on error (not connected, buffer full). */

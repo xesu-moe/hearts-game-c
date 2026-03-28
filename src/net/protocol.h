@@ -8,13 +8,15 @@
  * This header does NOT include Raylib. It includes only core/card.h
  * and core/input_cmd.h (both Raylib-free) and standard library headers.
  *
- * @deps-exports: NetMsgType, NetMsg, NetCard, NetInputCmd, NetPlayerView,
+ * @deps-exports: NetMsgType (NET_MSG_SERVER_ROOM_DESTROYED=65),
+ *                NetMsg, NetCard, NetInputCmd, NetPlayerView,
  *                NetMsgLoginAck (elo_rating: int32_t),
+ *                NetMsgServerRoomDestroyed (room_code[8]),
  *                net_frame_write/read, net_msg_serialize/deserialize
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS),
  *                 core/input_cmd.h (InputCmd, InputCmdType)
- * @deps-used-by: protocol.c, socket.c, server_net.c, lobby_client.c
- * @deps-last-changed: 2026-03-26 — Step 22.5: NetMsgLoginAck.elo_rating uint16_t→int32_t, wire size +2 bytes
+ * @deps-used-by: protocol.c, socket.c, server_net.c, lobby_client.c, server_lobby_link.c, lobby_net.c
+ * @deps-last-changed: 2026-03-27 — Step 23: Added NET_MSG_SERVER_ROOM_DESTROYED enum (65) and NetMsgServerRoomDestroyed struct
  * ============================================================ */
 
 #include <stdbool.h>
@@ -28,7 +30,7 @@
  * Constants
  * ================================================================ */
 
-#define PROTOCOL_VERSION       3
+#define PROTOCOL_VERSION       4
 #define NET_MAX_MSG_SIZE       8192 /* 8KB max payload */
 #define NET_FRAME_HEADER_SIZE  4    /* uint32_t length prefix */
 #define NET_MAX_PLAYERS        4
@@ -81,6 +83,8 @@ typedef enum NetMsgType {
     NET_MSG_TRICK_RESULT     = 23,
     NET_MSG_GAME_OVER        = 24,
     NET_MSG_PHASE_CHANGE     = 25,
+    NET_MSG_REQUEST_ADD_AI   = 26, /* client -> server: add AI to waiting room */
+    NET_MSG_REQUEST_START_GAME = 27, /* client -> server: start game (creator) */
 
     /* Lobby C<->L messages (40-59) */
     NET_MSG_REGISTER         = 40,
@@ -103,7 +107,8 @@ typedef enum NetMsgType {
     NET_MSG_SERVER_CREATE_ROOM = 61,
     NET_MSG_SERVER_RESULT      = 62,
     NET_MSG_SERVER_HEARTBEAT   = 63,
-    NET_MSG_SERVER_ROOM_CREATED = 64, /* server -> lobby: room creation ACK */
+    NET_MSG_SERVER_ROOM_CREATED   = 64, /* server -> lobby: room creation ACK */
+    NET_MSG_SERVER_ROOM_DESTROYED = 65, /* server -> lobby: room was destroyed */
 
     NET_MSG_TYPE_COUNT
 } NetMsgType;
@@ -192,9 +197,10 @@ typedef struct NetMsgChat {
 } NetMsgChat;
 
 typedef struct NetMsgRoomStatus {
-    uint8_t player_count;                                  /* 0-4 connected */
+    uint8_t player_count;                                  /* 0-4 occupied */
     char    player_names[NET_MAX_PLAYERS][NET_MAX_NAME_LEN]; /* per-seat names */
     uint8_t slot_occupied[NET_MAX_PLAYERS];                /* 1=occupied, 0=empty */
+    uint8_t slot_is_ai[NET_MAX_PLAYERS];                   /* 1=AI, 0=human */
 } NetMsgRoomStatus;
 
 /* ================================================================
@@ -211,7 +217,7 @@ typedef struct NetInputCmd {
             NetCard card;
         } card; /* SELECT_CARD, PLAY_CARD */
         struct {
-            int16_t contract_id;
+            int16_t pair_index;
         } contract; /* SELECT_CONTRACT */
         struct {
             int8_t inv_slot;
@@ -354,6 +360,10 @@ typedef struct NetMsgServerRoomCreated {
     char    room_code[NET_ROOM_CODE_LEN];
     uint8_t success; /* 1 = created, 0 = failed */
 } NetMsgServerRoomCreated;
+
+typedef struct NetMsgServerRoomDestroyed {
+    char room_code[NET_ROOM_CODE_LEN];
+} NetMsgServerRoomDestroyed;
 
 /* ================================================================
  * NetPlayerView Sub-Structs
@@ -546,7 +556,8 @@ typedef struct NetMsg {
         NetMsgServerCreateRoom  server_create_room;
         NetMsgServerResult      server_result;
         NetMsgServerHeartbeat   server_heartbeat;
-        NetMsgServerRoomCreated server_room_created;
+        NetMsgServerRoomCreated   server_room_created;
+        NetMsgServerRoomDestroyed server_room_destroyed;
     };
 } NetMsg;
 

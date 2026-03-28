@@ -20,12 +20,15 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "net/socket.h"
 #include "net/protocol.h"
 #include "net/reconnect.h"
 #include "core/input_cmd.h"
+#include "core/debug_log.h"
 
 /* ================================================================
  * Constants
@@ -44,9 +47,12 @@ static int8_t         g_seat;          /* assigned seat 0-3, or -1 */
 static uint8_t        g_reject_reason; /* NetRejectReason if ERROR */
 static char           g_room_code[NET_ROOM_CODE_LEN];
 
-/* State update storage */
-static NetPlayerView  g_latest_view;
-static bool           g_has_new_state;
+/* State update ring queue — buffers rapid server snapshots so the client
+ * can consume them one-per-frame and animate each card individually. */
+#define STATE_QUEUE_CAP 8
+static NetPlayerView  g_view_queue[STATE_QUEUE_CAP];
+static int            g_vq_head;   /* next slot to read  */
+static int            g_vq_count;  /* entries in queue    */
 
 /* Ping tracking */
 static uint32_t       g_ping_sequence;
@@ -85,7 +91,8 @@ static void reset_state(void)
     g_state         = CLIENT_NET_DISCONNECTED;
     g_seat          = -1;
     g_reject_reason = 0;
-    g_has_new_state = false;
+    g_vq_head  = 0;
+    g_vq_count = 0;
     g_ping_sequence = 0;
     g_ping_timer    = 0.0f;
     g_ping_rtt_ms   = -1;
@@ -162,10 +169,25 @@ static void handle_message(const NetMsg *msg)
         }
         break;
 
-    case NET_MSG_STATE_UPDATE:
-        memcpy(&g_latest_view, &msg->state_update, sizeof(NetPlayerView));
-        g_has_new_state = true;
+    case NET_MSG_STATE_UPDATE: {
+        /* Enqueue into ring buffer; on overflow drop oldest */
+        int tail = (g_vq_head + g_vq_count) % STATE_QUEUE_CAP;
+        if (g_vq_count >= STATE_QUEUE_CAP) {
+            DBG(DBG_QUEUE, "OVERFLOW: depth=%d/%d dropped phase=%d num_played=%d",
+                g_vq_count, STATE_QUEUE_CAP,
+                (int)g_view_queue[g_vq_head].phase,
+                g_view_queue[g_vq_head].current_trick.num_played);
+            g_vq_head = (g_vq_head + 1) % STATE_QUEUE_CAP;
+            /* count stays at CAP */
+        } else {
+            g_vq_count++;
+        }
+        memcpy(&g_view_queue[tail], &msg->state_update, sizeof(NetPlayerView));
+        DBG(DBG_QUEUE, "enqueue: depth=%d phase=%d tricks=%d num_played=%d",
+            g_vq_count, (int)msg->state_update.phase,
+            msg->state_update.tricks_played, msg->state_update.current_trick.num_played);
         break;
+    }
 
     case NET_MSG_ROOM_STATUS:
         memcpy(&g_room_status, &msg->room_status, sizeof(NetMsgRoomStatus));
@@ -293,6 +315,23 @@ void client_net_disconnect(void)
     }
 
     net_socket_close(&g_net, g_conn_id);
+    /* Flush the disconnect message — net_socket_close may leave the slot
+     * in NET_CONN_CLOSING if the send buffer isn't empty yet.  Since we
+     * set g_state = DISCONNECTED below, client_net_update will never poll
+     * again, so the slot would stay CLOSING forever and block future
+     * connections (max_conns=1).  One update pass gives the best-effort
+     * flush; if it's still CLOSING, force the fd shut. */
+    net_socket_update(&g_net);
+    if (net_socket_state(&g_net, g_conn_id) != NET_CONN_DISCONNECTED) {
+        /* Force-close: the server will detect the TCP drop anyway */
+        NetConn *c = &g_net.conns[g_conn_id];
+        if (c->fd >= 0) {
+            shutdown(c->fd, SHUT_RDWR);
+            close(c->fd);
+            c->fd = -1;
+        }
+        c->state = NET_CONN_DISCONNECTED;
+    }
     g_conn_id = -1;
     g_state = CLIENT_NET_DISCONNECTED;
     g_seat = -1;
@@ -373,7 +412,8 @@ void client_net_update(float dt)
             g_state = CLIENT_NET_RECONNECTING;
             g_conn_id = -1;
             g_seat = -1;
-            g_has_new_state = false; /* stale data from before disconnect */
+            g_vq_head = 0;   /* flush stale data from before disconnect */
+            g_vq_count = 0;
             reconnect_begin(&g_reconnect, g_last_ip, g_last_port,
                             g_room_code, g_session_token);
             return;
@@ -433,14 +473,19 @@ int client_net_seat(void)
 
 bool client_net_has_new_state(void)
 {
-    return g_has_new_state;
+    return g_vq_count > 0;
 }
 
 void client_net_consume_state(NetPlayerView *out)
 {
+    if (g_vq_count <= 0) return;
     if (out)
-        memcpy(out, &g_latest_view, sizeof(NetPlayerView));
-    g_has_new_state = false;
+        memcpy(out, &g_view_queue[g_vq_head], sizeof(NetPlayerView));
+    g_vq_head = (g_vq_head + 1) % STATE_QUEUE_CAP;
+    g_vq_count--;
+    DBG(DBG_QUEUE, "consume: remaining=%d phase=%d num_played=%d",
+        g_vq_count, out ? (int)out->phase : -1,
+        out ? out->current_trick.num_played : -1);
 }
 
 int32_t client_net_ping_ms(void)
@@ -511,6 +556,30 @@ bool client_net_consume_error(char *out, size_t len)
  * Public API — Command Sending
  * ================================================================ */
 
+int client_net_send_add_ai(void)
+{
+    if (g_state != CLIENT_NET_CONNECTED || g_conn_id < 0)
+        return -1;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_REQUEST_ADD_AI;
+
+    return net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+int client_net_send_start_game(void)
+{
+    if (g_state != CLIENT_NET_CONNECTED || g_conn_id < 0)
+        return -1;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_REQUEST_START_GAME;
+
+    return net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
 int client_net_send_cmd(const InputCmd *cmd)
 {
     if (g_state != CLIENT_NET_CONNECTED || g_conn_id < 0)
@@ -524,5 +593,7 @@ int client_net_send_cmd(const InputCmd *cmd)
     msg.type = NET_MSG_INPUT_CMD;
     net_input_cmd_from_local(cmd, &msg.input_cmd);
 
+    DBG(DBG_CMD, "send: type=%d card=(%d,%d)",
+        cmd->type, cmd->card.card.suit, cmd->card.card.rank);
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }

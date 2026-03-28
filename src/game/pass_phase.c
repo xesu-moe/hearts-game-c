@@ -1,6 +1,6 @@
 /* ============================================================
  * @deps-implements: pass_phase.h
- * @deps-requires: pass_phase.h, core/game_state.h (PASS_SUB_TRANSMUTE),
+ * @deps-requires: pass_phase.h, core/game_state.h,
  *                 core/hand.h, core/settings.h, ai.h, render/anim.h
  *                 (anim_start_scaled, anim_get_speed, ANIM_PASS_HAND_SLIDE_DURATION,
  *                 ANIM_PASS_RECEIVE_GAP_DELAY), render/layout.h
@@ -8,8 +8,7 @@
  *                 render/render.h, phase2/phase2_state.h,
  *                 phase2/contract_logic.h, phase2/phase2_defs.h,
  *                 phase2/transmutation_logic.h, phase2/transmutation.h, assert.h
- * @deps-last-changed: 2026-03-26 — Step 22.3: Added PASS_SUB_TRANSMUTE cases in time_limit,
- *                 advance, update
+ * @deps-last-changed: 2026-03-27 — Removed PASS_SUB_TRANSMUTE cases; replaced with default
  * ============================================================ */
 
 #include "pass_phase.h"
@@ -37,7 +36,7 @@ float pass_subphase_time_limit(PassSubphase sub)
     case PASS_SUB_TOSS_WAIT: return ANIM_PASS_WAIT_DURATION * anim_get_speed();
     case PASS_SUB_REVEAL:    return PASS_REVEAL_DURATION * anim_get_speed();
     case PASS_SUB_RECEIVE:   return 0.0f;  /* driven by animation completion */
-    case PASS_SUB_TRANSMUTE: return 0.0f; /* server-driven, no local timer */
+    default: return 0.0f;
     }
     return 0.0f;
 }
@@ -205,7 +204,7 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     case PASS_SUB_TOSS_WAIT:
     case PASS_SUB_REVEAL:
     case PASS_SUB_RECEIVE:
-    case PASS_SUB_TRANSMUTE:
+    default:
         break;  /* animation/server-driven subphases don't need setup here */
     case PASS_SUB_DEALER: {
         int dp = gs->players[0].total_score; /* dummy — actual dealer id from phase_transitions */
@@ -862,7 +861,6 @@ static void handle_contract_subphase(PassPhaseState *pps, GameState *gs,
     DraftState *draft = &p2->round.draft;
     if (!draft->active) return;
 
-    pps->timer += dt;
     draft->timer -= dt;
     if (draft->timer < 0.0f) draft->timer = 0.0f;
 
@@ -880,7 +878,7 @@ static void handle_card_pass_subphase(PassPhaseState *pps, GameState *gs,
                                       RenderState *rs, Phase2State *p2,
                                       float dt)
 {
-    pps->timer += dt;
+    (void)dt;
     float limit = pass_subphase_time_limit(PASS_SUB_CARD_PASS);
 
     if (pps->timer >= limit && !gs->pass_ready[0]) {
@@ -897,23 +895,20 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
     if (gs->phase != PHASE_PASSING) return;
 
     float limit = pass_subphase_time_limit(pps->subphase);
+    pps->timer += dt;
     float remaining = limit - pps->timer;
     if (remaining < 0.0f) remaining = 0.0f;
     rs->pass_subphase_remaining = remaining;
     rs->pass_subphase = pps->subphase;
 
-    /* Online: server drives all pass substates. The client doesn't run
-     * pass animations because the server doesn't send opponent pass
-     * selections needed for the toss/reveal visual pipeline. The server
-     * will transition directly to PHASE_PLAYING, at which point this
-     * function returns early (gs->phase != PHASE_PASSING). */
+    /* Online: server drives all pass substates. The client ticks the timer
+     * for display but doesn't run subphase transitions or animations. */
     if (online)
         return;
 
     /* Offline: full local control */
     switch (pps->subphase) {
     case PASS_SUB_DEALER:
-        pps->timer += dt;
         if (pps->dealer_announced) {
             pps->dealer_announce_timer += dt;
             if (pps->dealer_announce_timer >= PASS_DEALER_ANNOUNCE) {
@@ -965,7 +960,6 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
         break;
     case PASS_SUB_REVEAL:
         if (pass_reveal_animations_done(rs)) {
-            pps->timer += dt;
             if (pps->timer >= pass_subphase_time_limit(PASS_SUB_REVEAL)) {
                 pass_start_receive_anim(pps, gs, rs, p2, settings);
             }
@@ -979,8 +973,59 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
             gs->phase = PHASE_PLAYING;
         }
         break;
-    case PASS_SUB_TRANSMUTE:
-        /* Server-driven online subphase — no local logic */
+    default:
+        break;
+    }
+}
+
+/* ---- Online pass UI sync ---- */
+
+static const char *s_online_waiting = "Waiting for other players...";
+
+void pass_sync_online_ui(PassPhaseState *pps, GameState *gs,
+                         RenderState *rs, Phase2State *p2)
+{
+    if (gs->phase != PHASE_PASSING) return;
+
+    rs->pass_subphase = pps->subphase;
+
+    switch (pps->subphase) {
+    case PASS_SUB_DEALER:
+        if (pps->dealer_ui_active) {
+            /* Only set up dealer UI once to avoid clobbering in-progress selection */
+            if (!rs->dealer_ui_active) {
+                setup_dealer_ui(pps, rs, 0);
+                rs->pass_status_text = "Dealer: Choose pass direction and amount";
+            }
+        } else {
+            rs->dealer_ui_active = false;
+            rs->pass_status_text = "Dealer is choosing...";
+        }
+        break;
+
+    case PASS_SUB_CONTRACT:
+        if (p2->enabled && p2->round.draft.active) {
+            if (!p2->round.draft.players[0].has_picked_this_round) {
+                /* Only set up draft UI once per round to avoid flicker */
+                if (!rs->contract_ui_active ||
+                    rs->draft_round_display != p2->round.draft.current_round + 1) {
+                    setup_draft_ui(rs, p2);
+                }
+            } else {
+                rs->contract_ui_active = false;
+                rs->pass_status_text = s_online_waiting;
+            }
+        }
+        break;
+
+    case PASS_SUB_CARD_PASS:
+        rs->contract_ui_active = false;
+        rs->pass_status_text = NULL;
+        break;
+
+    default:
+        /* TOSS_ANIM, REVEAL, RECEIVE, TRANSMUTE — server-driven */
+        rs->contract_ui_active = false;
         break;
     }
 }

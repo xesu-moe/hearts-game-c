@@ -58,7 +58,7 @@ ALL_DEP = $(sort $(CLIENT_DEP) $(SERVER_DEP) $(LOBBY_DEP))
 # ================================================================
 
 # Default: build client only
-all: $(CLIENT_BIN)
+all: $(CLIENT_BIN) $(SERVER_BIN) $(LOBBY_BIN)
 
 $(CLIENT_BIN): $(CLIENT_OBJ)
 	$(CC) $(CLIENT_OBJ) -o $@ $(CLIENT_LDFLAGS)
@@ -81,12 +81,20 @@ $(LOBBY_BIN): $(LOBBY_OBJ)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # ================================================================
-# Debug build (client only)
+# Debug builds
 # ================================================================
 
 debug:
 	$(MAKE) clean
 	$(MAKE) $(CLIENT_BIN) CFLAGS="$(CFLAGS) -DDEBUG -g -O0"
+
+debug-server:
+	$(MAKE) clean
+	$(MAKE) $(SERVER_BIN) CFLAGS="$(CFLAGS) -DDEBUG -g -O0"
+
+debug-all:
+	$(MAKE) clean
+	$(MAKE) $(CLIENT_BIN) $(SERVER_BIN) CFLAGS="$(CFLAGS) -DDEBUG -g -O0"
 
 # ================================================================
 # Clean

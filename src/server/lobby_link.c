@@ -4,10 +4,10 @@
  *                 server/room.h (room_create_with_code, room_active_count,
  *                 NET_MAX_PLAYERS, MAX_ROOMS),
  *                 net/socket.h (NetSocket, net_socket_*),
- *                 net/protocol.h (NetMsg, NetMsgType),
+ *                 net/protocol.h (NetMsg, NetMsgType, NET_MSG_SERVER_ROOM_DESTROYED, NetMsgServerRoomDestroyed),
  *                 core/clock.h (FIXED_DT),
  *                 stdio.h, string.h, time.h
- * @deps-last-changed: 2026-03-24 — Step 16: Room Code System
+ * @deps-last-changed: 2026-03-27 — Step 23: Sends NET_MSG_SERVER_ROOM_DESTROYED to notify lobby when room destroyed
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L
@@ -283,4 +283,18 @@ void lobby_link_send_result(const char *room_code,
 
     printf("[lobby-link] Sent result for room '%.8s' (%d rounds, %d winner(s))\n",
            room_code, rounds_played, winner_count);
+}
+
+void lobby_link_notify_room_destroyed(const char *room_code)
+{
+    if (!lobby_link_is_connected()) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_SERVER_ROOM_DESTROYED;
+    strncpy(msg.server_room_destroyed.room_code, room_code,
+            NET_ROOM_CODE_LEN - 1);
+    net_socket_send_msg(&g_lobby, g_conn_id, &msg);
+
+    printf("[lobby-link] Notified lobby: room '%.4s' destroyed\n", room_code);
 }

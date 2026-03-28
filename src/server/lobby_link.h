@@ -7,10 +7,11 @@
  *
  * @deps-exports: lobby_link_init, lobby_link_connect,
  *                lobby_link_update, lobby_link_shutdown,
- *                lobby_link_is_connected, lobby_link_send_result
- * @deps-requires: net/protocol.h (NET_MAX_PLAYERS, NET_AUTH_TOKEN_LEN)
+ *                lobby_link_is_connected, lobby_link_send_result,
+ *                lobby_link_notify_room_destroyed
+ * @deps-requires: net/protocol.h (NET_MAX_PLAYERS, NET_AUTH_TOKEN_LEN, NET_MSG_SERVER_ROOM_DESTROYED)
  * @deps-used-by: server/server_main.c, server/room.c
- * @deps-last-changed: 2026-03-25 — Step 18: Added lobby_link_send_result
+ * @deps-last-changed: 2026-03-27 — Step 23: Added lobby_link_notify_room_destroyed() to notify lobby when all players leave room
  * ============================================================ */
 
 #ifndef LOBBY_LINK_H
@@ -50,5 +51,9 @@ void lobby_link_send_result(const char *room_code,
                             int winner_count,
                             int rounds_played,
                             const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN]);
+
+/* Notify lobby that a waiting room was destroyed (all players left).
+ * Silently drops if not connected. */
+void lobby_link_notify_room_destroyed(const char *room_code);
 
 #endif /* LOBBY_LINK_H */

@@ -5,10 +5,10 @@
  * @deps-exports: enum GamePhase (PHASE_MENU, PHASE_DEALING, PHASE_PASSING, PHASE_PLAYING,
  *                PHASE_SCORING, PHASE_GAME_OVER, PHASE_SETTINGS, PHASE_LOGIN,
  *                PHASE_ONLINE_MENU, PHASE_STATS), enum PassSubphase (added
- *                PASS_SUB_TRANSMUTE), struct GameState
+ *                ), struct GameState
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
  * @deps-used-by: render.h, render.c, game/update.c, game/process_input.c, game/phase_transitions.c
- * @deps-last-changed: 2026-03-26 — Step 22.3: Added PASS_SUB_TRANSMUTE enum value
+ * @deps-last-changed: 2026-03-27 — Removed PASS_SUB_TRANSMUTE enum value
  * ============================================================ */
 
 #include <stdbool.h>
@@ -54,7 +54,6 @@ typedef enum PassSubphase {
     PASS_SUB_TOSS_WAIT  = 4,  /* cards landed, brief hold */
     PASS_SUB_REVEAL     = 5,  /* received cards shown face-up in staging */
     PASS_SUB_RECEIVE    = 6,  /* staged cards animate into hands */
-    PASS_SUB_TRANSMUTE  = 7,  /* apply transmutations to hand (online) */
 } PassSubphase;
 
 #define DEFAULT_PASS_CARD_COUNT 3

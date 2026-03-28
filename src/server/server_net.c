@@ -13,7 +13,7 @@
  *                 core/game_state.h (PassSubphase, game_state_current_player),
  *                 core/input_cmd.h (InputCmd),
  *                 stdio.h, stdlib.h, string.h, time.h
- * @deps-last-changed: 2026-03-26 — Step 22.3: Added SV_PASS_TRANSMUTE_WAIT state mapping
+ * @deps-last-changed: 2026-03-27 — Removed SV_PASS_TRANSMUTE_WAIT mapping
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L /* clock_gettime */
@@ -31,6 +31,7 @@
 #include "net/protocol.h"
 #include "core/game_state.h"
 #include "core/input_cmd.h"
+#include "core/debug_log.h"
 
 /* ================================================================
  * File-scope state
@@ -47,6 +48,8 @@ static void sv_handle_message(int conn_id, const NetMsg *msg);
 static void sv_handle_handshake(int conn_id, const NetMsgHandshake *hs);
 static void sv_handle_input_cmd(int conn_id, const NetInputCmd *net_cmd);
 static void sv_handle_ping(int conn_id, const NetMsgPing *ping);
+static void sv_handle_request_add_ai(int conn_id);
+static void sv_handle_request_start_game(int conn_id);
 static void sv_cleanup_connection(int conn_id);
 static void sv_broadcast_state(void);
 static void sv_broadcast_room_status(int room_index);
@@ -160,6 +163,12 @@ static void sv_handle_message(int conn_id, const NetMsg *msg)
     case NET_MSG_DISCONNECT:
         printf("[net] Client %d sent disconnect\n", conn_id);
         sv_cleanup_connection(conn_id);
+        break;
+    case NET_MSG_REQUEST_ADD_AI:
+        sv_handle_request_add_ai(conn_id);
+        break;
+    case NET_MSG_REQUEST_START_GAME:
+        sv_handle_request_start_game(conn_id);
         break;
     default:
         printf("[net] Unexpected message type %d from conn %d\n",
@@ -354,8 +363,14 @@ static void sv_handle_input_cmd(int conn_id, const NetInputCmd *net_cmd)
 
     /* Apply to game state */
     char err_msg[NET_MAX_CHAT_LEN] = {0};
-    if (!server_game_apply_cmd(&room->game, info->seat, &cmd,
-                               err_msg, sizeof(err_msg))) {
+    bool accepted = server_game_apply_cmd(&room->game, info->seat, &cmd,
+                                          err_msg, sizeof(err_msg));
+    DBG(DBG_SERVER, "cmd seat=%d type=%d %s%s%s",
+        info->seat, cmd.type,
+        accepted ? "ACCEPTED" : "REJECTED",
+        accepted ? "" : " reason=",
+        accepted ? "" : err_msg);
+    if (!accepted) {
         /* Send error to client (skip silent rejections like CONFIRM) */
         if (err_msg[0] != '\0') {
             NetMsg err;
@@ -384,6 +399,78 @@ static void sv_handle_ping(int conn_id, const NetMsgPing *ping)
 }
 
 /* ================================================================
+ * Add AI to Waiting Room
+ * ================================================================ */
+
+static void sv_handle_request_add_ai(int conn_id)
+{
+    ConnSlotInfo *info = (ConnSlotInfo *)g_net.conns[conn_id].user_data;
+    if (!info) {
+        printf("[net] REQUEST_ADD_AI from unregistered conn %d\n", conn_id);
+        return;
+    }
+
+    /* Only seat 0 (room creator) can add AI */
+    if (info->seat != 0) {
+        printf("[net] REQUEST_ADD_AI from non-creator seat %d, ignoring\n",
+               info->seat);
+        return;
+    }
+
+    int room_idx = info->room_index;
+    Room *room = room_get(room_idx);
+    if (!room || room->status != ROOM_WAITING) {
+        printf("[net] REQUEST_ADD_AI: room not in WAITING state\n");
+        return;
+    }
+
+    int ai_seat = room_add_ai(room_idx);
+    if (ai_seat < 0) {
+        printf("[net] REQUEST_ADD_AI: no empty slots\n");
+        return;
+    }
+
+    /* Broadcast updated room status to all connected clients */
+    sv_broadcast_room_status(room_idx);
+}
+
+/* ================================================================
+ * Start Game (creator request)
+ * ================================================================ */
+
+static void sv_handle_request_start_game(int conn_id)
+{
+    ConnSlotInfo *info = (ConnSlotInfo *)g_net.conns[conn_id].user_data;
+    if (!info) {
+        printf("[net] REQUEST_START_GAME from unregistered conn %d\n", conn_id);
+        return;
+    }
+
+    /* Only seat 0 (room creator) can start the game */
+    if (info->seat != 0) {
+        printf("[net] REQUEST_START_GAME from non-creator seat %d, ignoring\n",
+               info->seat);
+        return;
+    }
+
+    int room_idx = info->room_index;
+    Room *room = room_get(room_idx);
+    if (!room || room->status != ROOM_WAITING) {
+        printf("[net] REQUEST_START_GAME: room not in WAITING state\n");
+        return;
+    }
+
+    if (room_start(room_idx) < 0) {
+        printf("[net] REQUEST_START_GAME: room_start failed (need 4 players)\n");
+        return;
+    }
+
+    printf("[net] Room %s: game started by creator (conn %d)\n",
+           room->code, conn_id);
+    /* State update will be broadcast in the next sv_broadcast_state() cycle */
+}
+
+/* ================================================================
  * Room Status Broadcast (waiting room player list)
  * ================================================================ */
 
@@ -395,15 +482,20 @@ static void sv_broadcast_room_status(int room_index)
     NetMsg msg;
     memset(&msg, 0, sizeof(msg));
     msg.type = NET_MSG_ROOM_STATUS;
-    msg.room_status.player_count = (uint8_t)room->connected_count;
 
+    /* Count total occupied slots (humans + AI) */
+    int occupied = 0;
     for (int i = 0; i < NET_MAX_PLAYERS; i++) {
-        if (room->slots[i].status == SLOT_CONNECTED) {
+        if (room->slots[i].status != SLOT_EMPTY) {
             msg.room_status.slot_occupied[i] = 1;
+            msg.room_status.slot_is_ai[i] =
+                (room->slots[i].status == SLOT_AI) ? 1 : 0;
             memcpy(msg.room_status.player_names[i], room->slots[i].name,
                    NET_MAX_NAME_LEN);
+            occupied++;
         }
     }
+    msg.room_status.player_count = (uint8_t)occupied;
 
     for (int i = 0; i < NET_MAX_PLAYERS; i++) {
         if (room->slots[i].status != SLOT_CONNECTED) continue;
@@ -419,11 +511,45 @@ static void sv_broadcast_room_status(int room_index)
 
 static void sv_broadcast_state(void)
 {
+#ifdef DEBUG
+    static int prev_phase = -1;
+    static int prev_num_played = -1;
+    static int prev_tricks_played = -1;
+#endif
     for (int r = 0; r < MAX_ROOMS; r++) {
         Room *room = room_get(r);
         if (!room || (room->status != ROOM_PLAYING &&
                       room->status != ROOM_FINISHED)) continue;
         if (room->connected_count == 0) continue;
+
+        /* Skip broadcast if game state hasn't changed since last send */
+        {
+            int cur_phase = (int)room->game.gs.phase;
+            int cur_np    = room->game.gs.current_trick.num_played;
+            int cur_tp    = room->game.gs.tricks_played;
+            int cur_rnd   = room->game.gs.round_number;
+            bool changed  = room->force_broadcast ||
+                            room->game.state_dirty ||
+                            cur_phase != room->last_broadcast.phase ||
+                            cur_np    != room->last_broadcast.num_played ||
+                            cur_tp    != room->last_broadcast.tricks_played ||
+                            cur_rnd   != room->last_broadcast.round_number;
+            if (!changed) {
+                for (int i = 0; i < NET_MAX_PLAYERS && !changed; i++)
+                    changed = room->game.gs.players[i].hand.count
+                              != room->last_broadcast.hand_counts[i];
+            }
+            if (!changed) continue;
+            room->last_broadcast.phase         = cur_phase;
+            room->last_broadcast.num_played    = cur_np;
+            room->last_broadcast.tricks_played = cur_tp;
+            room->last_broadcast.round_number  = cur_rnd;
+            for (int i = 0; i < NET_MAX_PLAYERS; i++)
+                room->last_broadcast.hand_counts[i] =
+                    room->game.gs.players[i].hand.count;
+            room->force_broadcast = false;
+            room->game.state_dirty = false;
+        }
 
         for (int s = 0; s < NET_MAX_PLAYERS; s++) {
             if (room->slots[s].status != SLOT_CONNECTED) continue;
@@ -460,7 +586,36 @@ static void sv_broadcast_state(void)
                     tti->fogged[i];
             }
 
-            net_socket_send_msg(&g_net, conn_id, &msg);
+            if (net_socket_send_msg(&g_net, conn_id, &msg) < 0) {
+                /* Send buffer full — state update dropped. Protocol
+                 * self-heals on next successful send (full snapshot). */
+                static uint32_t last_warn_ms = 0;
+                uint32_t now_ms = get_monotonic_ms();
+                if (now_ms - last_warn_ms > 1000) {
+                    printf("[net] WARN: state update dropped for conn %d "
+                           "(send buffer full)\n", conn_id);
+                    last_warn_ms = now_ms;
+                }
+                DBG(DBG_SERVER, "broadcast SEND_FAIL seat=%d", s);
+            }
+#ifdef DEBUG
+            /* Throttled: only log when state changes */
+            {
+                int cur_phase = (int)room->game.gs.phase;
+                int cur_np = room->game.gs.current_trick.num_played;
+                int cur_tp = room->game.gs.tricks_played;
+                if (cur_phase != prev_phase || cur_np != prev_num_played ||
+                    cur_tp != prev_tricks_played) {
+                    DBG(DBG_SERVER, "broadcast seat=%d phase=%d num_played=%d tricks=%d",
+                        s, cur_phase, cur_np, cur_tp);
+                    if (s == NET_MAX_PLAYERS - 1) {
+                        prev_phase = cur_phase;
+                        prev_num_played = cur_np;
+                        prev_tricks_played = cur_tp;
+                    }
+                }
+            }
+#endif
         }
     }
 }
@@ -476,8 +631,6 @@ static uint8_t sv_pass_substate_to_client(ServerPassSubstate ss)
         return PASS_SUB_CONTRACT;
     case SV_PASS_CARD_SELECT:
         return PASS_SUB_CARD_PASS;
-    case SV_PASS_TRANSMUTE_WAIT:
-        return PASS_SUB_TRANSMUTE;
     default:
         return 0;
     }

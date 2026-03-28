@@ -11,9 +11,9 @@
  *                 game/settings_ui.h, game/info_sync.h,
  *                 game/phase_transitions.h, game/online_ui.h, game/login_ui.h,
  *                 net/client_net.h, net/protocol.h (net_input_cmd_is_relevant),
- *                 net/state_recv.h, net/lobby_client.h, net/identity.h,
- *                 raylib.h
- * @deps-last-changed: 2026-03-26 — Step 20.1: Room status from client_net, set username
+ *                 net/state_recv.h, net/lobby_client.h (lobby_client_cancel_create, lobby_client_cancel_join),
+ *                 net/identity.h, raylib.h
+ * @deps-last-changed: 2026-03-28 — Updated state_recv_apply() call with new defer_trick parameter
  * ============================================================ */
 
 #include <stdbool.h>
@@ -51,6 +51,12 @@
 #include "net/lobby_client.h"
 #include "net/protocol.h"
 #include "net/state_recv.h"
+#include "core/debug_log.h"
+
+#ifdef DEBUG
+unsigned g_dbg_mask = DBG_ALL;
+unsigned g_dbg_frame = 0;
+#endif
 
 /* ---- Constants ---- */
 #define WINDOW_WIDTH  1280
@@ -178,8 +184,14 @@ int main(int argc, char **argv)
 
     PassSubphase prev_subphase = pps.subphase;
 
+    dbg_init_from_env();
+
     while (!WindowShouldClose() && !quit_requested) {
+#ifdef DEBUG
+        g_dbg_frame++;
+#endif
         bool online = (client_net_state() == CLIENT_NET_CONNECTED);
+        rs.online = online;
         anim_set_speed(settings_anim_multiplier(g_settings.anim_speed));
         clock_update(&clk);
         client_net_update(clk.raw_dt);
@@ -229,38 +241,7 @@ int main(int argc, char **argv)
                     .source_player = 0,
                 });
             }
-
-            /* Handle login submit command */
-            InputCmd cmd;
-            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
-                if (cmd.type == INPUT_CMD_LOGIN_SUBMIT) {
-                    if (lui.username_len < 3) {
-                        snprintf(lui.error_text, sizeof(lui.error_text),
-                                 "Username must be at least 3 characters");
-                    } else if (lui.has_stored_username) {
-                        lobby_client_login(lui.username_buf);
-                        lui.awaiting_response = true;
-                        snprintf(lui.status_text, sizeof(lui.status_text),
-                                 "Logging in...");
-                    } else {
-                        lobby_client_register(lui.username_buf, &identity);
-                        lui.awaiting_response = true;
-                        lui.show_username_input = false;
-                        snprintf(lui.status_text, sizeof(lui.status_text),
-                                 "Registering...");
-                    }
-                } else if (cmd.type == INPUT_CMD_LOGIN_RETRY) {
-                    lui.error_text[0] = '\0';
-                    lui.awaiting_response = false;
-                    snprintf(lui.status_text, sizeof(lui.status_text),
-                             "Connecting...");
-                    lobby_client_disconnect();
-                    lobby_client_connect(lobby_addr, lobby_port);
-                } else if (cmd.type == INPUT_CMD_QUIT ||
-                           cmd.type == INPUT_CMD_CANCEL) {
-                    quit_requested = true;
-                }
-            }
+            /* Login commands processed below, after process_input */
         }
 
         /* Online menu state machine */
@@ -271,26 +252,37 @@ int main(int argc, char **argv)
 
             /* Check for room assignment from lobby */
             if (lobby_client_has_room_assignment()) {
-                lobby_client_consume_room_assignment(
-                    oui.server_addr, &oui.server_port,
-                    oui.assigned_room_code, oui.assigned_auth_token);
-                oui.room_assigned = true;
-
-                if (oui.subphase == ONLINE_SUB_CREATE_WAITING) {
-                    /* Show room code in waiting room */
-                    strncpy(oui.created_room_code, oui.assigned_room_code,
-                            NET_ROOM_CODE_LEN - 1);
-                    oui.created_room_code[NET_ROOM_CODE_LEN - 1] = '\0';
-                    /* Stay in CREATE_WAITING — game server will start
-                     * when all 4 players join. We connect now. */
-                    client_net_set_auth_token(oui.assigned_auth_token);
-                    client_net_set_username(lobby_client_info()->username);
-                    client_net_connect(oui.server_addr, oui.server_port,
-                                       oui.assigned_room_code);
+                if (oui.subphase == ONLINE_SUB_MENU ||
+                    oui.subphase == ONLINE_SUB_ERROR ||
+                    oui.subphase == ONLINE_SUB_JOIN_INPUT) {
+                    /* Stale assignment from a cancelled request — discard */
+                    lobby_client_consume_room_assignment(
+                        oui.server_addr, &oui.server_port,
+                        oui.assigned_room_code, oui.assigned_auth_token);
+                    oui.room_assigned = false;
+                    printf("[main] Discarded stale room assignment\n");
                 } else {
-                    /* Join/Queue — show "Game Found!" then connect */
-                    oui.subphase = ONLINE_SUB_MATCH_FOUND;
-                    oui.match_found_timer = MATCH_FOUND_DURATION;
+                    lobby_client_consume_room_assignment(
+                        oui.server_addr, &oui.server_port,
+                        oui.assigned_room_code, oui.assigned_auth_token);
+                    oui.room_assigned = true;
+
+                    if (oui.subphase == ONLINE_SUB_CREATE_WAITING) {
+                        /* Show room code in waiting room */
+                        strncpy(oui.created_room_code, oui.assigned_room_code,
+                                NET_ROOM_CODE_LEN - 1);
+                        oui.created_room_code[NET_ROOM_CODE_LEN - 1] = '\0';
+                        /* Stay in CREATE_WAITING — game server will start
+                         * when all 4 players join. We connect now. */
+                        client_net_set_auth_token(oui.assigned_auth_token);
+                        client_net_set_username(lobby_client_info()->username);
+                        client_net_connect(oui.server_addr, oui.server_port,
+                                           oui.assigned_room_code);
+                    } else {
+                        /* Join/Queue — show "Game Found!" then connect */
+                        oui.subphase = ONLINE_SUB_MATCH_FOUND;
+                        oui.match_found_timer = MATCH_FOUND_DURATION;
+                    }
                 }
             }
 
@@ -333,9 +325,11 @@ int main(int argc, char **argv)
                         NetMsgRoomStatus rs_msg;
                         client_net_consume_room_status(&rs_msg);
                         oui.player_count = rs_msg.player_count;
-                        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+                        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
                             memcpy(oui.player_names[i],
                                    rs_msg.player_names[i], NET_MAX_NAME_LEN);
+                            oui.slot_is_ai[i] = (rs_msg.slot_is_ai[i] != 0);
+                        }
                     }
                     /* Game started — server sent first state update.
                      * Exit the online UI; the state_recv apply block later
@@ -387,9 +381,86 @@ int main(int argc, char **argv)
                     .source_player = 0,
                 });
             }
+            /* Online menu commands processed below, after process_input */
+        }
 
-            /* Process online menu commands */
+        process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
+
+        /* Route commands: online → server, offline → local */
+        if (client_net_state() == CLIENT_NET_CONNECTED) {
             InputCmd cmd;
+            InputCmd local_cmds[INPUT_CMD_QUEUE_CAPACITY];
+            int local_count = 0;
+
+            /* Drain queue, split into server-bound and local.
+             * Dealer commands go to both server AND local queue
+             * so the client gets immediate visual feedback. */
+            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
+                if (net_input_cmd_is_relevant((uint8_t)cmd.type)) {
+                    cmd.source_player = client_net_seat();
+                    client_net_send_cmd(&cmd);
+                    /* Dealer commands also need local processing for UI */
+                    if (cmd.type == INPUT_CMD_DEALER_DIR ||
+                        cmd.type == INPUT_CMD_DEALER_AMT ||
+                        cmd.type == INPUT_CMD_DEALER_CONFIRM) {
+                        if (local_count < INPUT_CMD_QUEUE_CAPACITY)
+                            local_cmds[local_count++] = cmd;
+                    }
+                } else {
+                    if (local_count < INPUT_CMD_QUEUE_CAPACITY)
+                        local_cmds[local_count++] = cmd;
+                }
+            }
+
+            /* Re-push local-only commands for game_update */
+            for (int i = 0; i < local_count; i++)
+                input_cmd_push(local_cmds[i]);
+        }
+
+        /* Process login commands (after process_input populates the queue) */
+        if (gs.phase == PHASE_LOGIN) {
+            InputCmd cmd;
+            InputCmd passthru[INPUT_CMD_QUEUE_CAPACITY];
+            int passthru_count = 0;
+            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
+                if (cmd.type == INPUT_CMD_LOGIN_SUBMIT) {
+                    if (lui.username_len < 3) {
+                        snprintf(lui.error_text, sizeof(lui.error_text),
+                                 "Username must be at least 3 characters");
+                    } else if (lui.has_stored_username) {
+                        lobby_client_login(lui.username_buf);
+                        lui.awaiting_response = true;
+                        snprintf(lui.status_text, sizeof(lui.status_text),
+                                 "Logging in...");
+                    } else {
+                        lobby_client_register(lui.username_buf, &identity);
+                        lui.awaiting_response = true;
+                        lui.show_username_input = false;
+                        snprintf(lui.status_text, sizeof(lui.status_text),
+                                 "Registering...");
+                    }
+                } else if (cmd.type == INPUT_CMD_LOGIN_RETRY) {
+                    lui.error_text[0] = '\0';
+                    lui.awaiting_response = false;
+                    snprintf(lui.status_text, sizeof(lui.status_text),
+                             "Connecting...");
+                    lobby_client_disconnect();
+                    lobby_client_connect(lobby_addr, lobby_port);
+                } else {
+                    /* Re-push unrecognized commands for game_update */
+                    if (passthru_count < INPUT_CMD_QUEUE_CAPACITY)
+                        passthru[passthru_count++] = cmd;
+                }
+            }
+            for (int i = 0; i < passthru_count; i++)
+                input_cmd_push(passthru[i]);
+        }
+
+        /* Process online menu commands (after process_input populates the queue) */
+        if (gs.phase == PHASE_ONLINE_MENU) {
+            InputCmd cmd;
+            InputCmd passthru[INPUT_CMD_QUEUE_CAPACITY];
+            int passthru_count = 0;
             while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
                 if (cmd.type == INPUT_CMD_ONLINE_CREATE) {
                     lobby_client_create_room();
@@ -398,13 +469,11 @@ int main(int argc, char **argv)
                     oui.error_text[0] = '\0';
                 } else if (cmd.type == INPUT_CMD_ONLINE_JOIN) {
                     if (oui.subphase == ONLINE_SUB_MENU) {
-                        /* Switch to join input sub-state */
                         oui.subphase = ONLINE_SUB_JOIN_INPUT;
                         oui.room_code_len = 0;
                         oui.room_code_buf[0] = '\0';
                         oui.error_text[0] = '\0';
                     } else if (oui.subphase == ONLINE_SUB_JOIN_INPUT) {
-                        /* Submit the room code */
                         if (oui.room_code_len == 4) {
                             lobby_client_join_room(oui.room_code_buf);
                             oui.subphase = ONLINE_SUB_JOIN_WAITING;
@@ -415,13 +484,27 @@ int main(int argc, char **argv)
                     lobby_client_queue_matchmake();
                     oui.subphase = ONLINE_SUB_QUEUE_SEARCHING;
                     oui.error_text[0] = '\0';
+                } else if (cmd.type == INPUT_CMD_ONLINE_ADD_AI) {
+                    if (oui.subphase == ONLINE_SUB_CREATE_WAITING &&
+                        client_net_state() == CLIENT_NET_CONNECTED) {
+                        client_net_send_add_ai();
+                    }
+                } else if (cmd.type == INPUT_CMD_ONLINE_START) {
+                    if (oui.subphase == ONLINE_SUB_CREATE_WAITING &&
+                        client_net_state() == CLIENT_NET_CONNECTED) {
+                        client_net_send_start_game();
+                    }
                 } else if (cmd.type == INPUT_CMD_ONLINE_CANCEL ||
                            cmd.type == INPUT_CMD_CANCEL) {
                     if (oui.subphase == ONLINE_SUB_QUEUE_SEARCHING) {
                         lobby_client_queue_cancel();
                     }
-                    /* Disconnect from game server if connected
-                     * (e.g., canceling from waiting room) */
+                    if (oui.subphase == ONLINE_SUB_CREATE_WAITING) {
+                        lobby_client_cancel_create();
+                    }
+                    if (oui.subphase == ONLINE_SUB_JOIN_WAITING) {
+                        lobby_client_cancel_join();
+                    }
                     if (client_net_state() != CLIENT_NET_DISCONNECTED) {
                         client_net_disconnect();
                     }
@@ -434,43 +517,46 @@ int main(int argc, char **argv)
                     oui.error_text[0] = '\0';
                 } else if (cmd.type == INPUT_CMD_QUIT) {
                     quit_requested = true;
-                }
-            }
-        }
-
-        process_input(&gs, &rs, &pps, &pls, &p2, flow.step);
-
-        /* Route commands: online → server, offline → local */
-        if (client_net_state() == CLIENT_NET_CONNECTED) {
-            InputCmd cmd;
-            InputCmd local_cmds[INPUT_CMD_QUEUE_CAPACITY];
-            int local_count = 0;
-
-            /* Drain queue, split into server-bound and local */
-            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
-                if (net_input_cmd_is_relevant((uint8_t)cmd.type)) {
-                    cmd.source_player = client_net_seat();
-                    client_net_send_cmd(&cmd);
                 } else {
-                    if (local_count < INPUT_CMD_QUEUE_CAPACITY)
-                        local_cmds[local_count++] = cmd;
+                    /* Re-push unrecognized commands for game_update */
+                    if (passthru_count < INPUT_CMD_QUEUE_CAPACITY)
+                        passthru[passthru_count++] = cmd;
                 }
             }
-
-            /* Re-push local-only commands for game_update */
-            for (int i = 0; i < local_count; i++)
-                input_cmd_push(local_cmds[i]);
+            for (int i = 0; i < passthru_count; i++)
+                input_cmd_push(passthru[i]);
         }
 
-        /* Step 9: Apply server state to local GameState + Phase2State */
+        /* Step 9: Apply server state to local GameState + Phase2State.
+         * Don't consume during trick animations — consuming with defer
+         * permanently loses trick data since the state is popped from
+         * the ring buffer. Leave it queued until flow is ready. */
         if (client_net_state() == CLIENT_NET_CONNECTED &&
             client_net_has_new_state()) {
+            bool would_defer = (flow.step != FLOW_IDLE &&
+                                flow.step != FLOW_WAITING_FOR_HUMAN);
+            if (would_defer) goto skip_state_apply;
+
             NetPlayerView view;
             client_net_consume_state(&view);
 
-            state_recv_apply(&gs, &p2, &view);
+            DBG(DBG_STATE, "apply: defer=0 flow=%d phase=%d round=%d tricks=%d num_played=%d",
+                flow.step, (int)view.phase, view.round_number,
+                view.tricks_played, view.current_trick.num_played);
+            state_recv_apply(&gs, &p2, &view, false);
 
-            pps.subphase = (PassSubphase)view.pass_subphase;
+            {
+                PassSubphase new_sub = (PassSubphase)view.pass_subphase;
+                if (new_sub != pps.subphase)
+                    pps.timer = 0.0f; /* Reset countdown on subphase change */
+                pps.subphase = new_sub;
+            }
+
+            /* Dealer UI: active only if we are the dealer and in dealer subphase */
+            pps.dealer_ui_active =
+                (view.dealer_seat >= 0 &&
+                 view.dealer_seat == view.my_seat &&
+                 pps.subphase == PASS_SUB_DEALER);
 
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
                 pls.current_tti.transmutation_ids[i] =
@@ -486,9 +572,13 @@ int main(int argc, char **argv)
                 pls.current_tti.fog_transmuter[i] = -1;
             }
 
-            rs.turn_time_remaining = view.turn_timer;
+            DBG(DBG_SYNC, "sync_needed SET after state apply");
             rs.sync_needed = true;
+
+            /* Sync pass phase UI from server state */
+            pass_sync_online_ui(&pps, &gs, &rs, &p2);
         }
+        skip_state_apply: ;
 
         /* Step 13: Display server error messages in chat log */
         {
@@ -510,7 +600,7 @@ int main(int argc, char **argv)
             flow_init(&flow);
 
         bool paused_ingame = rs.pause_state != PAUSE_INACTIVE &&
-                             is_ingame_phase(gs.phase);
+                             is_ingame_phase(gs.phase) && !online;
 
         audio_update(&audio, clk.raw_dt, anim_get_speed());
 
@@ -556,10 +646,8 @@ int main(int argc, char **argv)
             flow_update(&flow, &gs, &rs, &p2, &g_settings, &pls,
                        clk.raw_dt, online);
 
-            /* Pass turn timer to render state for display.
-             * Online: server sets this via state_recv_apply. */
-            if (!online)
-                rs.turn_time_remaining = flow.turn_timer;
+            /* Pass turn timer to render state for display */
+            rs.turn_time_remaining = flow.turn_timer;
 
             /* Set interactive flag after flow_update */
             (void)0; /* placeholder: future dealer interactive state */

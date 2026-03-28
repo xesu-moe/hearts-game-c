@@ -3,8 +3,9 @@
  * @deps-requires: lobby/lobby_net.h, lobby/db.h, lobby/auth.h,
  *                 lobby/rooms.h, lobby/server_registry.h,
  *                 lobby/matchmaking.h, lobby/stats.h (stats_calc_elo_deltas),
- *                 net/socket.h, net/protocol.h, stdio.h, stdlib.h, string.h, time.h
- * @deps-last-changed: 2026-03-26 — Step 21: Integrated ELO calculation in server result handler
+ *                 net/socket.h, net/protocol.h (NET_MSG_SERVER_ROOM_DESTROYED, NetMsgServerRoomDestroyed),
+ *                 stdio.h, stdlib.h, string.h, time.h
+ * @deps-last-changed: 2026-03-27 — Step 23: Added handler for NET_MSG_SERVER_ROOM_DESTROYED message
  * ============================================================ */
 
 #define _POSIX_C_SOURCE 199309L
@@ -85,6 +86,7 @@ static void lby_handle_logout(int conn_id);
 static void lby_handle_create_room(int conn_id, const NetMsgCreateRoom *cr);
 static void lby_handle_join_room(int conn_id, const NetMsgJoinRoom *jr);
 static void lby_handle_server_room_created(int conn_id, const NetMsgServerRoomCreated *rc);
+static void lby_handle_server_room_destroyed(int conn_id, const NetMsgServerRoomDestroyed *rd);
 
 /* Username change handler (Step 19) */
 static void lby_handle_change_username(int conn_id,
@@ -276,6 +278,9 @@ static void lby_handle_message(int conn_id, const NetMsg *msg)
         break;
     case NET_MSG_SERVER_ROOM_CREATED:
         lby_handle_server_room_created(conn_id, &msg->server_room_created);
+        break;
+    case NET_MSG_SERVER_ROOM_DESTROYED:
+        lby_handle_server_room_destroyed(conn_id, &msg->server_room_destroyed);
         break;
 
     /* Common messages */
@@ -772,6 +777,24 @@ static void lby_handle_server_room_created(int conn_id,
 
     printf("[lobby-net] Room '%.8s' created, assigned to client conn %d -> %s:%d\n",
            rc->room_code, client_conn, addr, port);
+}
+
+static void lby_handle_server_room_destroyed(int conn_id,
+                                             const NetMsgServerRoomDestroyed *rd)
+{
+    LobbyConnInfo *sender = g_net.conns[conn_id].user_data;
+    if (!sender || sender->type != LOBBY_CONN_GAME_SERVER) {
+        lby_send_error(conn_id, 31, "Not a game server");
+        return;
+    }
+
+    lobby_rooms_set_status(g_db, rd->room_code, "expired");
+
+    int idx = lobby_pending_find_by_code(rd->room_code);
+    if (idx >= 0)
+        lobby_pending_remove(idx);
+
+    printf("[lobby-net] Room '%.4s' destroyed by game server\n", rd->room_code);
 }
 
 /* ================================================================

@@ -72,6 +72,8 @@ typedef enum InputCmdType {
     INPUT_CMD_ONLINE_JOIN,       /* submit room code */
     INPUT_CMD_ONLINE_QUICKMATCH, /* enter matchmaking queue */
     INPUT_CMD_ONLINE_CANCEL,     /* cancel/back from any online sub-state */
+    INPUT_CMD_ONLINE_ADD_AI,     /* add AI player to waiting room */
+    INPUT_CMD_ONLINE_START,      /* start game (room creator only) */
 
     /* Stats screen */
     INPUT_CMD_OPEN_STATS,        /* menu → stats screen */
@@ -98,8 +100,8 @@ typedef struct InputCmd {
             float y;
         } mouse_pos;
 
-        /* INPUT_CMD_SELECT_CONTRACT: */
-        struct { int contract_id; } contract;
+        /* INPUT_CMD_SELECT_CONTRACT: pair index into draft available[] */
+        struct { int pair_index; } contract;
 
         /* INPUT_CMD_SELECT_TRANSMUTATION: */
         struct { int inv_slot; } transmute_select;

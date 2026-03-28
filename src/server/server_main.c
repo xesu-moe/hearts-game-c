@@ -22,6 +22,12 @@
 #include "room.h"
 #include "lobby_link.h"
 #include "core/clock.h" /* FIXED_DT, MAX_FRAME_DT, MAX_CATCHUP */
+#include "core/debug_log.h"
+
+#ifdef DEBUG
+unsigned g_dbg_mask = DBG_ALL;
+unsigned g_dbg_frame = 0;
+#endif
 
 #define DEFAULT_PORT 7777
 
@@ -111,6 +117,8 @@ int main(int argc, char *argv[])
     double last_time = time_now();
     double accumulator = 0.0;
 
+    dbg_init_from_env();
+
     while (g_running) {
         double now = time_now();
         double elapsed = now - last_time;
@@ -125,6 +133,9 @@ int main(int argc, char *argv[])
         /* Process fixed-timestep ticks */
         int ticks = 0;
         while (accumulator >= (double)FIXED_DT && ticks < MAX_CATCHUP) {
+#ifdef DEBUG
+            g_dbg_frame++;
+#endif
             server_net_update();
             if (use_lobby) lobby_link_update();
             accumulator -= (double)FIXED_DT;

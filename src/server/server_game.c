@@ -5,8 +5,7 @@
  *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
  *                 phase2/phase2_state.h,
  *                 stdlib.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-26 — Step 22.3: Handlers for INPUT_CMD_SELECT_TRANSMUTATION,
- *                 INPUT_CMD_APPLY_TRANSMUTATION; SV_PASS_TRANSMUTE_WAIT logic
+ * @deps-last-changed: 2026-03-27 — Moved transmutation commands to SV_PASS_CARD_SELECT; removed SV_PASS_TRANSMUTE_WAIT
  * ============================================================ */
 
 #include "server_game.h"
@@ -18,6 +17,7 @@
 #include "core/hand.h"
 #include "core/trick.h"
 #include "core/card.h"
+#include "core/debug_log.h"
 #include "phase2/phase2_defs.h"
 #include "phase2/contract_logic.h"
 #include "phase2/transmutation_logic.h"
@@ -71,6 +71,8 @@ void server_game_init(ServerGame *sg)
     sg->draft_initialized = false;
     sg->duel_target_player = -1;
     sg->duel_target_hand_index = -1;
+    for (int i = 0; i < NUM_PLAYERS; i++)
+        sg->selected_transmute_slot[i] = -1;
     sv_reset_tti(&sg->current_tti);
 }
 
@@ -82,6 +84,7 @@ void server_game_start(ServerGame *sg)
         sg->gs.players[i].is_human = false;
     }
 
+    sg->gs.phase = PHASE_MENU; /* server has no login phase */
     game_state_start_game(&sg->gs);
     sg->game_active = true;
     sg->dealer_player = -1;
@@ -92,6 +95,8 @@ void server_game_start(ServerGame *sg)
     sg->duel_target_player = -1;
     sg->duel_target_hand_index = -1;
     memset(sg->prev_round_points, 0, sizeof(sg->prev_round_points));
+    for (int i = 0; i < NUM_PLAYERS; i++)
+        sg->selected_transmute_slot[i] = -1;
 
     printf("=== Game Started ===\n");
 }
@@ -104,6 +109,7 @@ void server_game_tick(ServerGame *sg)
     case PHASE_DEALING:
         /* Instant transition — no deal animation on server */
         printf("\n=== Round %d ===\n", sg->gs.round_number);
+        DBG(DBG_SERVER, "phase: DEALING -> PASSING round=%d", sg->gs.round_number);
         sg->gs.phase = PHASE_PASSING;
         contract_round_reset(&sg->p2);
         sg->pass_done = false;
@@ -122,6 +128,8 @@ void server_game_tick(ServerGame *sg)
         }
         sg->draft_round = 0;
         sg->draft_initialized = false;
+        for (int i = 0; i < NUM_PLAYERS; i++)
+            sg->selected_transmute_slot[i] = -1;
         break;
 
     case PHASE_PASSING:
@@ -188,6 +196,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             printf("Dealer %s picks direction: %s\n",
                    sv_player_name(seat), sv_dir_name(gs->pass_direction));
             sg->pass_substate = SV_PASS_DEALER_AMT;
+            sg->state_dirty = true;
         }
         return true;
 
@@ -206,6 +215,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             printf("Dealer %s picks amount: %d cards\n",
                    sv_player_name(seat), amt);
             sg->pass_substate = SV_PASS_DEALER_CONFIRM;
+            sg->state_dirty = true;
         }
         return true;
 
@@ -218,6 +228,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         sg->pass_substate = SV_PASS_CONTRACT_DRAFT;
         sg->draft_round = 0;
         sg->draft_initialized = false;
+        sg->state_dirty = true;
         return true;
 
     case INPUT_CMD_SELECT_CONTRACT:
@@ -230,7 +241,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                 printf("REJECTED: seat %d already picked this draft round\n", seat);
                 REJECT("Already drafted this round");
             }
-            int pair_idx = cmd->contract.contract_id;
+            int pair_idx = cmd->contract.pair_index;
             if (pair_idx < 0 || pair_idx >= draft->players[seat].available_count) {
                 printf("REJECTED: invalid pair index %d\n", pair_idx);
                 REJECT("Invalid contract choice");
@@ -269,7 +280,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             int selected_count = 0;
             int found = -1;
             for (int i = 0; i < MAX_PASS_CARD_COUNT; i++) {
-                if (i < pc && gs->pass_selections[seat][i].rank != 0) {
+                if (i < pc && !card_is_none(gs->pass_selections[seat][i])) {
                     if (card_equals(gs->pass_selections[seat][i], card)) {
                         found = i;
                     }
@@ -282,36 +293,25 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                 for (int i = found; i < selected_count - 1; i++) {
                     gs->pass_selections[seat][i] = gs->pass_selections[seat][i + 1];
                 }
-                memset(&gs->pass_selections[seat][selected_count - 1], 0, sizeof(Card));
+                gs->pass_selections[seat][selected_count - 1] = CARD_NONE;
                 selected_count--;
             } else {
                 if (selected_count >= pc) {
-                    printf("REJECTED: seat %d already selected %d cards\n",
-                           seat, pc);
+                    printf("REJECTED: seat %d already selected %d/%d cards\n",
+                           seat, selected_count, pc);
                     REJECT("Maximum cards already selected");
                 }
                 gs->pass_selections[seat][selected_count] = card;
                 selected_count++;
             }
 
-            /* Auto-submit when the right number of cards are selected */
-            if (selected_count == pc) {
-                Card pass_cards[MAX_PASS_CARD_COUNT];
-                for (int i = 0; i < pc; i++) {
-                    pass_cards[i] = gs->pass_selections[seat][i];
-                }
-                game_state_select_pass(gs, seat, pass_cards, pc);
-                printf("Seat %d submitted %d pass cards\n", seat, pc);
-            }
+            /* Selection tracked; player must send INPUT_CMD_CONFIRM to submit */
         }
         return true;
 
     case INPUT_CMD_SELECT_TRANSMUTATION:
-        if (sg->pass_substate != SV_PASS_TRANSMUTE_WAIT) {
+        if (sg->pass_substate != SV_PASS_CARD_SELECT) {
             REJECT("Cannot select transmutations now");
-        }
-        if (sg->transmute_confirmed[seat]) {
-            REJECT("Already confirmed transmutations");
         }
         {
             int slot = cmd->transmute_select.inv_slot;
@@ -325,11 +325,8 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         return true;
 
     case INPUT_CMD_APPLY_TRANSMUTATION:
-        if (sg->pass_substate != SV_PASS_TRANSMUTE_WAIT) {
+        if (sg->pass_substate != SV_PASS_CARD_SELECT) {
             REJECT("Cannot apply transmutations now");
-        }
-        if (sg->transmute_confirmed[seat]) {
-            REJECT("Already confirmed transmutations");
         }
         {
             int hand_idx = cmd->transmute_apply.hand_index;
@@ -357,19 +354,30 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         return true;
 
     case INPUT_CMD_CONFIRM:
-        if (sg->pass_substate == SV_PASS_CARD_SELECT) {
-            if (gs->pass_ready[seat])
-                return true; /* Already ready, confirm is a no-op */
-            REJECT("Select your pass cards first");
+        if (sg->pass_substate != SV_PASS_CARD_SELECT) {
+            return false; /* silent ignore outside card select */
         }
-        if (sg->pass_substate == SV_PASS_TRANSMUTE_WAIT) {
-            sg->transmute_confirmed[seat] = true;
-            sg->selected_transmute_slot[seat] = -1;
-            printf("Seat %d confirmed transmutations\n", seat);
-            return true;
+        if (gs->pass_ready[seat]) {
+            return true; /* already submitted, no-op */
         }
-        /* Silent rejection for other phases — CONFIRM is benign */
-        return false;
+        {
+            int pc = gs->pass_card_count;
+            int selected_count = 0;
+            for (int i = 0; i < pc; i++) {
+                if (!card_is_none(gs->pass_selections[seat][i]))
+                    selected_count++;
+            }
+            if (selected_count != pc) {
+                REJECT("Select your pass cards first");
+            }
+            Card pass_cards[MAX_PASS_CARD_COUNT];
+            for (int i = 0; i < pc; i++) {
+                pass_cards[i] = gs->pass_selections[seat][i];
+            }
+            game_state_select_pass(gs, seat, pass_cards, pc);
+            printf("Seat %d confirmed %d pass cards\n", seat, pc);
+        }
+        return true;
 
     case INPUT_CMD_PLAY_CARD:
         if (sg->play_substate != SV_PLAY_WAIT_TURN) {
@@ -397,6 +405,8 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
 
             /* If trick is now complete, advance to trick resolution */
             if (trick_is_complete(&gs->current_trick)) {
+                DBG(DBG_SERVER, "trick complete: tricks_played=%d num_played=%d",
+                    gs->tricks_played, gs->current_trick.num_played);
                 sg->play_substate = SV_PLAY_TRICK_DONE;
             }
         }
@@ -528,6 +538,7 @@ static void sv_do_pass_phase(ServerGame *sg)
                    sv_player_name(sg->dealer_player),
                    sv_dir_name(gs->pass_direction));
             sg->pass_substate = SV_PASS_DEALER_AMT;
+            sg->state_dirty = true;
         }
         /* Human: wait for DEALER_DIR command */
         break;
@@ -540,6 +551,7 @@ static void sv_do_pass_phase(ServerGame *sg)
                    sv_player_name(sg->dealer_player),
                    gs->pass_card_count);
             sg->pass_substate = SV_PASS_DEALER_CONFIRM;
+            sg->state_dirty = true;
         }
         break;
 
@@ -548,6 +560,7 @@ static void sv_do_pass_phase(ServerGame *sg)
             sg->pass_substate = SV_PASS_CONTRACT_DRAFT;
             sg->draft_round = 0;
             sg->draft_initialized = false;
+            sg->state_dirty = true;
         }
         break;
 
@@ -559,6 +572,7 @@ static void sv_do_pass_phase(ServerGame *sg)
             draft_generate_pool(draft);
             sg->draft_initialized = true;
             sg->draft_round = 0;
+            sg->state_dirty = true;
         }
 
         /* AI players pick automatically */
@@ -573,11 +587,13 @@ static void sv_do_pass_phase(ServerGame *sg)
             sg->draft_round++;
             if (sg->draft_round < DRAFT_ROUNDS) {
                 draft_advance_round(draft);
+                sg->state_dirty = true;
             } else {
                 draft_finalize(draft, p2);
                 printf("Contracts drafted for all players\n");
                 sg->contracts_done = true;
                 sg->pass_substate = SV_PASS_CARD_SELECT;
+                sg->state_dirty = true;
             }
         }
         /* If humans haven't picked yet, wait */
@@ -617,41 +633,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         game_state_execute_pass(gs);
         printf("Pass complete\n");
 
-        /* Check if any human player has transmutations to apply */
-        if (p2->enabled) {
-            bool any_human_has_inv = false;
-            for (int p = 0; p < NUM_PLAYERS; p++) {
-                sg->selected_transmute_slot[p] = -1;
-                if (gs->players[p].is_human &&
-                    p2->players[p].transmute_inv.count > 0) {
-                    sg->transmute_confirmed[p] = false;
-                    any_human_has_inv = true;
-                } else {
-                    sg->transmute_confirmed[p] = true; /* AI or no inv */
-                }
-            }
-            if (any_human_has_inv) {
-                sg->pass_substate = SV_PASS_TRANSMUTE_WAIT;
-                printf("Waiting for human transmutation selections\n");
-                break;
-            }
-        }
         sg->pass_substate = SV_PASS_TRANSMUTE;
-        break;
-    }
-
-    case SV_PASS_TRANSMUTE_WAIT: {
-        /* Check if all humans have confirmed */
-        bool all_confirmed = true;
-        for (int p = 0; p < NUM_PLAYERS; p++) {
-            if (!sg->transmute_confirmed[p]) {
-                all_confirmed = false;
-                break;
-            }
-        }
-        if (all_confirmed) {
-            sg->pass_substate = SV_PASS_TRANSMUTE;
-        }
         break;
     }
 
@@ -669,6 +651,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         sg->pass_done = true;
 
         /* Transition to playing */
+        DBG(DBG_SERVER, "phase: PASSING -> PLAYING round=%d", gs->round_number);
         gs->phase = PHASE_PLAYING;
         sg->pass_substate = SV_PASS_IDLE;
         sg->play_substate = SV_PLAY_WAIT_TURN;
@@ -925,6 +908,9 @@ static void sv_resolve_trick(ServerGame *sg)
                    sv_player_name(winner), points);
         }
     }
+
+    DBG(DBG_SERVER, "trick resolved: winner=%d tricks_played=%d",
+        winner, gs->tricks_played);
 
     /* Reset TTI for next trick */
     sv_reset_tti(&sg->current_tti);

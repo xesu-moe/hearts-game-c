@@ -55,8 +55,8 @@ void ai_select_pass(GameState *gs, int player_id)
     }
 }
 
-void ai_play_card(GameState *gs, RenderState *rs, Phase2State *p2,
-                  PlayPhaseState *pps, int player_id)
+bool ai_select_card(const GameState *gs, const Phase2State *p2,
+                    int player_id, Card *out)
 {
     const Hand *hand = &gs->players[player_id].hand;
     bool first_trick = (gs->tricks_played == 0);
@@ -83,10 +83,19 @@ void ai_play_card(GameState *gs, RenderState *rs, Phase2State *p2,
             valid = game_state_is_valid_play(gs, player_id, hand->cards[i]);
         }
         if (valid) {
-            play_card_with_transmute(gs, rs, p2, pps, player_id,
-                                     hand->cards[i]);
-            return;
+            *out = hand->cards[i];
+            return true;
         }
+    }
+    return false;
+}
+
+void ai_play_card(GameState *gs, RenderState *rs, Phase2State *p2,
+                  PlayPhaseState *pps, int player_id)
+{
+    Card card;
+    if (ai_select_card(gs, p2, player_id, &card)) {
+        play_card_with_transmute(gs, rs, p2, pps, player_id, card);
     }
 }
 

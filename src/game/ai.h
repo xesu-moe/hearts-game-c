@@ -24,6 +24,10 @@ void ai_select_pass(GameState *gs, int player_id);
 void ai_play_card(GameState *gs, RenderState *rs, Phase2State *p2,
                   PlayPhaseState *pps, int player_id);
 
+/* AI selects first legal card without playing it. Returns true if found. */
+bool ai_select_card(const GameState *gs, const Phase2State *p2,
+                    int player_id, Card *out);
+
 /* AI picks an opponent's card to reveal (Rogue effect).
  * winner: the player who won the trick. Sets out_player and out_hand_idx. */
 void ai_rogue_choose(const GameState *gs, int winner,

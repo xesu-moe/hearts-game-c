@@ -2,9 +2,9 @@
  * @deps-implements: render.h
  * @deps-requires: render.h, online_ui.h, particle.h, anim.h, layout.h,
  *                 card_render.h, phase2/phase2_defs.h, net/lobby_client.h,
- *                 core/game_state.h (PHASE_STATS, PHASE_ONLINE_MENU, PASS_SUB_TRANSMUTE),
+ *                 core/game_state.h (PHASE_STATS, PHASE_ONLINE_MENU),
  *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-26 — Step 22.3: Added PASS_SUB_TRANSMUTE draw case
+ * @deps-last-changed: 2026-03-27 — Removed PASS_SUB_TRANSMUTE draw case
  * ============================================================ */
 
 #include "render.h"
@@ -16,6 +16,7 @@
 
 #include "card_render.h"
 #include "core/hand.h"
+#include "core/debug_log.h"
 #include "game/login_ui.h"
 #include "game/online_ui.h"
 #include "phase2/phase2_state.h"
@@ -198,7 +199,10 @@ static void sync_hands(const GameState *gs, RenderState *rs)
     if (gs->phase != PHASE_PLAYING) {
         trick = NULL;
     }
-    for (int i = 0; trick != NULL && i < trick->num_played; i++) {
+    int trick_show = trick ? trick->num_played : 0;
+    if (rs->trick_visible_count > 0 && trick_show > rs->trick_visible_count)
+        trick_show = rs->trick_visible_count;
+    for (int i = 0; trick != NULL && i < trick_show; i++) {
         int idx = alloc_card_visual(rs);
         if (idx < 0) break;
         rs->trick_visuals[i] = idx;
@@ -403,10 +407,36 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         rs->btn_online_join_submit.visible = (sub == ONLINE_SUB_JOIN_INPUT);
         rs->btn_online_join_submit.disabled = false;
 
+        /* Add AI button (visible for creator in CREATE_WAITING with empty slots) */
+        int occupied = 0;
+        if (rs->online_ui && sub == ONLINE_SUB_CREATE_WAITING) {
+            for (int i = 0; i < NET_MAX_PLAYERS; i++)
+                if (rs->online_ui->player_names[i][0] != '\0') occupied++;
+        }
+
+        rs->btn_online_add_ai.bounds = (Rectangle){
+            screen_cx - small_btn_w * 0.5f,
+            screen_cy + 125.0f * s,
+            small_btn_w, small_btn_h
+        };
+        rs->btn_online_add_ai.label = "Add AI";
+        rs->btn_online_add_ai.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_add_ai.disabled = (occupied >= NET_MAX_PLAYERS);
+
+        /* Start Game button (enabled only when all 4 seats filled) */
+        rs->btn_online_start_game.bounds = (Rectangle){
+            screen_cx - small_btn_w * 0.5f,
+            screen_cy + 175.0f * s,
+            small_btn_w, small_btn_h
+        };
+        rs->btn_online_start_game.label = "Start Game";
+        rs->btn_online_start_game.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_start_game.disabled = (occupied < NET_MAX_PLAYERS);
+
         /* Cancel button (used in multiple sub-states) */
         rs->btn_online_cancel.bounds = (Rectangle){
             screen_cx - small_btn_w * 0.5f,
-            screen_cy + 80.0f * s,
+            screen_cy + 225.0f * s,
             small_btn_w, small_btn_h
         };
         rs->btn_online_cancel.label = (sub == ONLINE_SUB_ERROR) ? "Back" : "Cancel";
@@ -421,6 +451,8 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         for (int i = 0; i < ONLINE_BTN_COUNT; i++)
             rs->online_btns[i].visible = false;
         rs->btn_online_join_submit.visible = false;
+        rs->btn_online_add_ai.visible = false;
+        rs->btn_online_start_game.visible = false;
         rs->btn_online_cancel.visible = false;
     }
 
@@ -723,6 +755,7 @@ void render_init(RenderState *rs)
     rs->layout_dirty = true;
     rs->sync_needed = true;
     rs->anim_play_player = -1;
+    rs->anim_trick_slot = -1;
 
     /* Initialize mutable layout with defaults */
     layout_recalculate(&rs->layout, 1280, 720);
@@ -757,6 +790,7 @@ void render_init(RenderState *rs)
 
     rs->pile_card_count = 0;
     rs->pile_anim_in_progress = false;
+    rs->trick_anim_in_progress = false;
 
     rs->pass_staged_count = 0;
     rs->pass_anim_in_progress = false;
@@ -789,6 +823,7 @@ void render_reset_to_menu(RenderState *rs)
     rs->pass_staged_count = 0;
     rs->pass_anim_in_progress = false;
     rs->pile_anim_in_progress = false;
+    rs->trick_anim_in_progress = false;
     rs->deal_complete = false;
     rs->card_count = 0;
     for (int i = 0; i < NUM_PLAYERS; i++)
@@ -846,7 +881,10 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
     if ((rs->phase_just_changed || rs->sync_needed) &&
         !rs->pass_anim_in_progress && !rs->pile_anim_in_progress &&
+        !rs->trick_anim_in_progress &&
         !rs->drag.active) {
+        DBG(DBG_SYNC, "sync FIRING: phase_changed=%d anim_player=%d trick_slot=%d",
+            rs->phase_just_changed, rs->anim_play_player, rs->anim_trick_slot);
         /* Clear any pending snap-back — sync rebuilds visuals */
         if (rs->drag.snap_back) {
             rs->drag.snap_back = false;
@@ -894,13 +932,36 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             sync_hands(gs, rs);
         }
 
-        /* Restore selections by matching card identity */
+        /* Restore selections by matching card identity.
+         * Online: use server-authoritative pass_selections[0].
+         * Offline: use saved visual state (server hasn't seen selections yet). */
         rs->selected_count = 0;
-        if (gs->phase == PHASE_PASSING && saved_count > 0) {
-            for (int si = 0; si < saved_count; si++) {
+        if (gs->phase == PHASE_PASSING) {
+            Card source[MAX_PASS_CARD_COUNT];
+            int source_count = 0;
+            if (rs->online) {
+                /* Use server-authoritative selections if available;
+                 * otherwise preserve local visual selections (player
+                 * hasn't confirmed yet, so server has no data). */
+                for (int i = 0; i < gs->pass_card_count && i < MAX_PASS_CARD_COUNT; i++) {
+                    if (!card_is_none(gs->pass_selections[0][i]))
+                        source[source_count++] = gs->pass_selections[0][i];
+                }
+                if (source_count == 0) {
+                    source_count = saved_count;
+                    for (int i = 0; i < saved_count; i++)
+                        source[i] = saved_selected[i];
+                }
+            } else {
+                source_count = saved_count;
+                for (int i = 0; i < saved_count; i++)
+                    source[i] = saved_selected[i];
+            }
+            for (int si = 0; si < source_count; si++) {
                 for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
                     int idx = rs->hand_visuals[HUMAN_PLAYER][i];
-                    if (card_equals(rs->cards[idx].card, saved_selected[si])) {
+                    if (idx >= 0 && idx < rs->card_count &&
+                        card_equals(rs->cards[idx].card, source[si])) {
                         rs->selected_indices[rs->selected_count++] = idx;
                         rs->cards[idx].selected = true;
                         break;
@@ -936,9 +997,15 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             }
         }
 
-        /* Animate the last trick card from hand/release position to trick slot */
+        /* Animate a trick card from hand/release position to trick slot.
+         * anim_trick_slot selects the specific card (online: sequential),
+         * falling back to the last trick visual (offline: one at a time). */
+        int anim_slot = rs->anim_trick_slot;
+        rs->anim_trick_slot = -1;
+        if (anim_slot < 0 || anim_slot >= rs->trick_visual_count)
+            anim_slot = rs->trick_visual_count - 1;
         if (anim_player >= 0 && rs->trick_visual_count > 0) {
-            int trick_idx = rs->trick_visuals[rs->trick_visual_count - 1];
+            int trick_idx = rs->trick_visuals[anim_slot];
             CardVisual *cv = &rs->cards[trick_idx];
 
             Vector2 start_pos;
@@ -988,8 +1055,16 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                                     EASE_OUT_QUAD);
                 }
             }
+
+            /* Block further syncs while this card animation plays.
+             * Set here (after animation setup) rather than in flow_update,
+             * so the sync block isn't gated before the animation is created. */
+            rs->trick_anim_in_progress = true;
+            DBG(DBG_ANIM, "trick_anim SET: player=%d slot=%d",
+                anim_player, rs->anim_trick_slot);
         }
 
+        DBG(DBG_SYNC, "sync_needed CLEARED");
         rs->sync_needed = false;
     }
 
@@ -1343,6 +1418,14 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         rs->btn_online_join_submit.hovered =
             rs->btn_online_join_submit.visible &&
             CheckCollisionPointRec(mouse, rs->btn_online_join_submit.bounds);
+        rs->btn_online_add_ai.hovered =
+            rs->btn_online_add_ai.visible &&
+            !rs->btn_online_add_ai.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_add_ai.bounds);
+        rs->btn_online_start_game.hovered =
+            rs->btn_online_start_game.visible &&
+            !rs->btn_online_start_game.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_start_game.bounds);
         rs->btn_online_cancel.hovered =
             rs->btn_online_cancel.visible &&
             CheckCollisionPointRec(mouse, rs->btn_online_cancel.bounds);
@@ -1814,7 +1897,11 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         for (int i = 0; i < NET_MAX_PLAYERS; i++) {
             char slot_text[48];
             Color slot_color;
-            if (oui->player_names[i][0] != '\0') {
+            if (oui->slot_is_ai[i]) {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: %s (AI)",
+                         i + 1, oui->player_names[i]);
+                slot_color = SKYBLUE;
+            } else if (oui->player_names[i][0] != '\0') {
                 snprintf(slot_text, sizeof(slot_text), "Seat %d: %s",
                          i + 1, oui->player_names[i]);
                 slot_color = WHITE;
@@ -1842,6 +1929,8 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         DrawText(waiting, (int)(cx - (float)ww * 0.5f),
                  (int)(slot_y + 36.0f * s), wait_size, GRAY);
 
+        draw_button(&rs->btn_online_add_ai, s);
+        draw_button(&rs->btn_online_start_game, s);
         draw_button(&rs->btn_online_cancel, s);
         break;
     }
@@ -2289,8 +2378,7 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
         /* No UI overlay during pass animation — just show cards */
         break;
 
-    case PASS_SUB_TRANSMUTE:
-        /* TODO: transmutation selection UI for online play */
+    default:
         break;
     }
 
@@ -2901,8 +2989,7 @@ static void draw_pause_overlay(const RenderState *rs)
                   (Color){0, 0, 0, 200});
 
     if (rs->pause_state == PAUSE_MENU) {
-        /* "PAUSED" title */
-        const char *title = "PAUSED";
+        const char *title = rs->online ? "MENU" : "PAUSED";
         int title_size = (int)(48.0f * s);
         int tw = MeasureText(title, title_size);
         float title_y = rs->pause_btns[0].bounds.y - 60.0f * s;

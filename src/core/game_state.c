@@ -40,6 +40,7 @@ bool game_state_start_game(GameState *gs)
 void game_state_reset_to_menu(GameState *gs)
 {
     game_state_init(gs);
+    gs->phase = PHASE_MENU;
 }
 
 int game_state_find_two_of_clubs(const GameState *gs)

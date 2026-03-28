@@ -1,7 +1,7 @@
 {
 	"window_mode":	"windowed",
 	"resolution_index":	3,
-	"fps_index":	3,
+	"fps_index":	1,
 	"anim_speed":	"fast",
 	"ai_speed":	"fast",
 	"auto_sort_received":	false,

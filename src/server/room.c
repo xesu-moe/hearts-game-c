@@ -4,11 +4,11 @@
  *                 room_update_timers, room_reconnect, NET_MAX_NAME_LEN),
  *                 server/server_game.h (server_game_init, server_game_start,
  *                 server_game_tick, server_game_is_over),
- *                 server/lobby_link.h (lobby_link_send_result),
+ *                 server/lobby_link.h (lobby_link_send_result, lobby_link_notify_room_destroyed),
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN),
  *                 core/game_state.h (game_state_get_winners),
  *                 core/clock.h (FIXED_DT), string.h, fcntl.h, unistd.h
- * @deps-last-changed: 2026-03-26 — Step 20.2: Extracted finished room cleanup loop into room_cleanup_finished()
+ * @deps-last-changed: 2026-03-27 — Step 23: Calls lobby_link_notify_room_destroyed() when all players leave waiting room
  * ============================================================ */
 
 #include "room.h"
@@ -227,20 +227,6 @@ int room_join(int room_index, int conn_id,
     printf("Room %s: player joined seat %d (conn %d, connected: %d/%d)\n",
            room->code, seat, conn_id, room->connected_count, NET_MAX_PLAYERS);
 
-    /* Auto-start when all 4 slots are filled */
-    if (room->connected_count == NET_MAX_PLAYERS) {
-        server_game_start(&room->game);
-
-        /* Override is_human for all connected players */
-        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
-            room->game.gs.players[i].is_human =
-                (room->slots[i].status == SLOT_CONNECTED);
-        }
-
-        room->status = ROOM_PLAYING;
-        printf("Room %s: all players joined, game starting\n", room->code);
-    }
-
     return seat;
 }
 
@@ -266,6 +252,7 @@ void room_leave(int room_index, int seat)
 
         if (room->connected_count == 0) {
             printf("Room %s: all players left, destroying\n", room->code);
+            lobby_link_notify_room_destroyed(room->code);
             room_destroy(room_index);
         }
     } else if (room->status == ROOM_PLAYING) {
@@ -282,6 +269,74 @@ void room_leave(int room_index, int seat)
         slot->disconnect_timer = -1.0f; /* no timer — room is ending */
         room->connected_count--;
     }
+}
+
+int room_add_ai(int room_index)
+{
+    if (room_index < 0 || room_index >= MAX_ROOMS) return -1;
+
+    Room *room = &g_rooms[room_index];
+    if (room->status != ROOM_WAITING) return -1;
+
+    /* Find first empty slot */
+    int seat = -1;
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (room->slots[i].status == SLOT_EMPTY) {
+            seat = i;
+            break;
+        }
+    }
+    if (seat < 0) return -1;
+
+    /* Count existing AI for naming */
+    int ai_count = 0;
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (room->slots[i].status == SLOT_AI) ai_count++;
+    }
+
+    /* Fill slot as AI */
+    PlayerSlot *slot = &room->slots[seat];
+    slot->status = SLOT_AI;
+    slot->conn_id = -1;
+    slot->disconnect_timer = -1.0f;
+    memset(slot->auth_token, 0, NET_AUTH_TOKEN_LEN);
+    memset(slot->lobby_token, 0, NET_AUTH_TOKEN_LEN);
+    snprintf(slot->name, NET_MAX_NAME_LEN, "Bot %d", ai_count + 1);
+
+    /* Count total occupied slots for auto-start */
+    int occupied = 0;
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (room->slots[i].status != SLOT_EMPTY) occupied++;
+    }
+
+    printf("Room %s: AI added seat %d (%s), occupied: %d/%d\n",
+           room->code, seat, slot->name, occupied, NET_MAX_PLAYERS);
+
+    return seat;
+}
+
+int room_start(int room_index)
+{
+    if (room_index < 0 || room_index >= MAX_ROOMS) return -1;
+
+    Room *room = &g_rooms[room_index];
+    if (room->status != ROOM_WAITING) return -1;
+
+    /* All 4 slots must be filled */
+    int occupied = 0;
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        if (room->slots[i].status != SLOT_EMPTY) occupied++;
+    }
+    if (occupied < NET_MAX_PLAYERS) return -1;
+
+    server_game_start(&room->game);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        room->game.gs.players[i].is_human =
+            (room->slots[i].status == SLOT_CONNECTED);
+    }
+    room->status = ROOM_PLAYING;
+    printf("Room %s: game started by creator\n", room->code);
+    return 0;
 }
 
 /* ================================================================
@@ -462,6 +517,7 @@ int room_reconnect(int room_index, int conn_id,
         room->game.gs.players[s].is_human = true;
         room->connected_count++;
         room->abandon_timer = 0.0f;
+        room->force_broadcast = true;
 
         printf("Room %s: seat %d reconnected (conn %d)\n",
                room->code, s, conn_id);

@@ -54,6 +54,7 @@ typedef struct OnlineUIState {
     /* Player slots in waiting room (populated from NET_MSG_ROOM_STATUS) */
     int  player_count;
     char player_names[NET_MAX_PLAYERS][NET_MAX_NAME_LEN];
+    bool slot_is_ai[NET_MAX_PLAYERS];
 
     /* Server connection info (from ROOM_ASSIGNED) */
     char     server_addr[NET_ADDR_LEN];

@@ -264,6 +264,8 @@ typedef struct RenderState {
     CardVisual pile_cards[MAX_PILE_CARDS];
     int        pile_card_count;
     bool       pile_anim_in_progress;  /* blocks sync_needed during pile collect */
+    bool       trick_anim_in_progress; /* blocks sync during online trick animations */
+    int        trick_visible_count;   /* caps trick cards shown by sync_hands (flow controls) */
 
     /* Pass animation staging */
     PassStagedCard pass_staged[MAX_PASS_STAGED];
@@ -273,6 +275,7 @@ typedef struct RenderState {
 
     /* Pause overlay */
     PauseState pause_state;
+    bool       online;      /* true when connected — menu doesn't pause game */
     UIButton   pause_btns[PAUSE_BTN_COUNT];     /* Continue, Settings, Return to Menu, Quit */
     UIButton   pause_confirm_yes;
     UIButton   pause_confirm_no;
@@ -304,6 +307,7 @@ typedef struct RenderState {
     /* Flow-driven sync control */
     bool sync_needed;      /* when true, sync_hands() rebuilds visuals */
     int  anim_play_player; /* player whose last card should animate (-1 = none) */
+    int  anim_trick_slot;  /* trick slot to animate (-1 = use last trick visual) */
 
     /* Deal animation */
     bool deal_complete;    /* set by render_update when all deal animations finish */
@@ -320,6 +324,8 @@ typedef struct RenderState {
 #define ONLINE_BTN_COUNT 4 /* Create Room, Join Room, Quick Match, Back */
     UIButton online_btns[ONLINE_BTN_COUNT];
     UIButton btn_online_join_submit;
+    UIButton btn_online_add_ai;
+    UIButton btn_online_start_game;
     UIButton btn_online_cancel;
     const struct OnlineUIState *online_ui; /* set by main.c, read by render */
 

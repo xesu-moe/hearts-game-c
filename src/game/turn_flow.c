@@ -18,12 +18,31 @@
 #include <stdlib.h>
 
 #include "ai.h"
+#include "core/input_cmd.h"
 #include "core/trick.h"
+#include "core/debug_log.h"
 #include "render/render.h"
 #include "render/layout.h"
 #include "phase2/contract_logic.h"
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
+
+#ifdef DEBUG
+static const char *flow_step_name(FlowStep s) {
+    static const char *names[] = {
+        "IDLE","WAIT_HUMAN","AI_THINK","CARD_ANIM","TRICK_DISP",
+        "FOG_REVEAL","PILE_ANIM","COLLECTING","ROGUE_CHOOSE",
+        "ROGUE_TO_CENTER","ROGUE_REVEAL","ROGUE_BACK",
+        "DUEL_PICK_OPP","DUEL_TO_CENTER","DUEL_PICK_OWN",
+        "DUEL_EXCHANGE","DUEL_RETURN","BETWEEN_TRICKS"
+    };
+    return (s >= 0 && s <= FLOW_BETWEEN_TRICKS) ? names[s] : "???";
+}
+#define FLOW_DBG(old, flow) \
+    DBG(DBG_FLOW, "%s -> %s timer=%.3f", flow_step_name(old), flow_step_name((flow)->step), (flow)->timer)
+#else
+#define FLOW_DBG(old, flow) ((void)0)
+#endif
 
 /* Map player_id to screen position (matches render.c player_screen_pos) */
 static const PlayerPosition pos_map[NUM_PLAYERS] = {
@@ -36,12 +55,17 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
                                      RenderState *rs, Phase2State *p2,
                                      PlayPhaseState *pps, float anim_mult)
 {
+    /* Use saved trick data (online) if available, else live GameState */
+    const Trick *trick = flow->has_saved_trick
+                             ? &flow->saved_trick : &gs->current_trick;
+    const TrickTransmuteInfo *tti = flow->has_saved_trick
+                                        ? &flow->saved_tti : &pps->current_tti;
+
     int winner;
-    if (p2->enabled && trick_is_complete(&gs->current_trick)) {
-        winner = transmute_trick_get_winner(&gs->current_trick,
-                                            &pps->current_tti, p2);
+    if (p2->enabled && trick_is_complete(trick)) {
+        winner = transmute_trick_get_winner(trick, tti, p2);
     } else {
-        winner = trick_get_winner(&gs->current_trick);
+        winner = trick_get_winner(trick);
     }
 
     if (winner >= 0 && rs->trick_visual_count > 0) {
@@ -51,9 +75,9 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
         int pile_player = winner;
         if (p2->enabled) {
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                if (pps->current_tti.resolved_effects[i] ==
+                if (tti->resolved_effects[i] ==
                     TEFFECT_PARASITE_REDIRECT_POINTS) {
-                    int pp = gs->current_trick.player_ids[i];
+                    int pp = trick->player_ids[i];
                     if (pp >= 0 && pp < NUM_PLAYERS) {
                         pile_player = pp;
                         break; /* First Parasite gets pile visuals */
@@ -68,10 +92,10 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
         bool has_inversion = false;
         if (p2->enabled) {
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                if (pps->current_tti.resolved_effects[i] ==
+                if (tti->resolved_effects[i] ==
                     TEFFECT_BOUNTY_REDIRECT_QOS)
                     has_bounty = true;
-                if (pps->current_tti.resolved_effects[i] ==
+                if (tti->resolved_effects[i] ==
                     TEFFECT_INVERSION_NEGATE_POINTS)
                     has_inversion = true;
             }
@@ -84,10 +108,10 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
 
             /* Per-card pile owner: Bounty redirects Q♠ to its player */
             int card_pile_player = pile_player;
-            if (has_bounty && i < gs->current_trick.num_played &&
-                gs->current_trick.cards[i].suit == SUIT_SPADES &&
-                gs->current_trick.cards[i].rank == RANK_Q) {
-                int qp = gs->current_trick.player_ids[i];
+            if (has_bounty && i < trick->num_played &&
+                trick->cards[i].suit == SUIT_SPADES &&
+                trick->cards[i].rank == RANK_Q) {
+                int qp = trick->player_ids[i];
                 if (qp >= 0 && qp < NUM_PLAYERS)
                     card_pile_player = qp;
             }
@@ -101,7 +125,7 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
             *pv = rs->cards[src_idx];
             pv->pile_owner = card_pile_player;
             if (p2->enabled)
-                pv->transmute_id = pps->current_tti.transmutation_ids[i];
+                pv->transmute_id = tti->transmutation_ids[i];
             pv->face_up = false;
             pv->fog_mode = 0;
             pv->fog_reveal_t = 0.0f;
@@ -113,8 +137,8 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
                             p2->shield_tricks_remaining[card_pile_player] > 0);
             /* Down arrow on hearts only (QoS also negated but no arrow by design) */
             pv->inverted = (has_inversion &&
-                            i < gs->current_trick.num_played &&
-                            gs->current_trick.cards[i].suit == SUIT_HEARTS);
+                            i < trick->num_played &&
+                            trick->cards[i].suit == SUIT_HEARTS);
 
             pv->start = pv->position;
             pv->start_rotation = pv->rotation;
@@ -271,14 +295,23 @@ void flow_init(TurnFlow *flow)
     flow->duel_staged_cv_idx = -1;
     flow->duel_own_cv_idx = -1;
     flow->duel_ai_decided = false;
+    flow->has_saved_trick = false;
 }
 
 void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                  Phase2State *p2, GameSettings *settings,
                  PlayPhaseState *pps, float dt, bool online)
 {
+#ifdef DEBUG
+    FlowStep old_step = flow->step;
+#endif
+
     if (gs->phase != PHASE_PLAYING) {
+        rs->trick_anim_in_progress = false;
+        rs->trick_visible_count = 0;
+        flow->has_saved_trick = false;
         flow->step = FLOW_IDLE;
+        if (old_step != FLOW_IDLE) { FLOW_DBG(old_step, flow); }
         return;
     }
 
@@ -287,10 +320,15 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
     switch (flow->step) {
     case FLOW_IDLE: {
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
-        if (trick_is_complete(&gs->current_trick)) {
+        /* Offline: complete trick → straight to TRICK_DISPLAY.
+         * Online: fall through to card-by-card detection so each card
+         * gets its own toss animation via the render sync block. */
+        if (!online && trick_is_complete(&gs->current_trick)) {
+            rs->trick_visible_count = CARDS_PER_TRICK;
             flow->step = FLOW_TRICK_DISPLAY;
             flow->timer = FLOW_TRICK_DISPLAY_TIME * anim_mult;
             rs->last_trick_winner = -1;
+
             return;
         }
 
@@ -299,13 +337,42 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             flow->hearts_broken_at_trick_start = gs->hearts_broken;
 
         if (online) {
-            /* Online: only enter WAITING_FOR_HUMAN when it's our turn.
-             * Server handles AI plays — client detects new cards in trick
-             * via state_recv and triggers FLOW_CARD_ANIMATING from there. */
-            int current = game_state_current_player(gs);
-            if (current == 0) {
-                flow->step = FLOW_WAITING_FOR_HUMAN;
-                flow->prev_trick_count = gs->current_trick.num_played;
+            /* Detect trick count regression: server advanced to a new trick
+             * while we still had a stale prev_trick_count from the old one.
+             * Also clear saved_trick so stale data doesn't block detection. */
+            if (gs->current_trick.num_played < flow->prev_trick_count) {
+                DBG(DBG_DETECT, "trick regression: num_played=%d < prev=%d, resetting",
+                    gs->current_trick.num_played, flow->prev_trick_count);
+                flow->prev_trick_count = 0;
+                flow->has_saved_trick = false;
+            }
+
+            /* Detect new cards from server state updates and animate them */
+            if (gs->current_trick.num_played > flow->prev_trick_count) {
+                int play_idx = flow->prev_trick_count;
+                int who = gs->current_trick.player_ids[play_idx];
+                DBG(DBG_DETECT, "card IDLE: who=%d slot=%d prev=%d num_played=%d",
+                    who, play_idx, flow->prev_trick_count, gs->current_trick.num_played);
+                /* Save trick data so it survives server state overwrites */
+                flow->saved_trick = gs->current_trick;
+                flow->saved_tti = pps->current_tti;
+                flow->has_saved_trick = true;
+                rs->anim_play_player = (who >= 0) ? who : -1;
+                rs->anim_trick_slot = play_idx;
+                rs->trick_visible_count = play_idx + 1;
+                rs->sync_needed = true;
+                flow->prev_trick_count = play_idx + 1;
+                flow->step = FLOW_CARD_ANIMATING;
+                flow->timer = FLOW_CARD_ANIM_TIME * anim_mult;
+
+            } else {
+                int current = game_state_current_player(gs);
+                if (current == 0) {
+                    flow->step = FLOW_WAITING_FOR_HUMAN;
+                    flow->prev_trick_count = gs->current_trick.num_played;
+                    flow->turn_timer = FLOW_TURN_TIME_LIMIT;
+    
+                }
             }
         } else {
             int current = game_state_current_player(gs);
@@ -324,19 +391,44 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_WAITING_FOR_HUMAN: {
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
-        if (!online)
-            flow->turn_timer -= dt;
+        flow->turn_timer -= dt;
 
-        if (!online && flow->turn_timer <= 0.0f) {
+        if (flow->turn_timer <= 0.0f) {
             render_cancel_drag(rs);
-            ai_play_card(gs, rs, p2, pps, 0);
+            if (online) {
+                /* Timeout: pick a valid card and send to server */
+                Card card;
+                if (ai_select_card(gs, p2, 0, &card)) {
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_PLAY_CARD,
+                        .source_player = 0,
+                        .card = { .card = card },
+                    });
+                }
+                flow->turn_timer = FLOW_TURN_TIME_LIMIT; /* prevent re-fire */
+            } else {
+                ai_play_card(gs, rs, p2, pps, 0);
+            }
         }
 
         if (gs->current_trick.num_played > flow->prev_trick_count) {
+            int play_idx = flow->prev_trick_count;
+            DBG(DBG_DETECT, "card WAIT_HUMAN: slot=%d prev=%d num_played=%d",
+                play_idx, flow->prev_trick_count, gs->current_trick.num_played);
+            if (online) {
+                /* Save trick data so it survives server state overwrites */
+                flow->saved_trick = gs->current_trick;
+                flow->saved_tti = pps->current_tti;
+                flow->has_saved_trick = true;
+            }
             rs->sync_needed = true;
-            rs->anim_play_player = 0;
+            rs->anim_play_player = gs->current_trick.player_ids[play_idx];
+            rs->anim_trick_slot = play_idx;
+            rs->trick_visible_count = play_idx + 1; /* show only up to card being animated */
+            flow->prev_trick_count = play_idx + 1;
             flow->step = FLOW_CARD_ANIMATING;
             flow->timer = FLOW_CARD_ANIM_TIME * anim_mult;
+
         }
         break;
     }
@@ -367,7 +459,38 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_CARD_ANIMATING:
         if (flow->timer <= 0.0f) {
-            flow->step = FLOW_IDLE;
+            if (online) {
+                int total = flow->has_saved_trick
+                                ? flow->saved_trick.num_played
+                                : gs->current_trick.num_played;
+                DBG(DBG_DETECT, "card_anim done: prev=%d total=%d saved=%d",
+                    flow->prev_trick_count, total, flow->has_saved_trick);
+                if (flow->prev_trick_count < total) {
+                    rs->trick_anim_in_progress = false;
+                    flow->step = FLOW_IDLE;
+    
+                } else if (total >= CARDS_PER_TRICK) {
+                    if (!flow->has_saved_trick) {
+                        flow->saved_trick = gs->current_trick;
+                        flow->saved_tti = pps->current_tti;
+                        flow->has_saved_trick = true;
+                    }
+                    rs->trick_visible_count = CARDS_PER_TRICK;
+                    flow->step = FLOW_TRICK_DISPLAY;
+                    flow->timer = FLOW_TRICK_DISPLAY_TIME *
+                                  settings_anim_multiplier(settings->anim_speed);
+                    rs->last_trick_winner = -1;
+    
+                } else {
+                    rs->trick_anim_in_progress = false;
+                    flow->step = FLOW_IDLE;
+    
+                }
+            } else {
+                rs->trick_anim_in_progress = false;
+                flow->step = FLOW_IDLE;
+
+            }
         }
         break;
 
@@ -387,10 +510,12 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             if (has_fog) {
                 flow->step = FLOW_FOG_REVEAL;
                 flow->timer = FLOW_FOG_REVEAL_TIME * anim_mult;
+
                 break;
             }
 
             trick_to_pile_transition(flow, gs, rs, p2, pps, anim_mult);
+
         }
         break;
     }
@@ -425,10 +550,12 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
         if (flow->timer <= 0.0f) {
             /* Announce hidden transmutation effects after fog reveal */
+            const TrickTransmuteInfo *tti = flow->has_saved_trick
+                ? &flow->saved_tti : &pps->current_tti;
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                if (pps->current_tti.fogged[i] &&
-                    pps->current_tti.transmutation_ids[i] >= 0) {
-                    int tid = pps->current_tti.transmutation_ids[i];
+                if (tti->fogged[i] &&
+                    tti->transmutation_ids[i] >= 0) {
+                    int tid = tti->transmutation_ids[i];
                     const TransmutationDef *tdef = phase2_get_transmutation(tid);
                     /* Skip pure fog (no hidden effect to reveal) */
                     if (tdef && tdef->effect != TEFFECT_FOG_HIDDEN) {
@@ -440,6 +567,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 }
             }
             trick_to_pile_transition(flow, gs, rs, p2, pps, anim_mult);
+
         }
         break;
     }
@@ -450,6 +578,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             rs->pile_anim_in_progress = false;
             flow->step = FLOW_TRICK_COLLECTING;
             flow->timer = FLOW_TRICK_COLLECT_TIME * anim_mult;
+
         }
         break;
     }
@@ -463,6 +592,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 flow->step = FLOW_BETWEEN_TRICKS;
                 flow->timer = FLOW_BETWEEN_TRICKS_TIME *
                               settings_anim_multiplier(settings->anim_speed);
+
                 break;
             }
             if (p2->enabled && trick_is_complete(&gs->current_trick)) {
@@ -1036,8 +1166,26 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_BETWEEN_TRICKS:
         if (flow->timer <= 0.0f) {
+            rs->trick_anim_in_progress = false;
+            flow->has_saved_trick = false;
+            /* Set to current num_played (not 0) to avoid re-detecting
+             * stale trick cards left over from deferred state updates.
+             * The regression detector (above) handles the reset when
+             * fresh state arrives with a lower num_played. */
+            flow->prev_trick_count = gs->current_trick.num_played;
+            rs->trick_visible_count = 0; /* reset cap — sync shows current state */
+            rs->sync_needed = true; /* Re-sync now that trick data is unprotected */
             flow->step = FLOW_IDLE;
+
         }
         break;
     }
+
+#ifdef DEBUG
+    if (flow->step != old_step) {
+        DBG(DBG_FLOW, "%s -> %s timer=%.3f prev_trick=%d",
+            flow_step_name(old_step), flow_step_name(flow->step),
+            flow->timer, flow->prev_trick_count);
+    }
+#endif
 }

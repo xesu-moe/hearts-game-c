@@ -50,6 +50,9 @@ typedef struct TurnFlow {
     float    turn_timer;
     int      animating_player;
     int      prev_trick_count;
+    Trick              saved_trick;     /* snapshot for online pile transition */
+    TrickTransmuteInfo saved_tti;
+    bool               has_saved_trick;
     bool     hearts_broken_at_trick_start;
     int      rogue_winner;          /* player who won the Rogue trick, -1 = none */
     int      rogue_reveal_player;   /* opponent whose card is being revealed, -1 = none */
@@ -67,7 +70,7 @@ typedef struct TurnFlow {
 
 #define FLOW_TURN_TIME_LIMIT   30.0f
 #define FLOW_AI_THINK_TIME     0.4f
-#define FLOW_CARD_ANIM_TIME    0.25f
+#define FLOW_CARD_ANIM_TIME    0.42f  /* Must exceed ANIM_TOSS_DURATION (0.35) + max jitter (0.06) */
 #define FLOW_TRICK_DISPLAY_TIME 1.0f
 #define FLOW_PILE_ANIM_TIME     0.4f
 #define FLOW_TRICK_COLLECT_TIME 0.3f

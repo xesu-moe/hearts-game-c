@@ -64,7 +64,20 @@ void process_input(GameState *gs, RenderState *rs,
                 else if (board_dist < TOSS_DROP_RADIUS) mode = TOSS_DROP;
                 else                                    mode = TOSS_CANCEL;
 
+                /* Validate card before sending — reject stale/garbage visuals */
                 if (mode != TOSS_CANCEL) {
+                    Card play_card = rs->cards[dvi].card;
+                    if ((int)play_card.suit < 0 || (int)play_card.suit >= SUIT_COUNT ||
+                        (int)play_card.rank < 0 || (int)play_card.rank >= RANK_COUNT ||
+                        !hand_contains(&gs->players[0].hand, play_card)) {
+                        mode = TOSS_CANCEL;
+                        rs->sync_needed = true;
+                    }
+                }
+
+                if (mode != TOSS_CANCEL) {
+                    Card play_card = rs->cards[dvi].card;
+
                     /* Commit reorder before playing */
                     render_commit_hand_reorder(gs, rs, p2);
 
@@ -78,7 +91,7 @@ void process_input(GameState *gs, RenderState *rs,
                         .source_player = 0,
                         .card = {
                             .card_index = -1,
-                            .card = rs->cards[dvi].card,
+                            .card = play_card,
                         },
                     });
                     rs->drag.card_visual_idx = -1;
@@ -98,6 +111,14 @@ void process_input(GameState *gs, RenderState *rs,
                     rs->drag.active = false;
                     rs->drag.snap_back = true;
                     render_toggle_card_selection(rs, dvi);
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_SELECT_CARD,
+                        .source_player = 0,
+                        .card = {
+                            .card_index = -1,
+                            .card = rs->cards[dvi].card,
+                        },
+                    });
                 } else {
                     /* Commit reorder and snap back */
                     render_commit_hand_reorder(gs, rs, p2);
@@ -198,6 +219,20 @@ void process_input(GameState *gs, RenderState *rs,
                     .source_player = 0,
                 });
             }
+            /* Add AI to waiting room */
+            if (render_hit_test_button(&rs->btn_online_add_ai, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_ADD_AI,
+                    .source_player = 0,
+                });
+            }
+            /* Start game (room creator) */
+            if (render_hit_test_button(&rs->btn_online_start_game, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_START,
+                    .source_player = 0,
+                });
+            }
             /* Cancel from sub-states */
             if (render_hit_test_button(&rs->btn_online_cancel, mouse)) {
                 input_cmd_push((InputCmd){
@@ -290,7 +325,7 @@ void process_input(GameState *gs, RenderState *rs,
                     input_cmd_push((InputCmd){
                         .type = INPUT_CMD_SELECT_CONTRACT,
                         .source_player = 0,
-                        .contract = { .contract_id = rs->contract_option_ids[contract_hit] },
+                        .contract = { .pair_index = contract_hit },
                     });
                 }
             } else if (pps->subphase == PASS_SUB_CARD_PASS) {
@@ -468,9 +503,9 @@ void process_input(GameState *gs, RenderState *rs,
                                 .source_player = 0,
                                 .transmute_apply = { .hand_index = hand_slot },
                             });
-                        } else {
-                            /* Drag any card; only play-drag if it's our turn and card is playable */
-                            bool play_drag = is_human_turn && rs->card_playable[hand_slot];
+                        } else if (is_human_turn) {
+                            /* Only allow drag when it's our turn */
+                            bool play_drag = rs->card_playable[hand_slot];
                             render_start_card_drag(rs, hit, hand_slot, mouse, play_drag);
                         }
                     }

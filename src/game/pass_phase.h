@@ -92,6 +92,12 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
 
 void setup_draft_ui(RenderState *rs, Phase2State *p2);
 
+/* Sync pass phase UI from server state (online mode only).
+ * Called after state_recv_apply to populate render state for the current
+ * server-driven subphase. */
+void pass_sync_online_ui(PassPhaseState *pps, GameState *gs,
+                         RenderState *rs, Phase2State *p2);
+
 /* Advance draft to next round or finalize. Called after all players pick. */
 void draft_finish_round(PassPhaseState *pps, GameState *gs,
                         RenderState *rs, Phase2State *p2);

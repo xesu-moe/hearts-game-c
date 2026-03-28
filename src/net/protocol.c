@@ -3,7 +3,7 @@
  * @deps-requires: protocol.h, core/card.h, core/input_cmd.h (INPUT_CMD_COUNT),
  *                 core/game_state.h, phase2/phase2_state.h, string.h, stdio.h,
  *                 stdint.h, stdlib.h
- * @deps-last-changed: 2026-03-26 — Step 22.5: ser/deser_login_ack elo_rating u16→u32, wire size +2 bytes
+ * @deps-last-changed: 2026-03-27 — Step 23: Added ser/deser for NET_MSG_SERVER_ROOM_DESTROYED message type
  * ============================================================ */
 
 #include "net/protocol.h"
@@ -366,7 +366,7 @@ static int deser_chat(NetMsgChat *m, const uint8_t *buf, size_t len)
 
 static int ser_room_status(const NetMsgRoomStatus *m, uint8_t *buf, size_t len)
 {
-    size_t need = 1 + NET_MAX_PLAYERS * NET_MAX_NAME_LEN + NET_MAX_PLAYERS;
+    size_t need = 1 + NET_MAX_PLAYERS * NET_MAX_NAME_LEN + NET_MAX_PLAYERS * 2;
     if (len < need)
         return -1;
     size_t off = 0;
@@ -375,12 +375,14 @@ static int ser_room_status(const NetMsgRoomStatus *m, uint8_t *buf, size_t len)
         write_bytes(buf, &off, m->player_names[i], NET_MAX_NAME_LEN);
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         write_u8(buf, &off, m->slot_occupied[i]);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        write_u8(buf, &off, m->slot_is_ai[i]);
     return (int)off;
 }
 
 static int deser_room_status(NetMsgRoomStatus *m, const uint8_t *buf, size_t len)
 {
-    size_t need = 1 + NET_MAX_PLAYERS * NET_MAX_NAME_LEN + NET_MAX_PLAYERS;
+    size_t need = 1 + NET_MAX_PLAYERS * NET_MAX_NAME_LEN + NET_MAX_PLAYERS * 2;
     if (len < need)
         return -1;
     size_t off = 0;
@@ -391,6 +393,8 @@ static int deser_room_status(NetMsgRoomStatus *m, const uint8_t *buf, size_t len
     }
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         m->slot_occupied[i] = read_u8(buf, &off);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        m->slot_is_ai[i] = read_u8(buf, &off);
     return (int)off;
 }
 
@@ -416,7 +420,7 @@ static int ser_input_cmd(const NetInputCmd *m, uint8_t *buf, size_t len)
     case INPUT_CMD_SELECT_CONTRACT:
         if (len < off + 2)
             return -1;
-        write_i16(buf, &off, m->contract.contract_id);
+        write_i16(buf, &off, m->contract.pair_index);
         break;
     case INPUT_CMD_SELECT_TRANSMUTATION:
         if (len < off + 1)
@@ -483,7 +487,7 @@ static int deser_input_cmd(NetInputCmd *m, const uint8_t *buf, size_t len)
     case INPUT_CMD_SELECT_CONTRACT:
         if (len < off + 2)
             return -1;
-        m->contract.contract_id = read_i16(buf, &off);
+        m->contract.pair_index = read_i16(buf, &off);
         break;
     case INPUT_CMD_SELECT_TRANSMUTATION:
         if (len < off + 1)
@@ -1015,6 +1019,25 @@ static int deser_server_room_created(NetMsgServerRoomCreated *m,
     return (int)off;
 }
 
+static int ser_server_room_destroyed(const NetMsgServerRoomDestroyed *m,
+                                     uint8_t *buf, size_t len)
+{
+    if (len < NET_ROOM_CODE_LEN) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->room_code, NET_ROOM_CODE_LEN);
+    return (int)off;
+}
+
+static int deser_server_room_destroyed(NetMsgServerRoomDestroyed *m,
+                                       const uint8_t *buf, size_t len)
+{
+    if (len < NET_ROOM_CODE_LEN) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->room_code, NET_ROOM_CODE_LEN);
+    m->room_code[NET_ROOM_CODE_LEN - 1] = '\0';
+    return (int)off;
+}
+
 /* --- NetPlayerView serialization (the big one) --- */
 
 static void ser_trick_view(uint8_t *buf, size_t *off, const NetTrickView *t)
@@ -1520,6 +1543,12 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
     case NET_MSG_ROOM_STATUS:
         n = ser_room_status(&msg->room_status, payload, remaining);
         break;
+    case NET_MSG_REQUEST_ADD_AI:
+        n = 0; /* no payload */
+        break;
+    case NET_MSG_REQUEST_START_GAME:
+        n = 0; /* no payload */
+        break;
 
     /* Game */
     case NET_MSG_INPUT_CMD:
@@ -1599,6 +1628,10 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
         n = ser_server_room_created(&msg->server_room_created, payload,
                                     remaining);
         break;
+    case NET_MSG_SERVER_ROOM_DESTROYED:
+        n = ser_server_room_destroyed(&msg->server_room_destroyed, payload,
+                                      remaining);
+        break;
 
     default:
         return -1;
@@ -1649,6 +1682,12 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         break;
     case NET_MSG_ROOM_STATUS:
         n = deser_room_status(&msg->room_status, payload, remaining);
+        break;
+    case NET_MSG_REQUEST_ADD_AI:
+        n = 0; /* no payload */
+        break;
+    case NET_MSG_REQUEST_START_GAME:
+        n = 0; /* no payload */
         break;
     case NET_MSG_INPUT_CMD:
         n = deser_input_cmd(&msg->input_cmd, payload, remaining);
@@ -1723,6 +1762,10 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         n = deser_server_room_created(&msg->server_room_created, payload,
                                       remaining);
         break;
+    case NET_MSG_SERVER_ROOM_DESTROYED:
+        n = deser_server_room_destroyed(&msg->server_room_destroyed, payload,
+                                        remaining);
+        break;
     default:
         return -1;
     }
@@ -1757,11 +1800,11 @@ int net_msg_write_framed(const NetMsg *msg, uint8_t *buf, size_t buf_size)
 static const bool INPUT_RELEVANT[INPUT_CMD_COUNT] = {
     [INPUT_CMD_NONE]                 = false,
     [INPUT_CMD_CONFIRM]              = true,
-    [INPUT_CMD_CANCEL]               = true,
+    [INPUT_CMD_CANCEL]               = false, /* client-only (pause menu) */
     [INPUT_CMD_SELECT_CARD]          = true,
     [INPUT_CMD_PLAY_CARD]            = true,
     [INPUT_CMD_START_GAME]           = true,
-    [INPUT_CMD_QUIT]                 = true,
+    [INPUT_CMD_QUIT]                 = false, /* client-only */
     [INPUT_CMD_CLICK]                = false, /* client-only hit-testing */
     [INPUT_CMD_SELECT_CONTRACT]      = true,
     [INPUT_CMD_SELECT_TRANSMUTATION] = true,
@@ -2007,7 +2050,7 @@ void net_input_cmd_to_local(const NetInputCmd *net, InputCmd *out)
         out->card.card = net_card_to_game(net->card.card);
         break;
     case INPUT_CMD_SELECT_CONTRACT:
-        out->contract.contract_id = (int)net->contract.contract_id;
+        out->contract.pair_index = (int)net->contract.pair_index;
         break;
     case INPUT_CMD_SELECT_TRANSMUTATION:
         out->transmute_select.inv_slot = (int)net->transmute_select.inv_slot;
@@ -2052,7 +2095,7 @@ void net_input_cmd_from_local(const InputCmd *cmd, NetInputCmd *out)
         out->card.card = net_card_from_game(cmd->card.card);
         break;
     case INPUT_CMD_SELECT_CONTRACT:
-        out->contract.contract_id = (int16_t)cmd->contract.contract_id;
+        out->contract.pair_index = (int16_t)cmd->contract.pair_index;
         break;
     case INPUT_CMD_SELECT_TRANSMUTATION:
         out->transmute_select.inv_slot = (int8_t)cmd->transmute_select.inv_slot;

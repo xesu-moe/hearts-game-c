@@ -22,7 +22,7 @@
  *                 phase2/effect.h (ActiveEffect, EffectScope,
  *                 Effect, EffectType, MAX_ACTIVE_EFFECTS),
  *                 string.h
- * @deps-last-changed: 2026-03-23 — Step 9: Initial creation
+ * @deps-last-changed: 2026-03-28 — Added defer_trick parameter
  * ============================================================ */
 
 #include "state_recv.h"
@@ -105,7 +105,7 @@ static void apply_draft_player(DraftPlayerState *dst,
  * ================================================================ */
 
 void state_recv_apply(GameState *gs, Phase2State *p2,
-                      const NetPlayerView *view)
+                      const NetPlayerView *view, bool defer_trick)
 {
     int my = view->my_seat;
 
@@ -120,7 +120,10 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
     gs->round_number   = view->round_number;
     gs->pass_direction = (PassDirection)view->pass_direction;
     gs->pass_card_count = view->pass_card_count;
-    gs->lead_player    = remap_seat(view->lead_player, my);
+    /* lead_player is deferred alongside trick data (below) to keep
+     * game_state_current_player() consistent during animations.
+     * Applying new lead_player with stale num_played produces a
+     * wrong current-player value. */
     gs->hearts_broken  = view->hearts_broken;
     gs->tricks_played  = view->tricks_played;
 
@@ -142,18 +145,23 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
     }
 
     /* ---- 4. Current trick (remapped player IDs) ---- */
-    gs->current_trick.num_played  = view->current_trick.num_played;
-    gs->current_trick.lead_player = remap_seat(view->current_trick.lead_player, my);
-    gs->current_trick.lead_suit   = (Suit)view->current_trick.lead_suit;
-    for (int i = 0; i < CARDS_PER_TRICK; i++) {
-        if (i < (int)view->current_trick.num_played) {
-            gs->current_trick.cards[i] =
-                net_card_to_game(view->current_trick.cards[i]);
-            gs->current_trick.player_ids[i] =
-                remap_seat(view->current_trick.player_ids[i], my);
-        } else {
-            gs->current_trick.cards[i] = (Card){.suit = -1, .rank = -1};
-            gs->current_trick.player_ids[i] = -1;
+    /* Skip during trick animations — the saved_trick snapshot is
+     * authoritative and overwriting here would corrupt animation state. */
+    if (!defer_trick) {
+        gs->lead_player = remap_seat(view->lead_player, my);
+        gs->current_trick.num_played  = view->current_trick.num_played;
+        gs->current_trick.lead_player = remap_seat(view->current_trick.lead_player, my);
+        gs->current_trick.lead_suit   = (Suit)view->current_trick.lead_suit;
+        for (int i = 0; i < CARDS_PER_TRICK; i++) {
+            if (i < (int)view->current_trick.num_played) {
+                gs->current_trick.cards[i] =
+                    net_card_to_game(view->current_trick.cards[i]);
+                gs->current_trick.player_ids[i] =
+                    remap_seat(view->current_trick.player_ids[i], my);
+            } else {
+                gs->current_trick.cards[i] = (Card){.suit = -1, .rank = -1};
+                gs->current_trick.player_ids[i] = -1;
+            }
         }
     }
 

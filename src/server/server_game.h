@@ -1,13 +1,13 @@
 /* ============================================================
- * @deps-exports: ServerGame (added selected_transmute_slot, transmute_confirmed),
- *                ServerPassSubstate (added SV_PASS_TRANSMUTE_WAIT),
+ * @deps-exports: ServerGame (selected_transmute_slot),
+ *                ServerPassSubstate,
  *                server_game_init(), server_game_start(),
  *                server_game_tick(), server_game_is_over(),
  *                server_game_apply_cmd()
  * @deps-requires: core/game_state.h (GameState), core/input_cmd.h (InputCmd),
  *                 phase2/phase2_state.h (Phase2State),
  *                 phase2/transmutation.h (TrickTransmuteInfo, TransmuteEffect)
- * @deps-last-changed: 2026-03-26 — Step 22.3: Added SV_PASS_TRANSMUTE_WAIT and transmutation fields
+ * @deps-last-changed: 2026-03-27 — Removed SV_PASS_TRANSMUTE_WAIT; transmutations during SV_PASS_CARD_SELECT
  * ============================================================ */
 
 #ifndef SERVER_GAME_H
@@ -33,7 +33,6 @@ typedef enum ServerPassSubstate {
     SV_PASS_CONTRACT_DRAFT,    /* Wait for humans to draft contracts */
     SV_PASS_CARD_SELECT,       /* Wait for humans to select pass cards */
     SV_PASS_EXECUTE,           /* Execute pass (instant) */
-    SV_PASS_TRANSMUTE_WAIT,    /* Wait for humans to select/apply transmutations */
     SV_PASS_TRANSMUTE,         /* Finalize transmutations (instant, AI auto-apply) */
 } ServerPassSubstate;
 
@@ -72,14 +71,14 @@ typedef struct ServerGame {
     ServerPlaySubstate  play_substate;
     int                 draft_round; /* current draft round 0..DRAFT_ROUNDS-1 */
     bool                draft_initialized; /* has draft_generate_pool been called */
+    bool                state_dirty;     /* triggers broadcast for changes invisible to detector */
 
     /* Duel target storage (between DUEL_PICK and DUEL_GIVE) */
     int                 duel_target_player;     /* opponent selected in DUEL_PICK */
     int                 duel_target_hand_index;  /* opponent card index */
 
-    /* Transmutation selection (SV_PASS_TRANSMUTE_WAIT) */
+    /* Transmutation selection (during SV_PASS_CARD_SELECT) */
     int                 selected_transmute_slot[NUM_PLAYERS]; /* inv slot, -1 = none */
-    bool                transmute_confirmed[NUM_PLAYERS];     /* player done applying */
 } ServerGame;
 
 /* ================================================================

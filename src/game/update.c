@@ -62,14 +62,16 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             continue;
         }
 
-        /* Intercept all commands while paused during in-game phases */
+        /* Handle menu commands while paused during in-game phases */
         if (rs->pause_state != PAUSE_INACTIVE && is_ingame_phase(gs->phase)) {
+            bool menu_cmd = false;
             if (cmd.type == INPUT_CMD_CANCEL) {
                 /* ESC: unpause, or back from confirmation to pause menu */
                 if (rs->pause_state == PAUSE_MENU)
                     rs->pause_state = PAUSE_INACTIVE;
                 else
                     rs->pause_state = PAUSE_MENU;
+                menu_cmd = true;
             } else if (cmd.type == INPUT_CMD_OPEN_SETTINGS) {
                 rs->settings_return_phase = gs->phase;
                 rs->settings_return_paused = true;
@@ -79,6 +81,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 rs->sync_needed = true;
                 sync_settings_values(sui, settings, rs);
                 input_cmd_queue_clear();
+                menu_cmd = true;
             } else if (cmd.type == INPUT_CMD_RETURN_TO_MENU) {
                 pps->subphase = PASS_SUB_DEALER;
                 pls->pending_transmutation = -1;
@@ -90,10 +93,15 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 game_state_reset_to_menu(gs);
                 render_reset_to_menu(rs);
                 input_cmd_queue_clear();
+                menu_cmd = true;
             } else if (cmd.type == INPUT_CMD_QUIT) {
                 *quit_requested = true;
+                menu_cmd = true;
             }
-            continue;
+            /* Offline: intercept all commands while paused.
+             * Online: only consume menu commands, let game commands through. */
+            if (menu_cmd || !rs->online)
+                continue;
         }
 
         switch (gs->phase) {
@@ -171,24 +179,20 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
 
         case PHASE_PASSING:
             if (cmd.type == INPUT_CMD_SELECT_CONTRACT && p2->enabled) {
-                int cid = cmd.contract.contract_id;
+                int pair_idx = cmd.contract.pair_index;
                 if (pps->subphase == PASS_SUB_CONTRACT &&
                     p2->round.draft.active) {
                     DraftState *draft = &p2->round.draft;
                     DraftPlayerState *ps = &draft->players[0];
 
-                    /* Find the pair index matching the clicked contract */
-                    for (int i = 0; i < ps->available_count; i++) {
-                        if (ps->available[i].contract_id == cid) {
-                            draft_pick(draft, 0, i);
-                            rs->selected_contract_idx = i;
+                    if (pair_idx >= 0 && pair_idx < ps->available_count) {
+                        draft_pick(draft, 0, pair_idx);
+                        rs->selected_contract_idx = pair_idx;
 
-                            if (draft_all_picked(draft))
-                                draft_finish_round(pps, gs, rs, p2);
-                            else
-                                setup_draft_ui(rs, p2);
-                            break;
-                        }
+                        if (draft_all_picked(draft))
+                            draft_finish_round(pps, gs, rs, p2);
+                        else
+                            setup_draft_ui(rs, p2);
                     }
                 }
             }

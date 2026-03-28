@@ -5,7 +5,7 @@
  *                 net/protocol.h (NetMsg, NetMsgType, NET_*),
  *                 net/identity.h (Identity, identity_sign),
  *                 stdio.h, string.h
- * @deps-last-changed: 2026-03-25 — Step 19: Login & Register UI
+ * @deps-last-changed: 2026-03-27 — Step 23: Added implementations of lobby_client_cancel_create() and lobby_client_cancel_join()
  * ============================================================ */
 
 #include "lobby_client.h"
@@ -367,6 +367,22 @@ void lobby_client_queue_cancel(void)
 
     g_state = LOBBY_AUTHENTICATED;
     printf("[lobby-client] Cancelled matchmaking\n");
+}
+
+void lobby_client_cancel_create(void)
+{
+    if (g_state != LOBBY_CREATING_ROOM) return;
+    g_room_assigned = false;
+    g_state = LOBBY_AUTHENTICATED;
+    printf("[lobby-client] Cancelled room creation\n");
+}
+
+void lobby_client_cancel_join(void)
+{
+    if (g_state != LOBBY_JOINING_ROOM) return;
+    g_room_assigned = false;
+    g_state = LOBBY_AUTHENTICATED;
+    printf("[lobby-client] Cancelled room join\n");
 }
 
 LobbyClientState lobby_client_state(void)
