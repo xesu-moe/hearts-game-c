@@ -15,7 +15,7 @@
  * Schema Version (via PRAGMA user_version)
  * ================================================================ */
 
-#define LOBBY_SCHEMA_VERSION 6
+#define LOBBY_SCHEMA_VERSION 7
 
 /* ================================================================
  * Migrations
@@ -106,6 +106,15 @@ static const Migration MIGRATIONS[] = {
      ");"
      "CREATE INDEX idx_game_servers_load ON game_servers(current_rooms);",
      "game_servers table"},
+
+    {7,
+     "ALTER TABLE stats ADD COLUMN moon_shots INTEGER NOT NULL DEFAULT 0;"
+     "ALTER TABLE stats ADD COLUMN qos_caught INTEGER NOT NULL DEFAULT 0;"
+     "ALTER TABLE stats ADD COLUMN contracts_fulfilled INTEGER NOT NULL DEFAULT 0;"
+     "ALTER TABLE stats ADD COLUMN perfect_rounds INTEGER NOT NULL DEFAULT 0;"
+     "ALTER TABLE stats ADD COLUMN hearts_collected INTEGER NOT NULL DEFAULT 0;"
+     "ALTER TABLE stats ADD COLUMN tricks_won INTEGER NOT NULL DEFAULT 0;",
+     "extended stats columns"},
 };
 
 #define MIGRATION_COUNT (int)(sizeof(MIGRATIONS) / sizeof(MIGRATIONS[0]))
@@ -261,6 +270,32 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
     /* ELO update (Step 21) */
     [LOBBY_STMT_UPDATE_ELO] =
         "UPDATE stats SET elo_rating = ? WHERE account_id = ?",
+    /* Stats & Leaderboard queries */
+    [LOBBY_STMT_GET_FULL_STATS] =
+        "SELECT games_played, games_won, total_score, elo_rating, "
+        "moon_shots, qos_caught, contracts_fulfilled, perfect_rounds, "
+        "hearts_collected, tricks_won "
+        "FROM stats WHERE account_id = ?",
+    [LOBBY_STMT_UPDATE_FULL_STATS] =
+        "UPDATE stats SET "
+        "moon_shots = moon_shots + ?, qos_caught = qos_caught + ?, "
+        "contracts_fulfilled = contracts_fulfilled + ?, "
+        "perfect_rounds = perfect_rounds + ?, "
+        "hearts_collected = hearts_collected + ?, "
+        "tricks_won = tricks_won + ? "
+        "WHERE account_id = ?",
+    [LOBBY_STMT_GET_LEADERBOARD] =
+        "SELECT a.username, s.elo_rating, s.games_played, s.games_won "
+        "FROM stats s JOIN accounts a ON s.account_id = a.id "
+        "ORDER BY s.elo_rating DESC LIMIT 100",
+    [LOBBY_STMT_GET_PLAYER_RANK] =
+        "SELECT COUNT(*) + 1 FROM stats "
+        "WHERE elo_rating > (SELECT elo_rating FROM stats WHERE account_id = ?)",
+    [LOBBY_STMT_GET_BEST_WORST_SCORE] =
+        "SELECT MIN(final_score), MAX(final_score) "
+        "FROM match_players WHERE account_id = ?",
+    [LOBBY_STMT_GET_AVG_PLACEMENT] =
+        "SELECT AVG(placement) FROM match_players WHERE account_id = ?",
 };
 
 static int lobbydb_prepare_all(LobbyDB *ldb)

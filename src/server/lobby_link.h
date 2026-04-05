@@ -43,14 +43,17 @@ void lobby_link_shutdown(void);
 bool lobby_link_is_connected(void);
 
 /* Report game completion to lobby. Called from room.c when game finishes.
- * Sends final scores, winners, rounds played, and player auth tokens
- * so the lobby can record match history. Silently drops if not connected. */
+ * Sends final scores, winners, rounds played, player auth tokens, and
+ * per-player stat counters so the lobby can record match history.
+ * Silently drops if not connected. */
+typedef struct ServerGame ServerGame;
 void lobby_link_send_result(const char *room_code,
                             const int16_t scores[NET_MAX_PLAYERS],
                             const uint8_t winner_seats[NET_MAX_PLAYERS],
                             int winner_count,
                             int rounds_played,
-                            const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN]);
+                            const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN],
+                            const ServerGame *sg);
 
 /* Notify lobby that a waiting room was destroyed (all players left).
  * Silently drops if not connected. */

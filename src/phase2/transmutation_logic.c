@@ -1,10 +1,10 @@
 /* ============================================================
  * @deps-implements: transmutation_logic.h
- * @deps-requires: transmutation_logic.h, transmutation.h (TransmuteEffect, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN),
- *                 phase2_defs.h (phase2_get_transmutation), phase2_state.h (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[]),
- *                 core/hand.h (hand_contains, hand_has_suit), core/trick.h, core/card.h (SUIT_HEARTS, Card, Suit),
+ * @deps-requires: transmutation_logic.h, transmutation.h (TransmuteRoundState.rogue_revealed_card, duel_revealed_card),
+ *                 phase2_defs.h, phase2_state.h (shield_tricks_remaining[], curse_force_hearts[]),
+ *                 core/hand.h (hand_contains, hand_has_suit), core/trick.h, core/card.h (SUIT_HEARTS, Card),
  *                 core/game_state.h (GameState, hearts_broken), string.h, stdio.h, stdlib.h
- * @deps-last-changed: 2026-03-22 — Removed raylib.h, replaced GetRandomValue with rand()
+ * @deps-last-changed: 2026-04-04 — Uses TransmuteRoundState rogue/duel revealed card fields for Rogue/Duel mechanics
  * ============================================================ */
 
 #include "transmutation_logic.h"
@@ -73,6 +73,14 @@ bool transmute_apply(Hand *hand, HandTransmuteState *hts,
 
     const TransmutationDef *td = phase2_get_transmutation(transmutation_id);
     if (!td) return false;
+
+    /* Restricted cards */
+    Card target = hand->cards[hand_index];
+    if (target.suit == SUIT_CLUBS && target.rank == RANK_2)
+        return false;  /* 2 of Clubs: never transmutable */
+    if (target.suit == SUIT_SPADES && target.rank == RANK_Q &&
+        td->effect != TEFFECT_FOG_HIDDEN)
+        return false;  /* Queen of Spades: fog only */
 
     bool is_fog = (td->effect == TEFFECT_FOG_HIDDEN);
     bool already_transmuted = (hts->slots[hand_index].transmutation_id >= 0);
@@ -391,7 +399,8 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     return trick_get_winner(trick);
 }
 
-int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti)
+int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti,
+                                 const Phase2State *p2)
 {
     if (!tti) return trick_count_points(trick);
 
@@ -413,6 +422,9 @@ int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *t
                 phase2_get_transmutation(tti->transmutation_ids[i]);
             if (td && td->custom_points >= 0) {
                 card_pts = td->custom_points;
+            } else if (td && td->effect == TEFFECT_MIRROR && p2) {
+                /* Mirror inherits point value from the source card */
+                card_pts = card_points(p2->last_played_transmuted_card);
             } else {
                 card_pts = card_points(trick->cards[i]);
             }
@@ -668,6 +680,12 @@ void transmute_round_state_init(TransmuteRoundState *trs)
     memset(trs, 0, sizeof(*trs));
     trs->rogue_pending_winner = -1;
     trs->duel_pending_winner = -1;
+    trs->rogue_chosen_suit = -1;
+    trs->rogue_chosen_target = -1;
+    trs->rogue_revealed_count = -1;
+    trs->duel_chosen_card_idx = -1;
+    trs->duel_chosen_target = -1;
+    trs->duel_revealed_card = (Card){-1, -1};
 }
 
 void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,
@@ -692,7 +710,7 @@ void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,
         TransmuteEffect eff = tti->resolved_effects[i];
 
         if (eff == TEFFECT_WOTT_DUPLICATE_ROUND_POINTS) {
-            p2->round.transmute_round.martyr_flags[winner] = true;
+            p2->round.transmute_round.martyr_flags[winner] += 1;
             fprintf(stderr, "TRANSMUTE: Martyr effect flagged for player %d\n",
                      winner);
         } else if (eff == TEFFECT_WOTT_REDUCE_SCORE_3) {
@@ -748,21 +766,9 @@ void transmute_apply_round_end(Phase2State *p2,
 {
     if (!p2) return;
 
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (p2->round.transmute_round.martyr_flags[i]) {
-            int dup = round_points[i];
-            round_points[i] += dup;
-            total_scores[i] += dup;
-            fprintf(stderr,
-                     "TRANSMUTE: Martyr doubles player %d round_points (%d -> %d), \n"
-                     "new total = %d",
-                     i, dup, round_points[i], total_scores[i]);
-        }
-    }
-
     /* Gatherer/Pendulum: reduce scores (floor at 0 for reductions).
      * Negative values (from Inversion flipping) add points instead.
-     * Applied after Martyr so the adjustment offsets final values. */
+     * Applied BEFORE Martyr so the multiplier applies to the adjusted value. */
     for (int i = 0; i < NUM_PLAYERS; i++) {
         int red = p2->round.transmute_round.gatherer_reduction[i];
         if (red > 0) {
@@ -782,6 +788,23 @@ void transmute_apply_round_end(Phase2State *p2,
                      "TRANSMUTE: Inverted Gatherer adds %d to player %d, \n"
                      "round = %d, total = %d",
                      -red, i, round_points[i], total_scores[i]);
+        }
+    }
+
+    /* Martyr: multiply round points by 2^count (1 martyr = x2, 2 = x4, 3 = x8).
+     * Applied AFTER Gatherer so the multiplier applies to the adjusted value. */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        int count = p2->round.transmute_round.martyr_flags[i];
+        if (count > 0) {
+            int multiplier = 1 << count; /* 2^count */
+            int original = round_points[i];
+            int added = original * (multiplier - 1);
+            round_points[i] += added;
+            total_scores[i] += added;
+            fprintf(stderr,
+                     "TRANSMUTE: Martyr x%d player %d round_points (%d -> %d), \n"
+                     "new total = %d",
+                     multiplier, i, original, round_points[i], total_scores[i]);
         }
     }
 }
@@ -840,6 +863,10 @@ void transmute_ai_apply(Hand *hand, HandTransmuteState *hts,
             Rank best_rank = 0;
             bool found = false;
             for (int i = 0; i < hand->count; i++) {
+                /* Skip restricted cards */
+                Card c = hand->cards[i];
+                if (c.suit == SUIT_CLUBS && c.rank == RANK_2) continue;
+                if (c.suit == SUIT_SPADES && c.rank == RANK_Q && !ai_is_fog) continue;
                 if (ai_is_fog) {
                     /* Fog: skip already-fogged, allow transmuted */
                     if (hts->slots[i].fogged) continue;
@@ -857,6 +884,10 @@ void transmute_ai_apply(Hand *hand, HandTransmuteState *hts,
             Rank worst_rank = RANK_A;
             bool found = false;
             for (int i = 0; i < hand->count; i++) {
+                /* Skip restricted cards */
+                Card c = hand->cards[i];
+                if (c.suit == SUIT_CLUBS && c.rank == RANK_2) continue;
+                if (c.suit == SUIT_SPADES && c.rank == RANK_Q && !ai_is_fog) continue;
                 if (ai_is_fog) {
                     if (hts->slots[i].fogged) continue;
                 } else {

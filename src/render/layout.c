@@ -196,8 +196,8 @@ Vector2 layout_pass_direction_position(const LayoutConfig *cfg)
 {
     float s = cfg->scale;
     return (Vector2){
-        cfg->board_x + cfg->board_size * 0.5f - 80.0f * s,
-        cfg->board_y + cfg->board_size * 0.5f - 130.0f * s
+        cfg->board_x + cfg->board_size * 0.5f,
+        cfg->board_y + cfg->board_size * 0.5f - 85.0f * s
     };
 }
 
@@ -208,7 +208,7 @@ Rectangle layout_confirm_button(const LayoutConfig *cfg)
     float bh = 50.0f * s;
     return (Rectangle){
         cfg->board_x + (cfg->board_size - bw) * 0.5f,
-        cfg->board_y + cfg->board_size * 0.5f + 80.0f * s,
+        cfg->board_y + cfg->board_size * 0.5f + 5.0f * s,
         bw,
         bh
     };
@@ -270,18 +270,19 @@ Vector2 layout_pass_staging_position(PlayerPosition dest_pos, int card_index,
     float fan_gap = 30.0f * s;
     float fan_offset = ((float)card_index - (float)(card_count - 1) * 0.5f) * fan_gap;
 
-    /* Position ~60% from board center toward the destination player's hand edge */
-    float extent = bsz * 0.30f;  /* distance from center */
+    /* Position from board center toward the destination player's hand edge */
+    float extent_tb = bsz * 0.18f;  /* north/south: close to center, clear of hand cards */
+    float extent_lr = bsz * 0.38f;  /* east/west distance from center */
 
     switch (dest_pos) {
     case POS_BOTTOM:
-        return (Vector2){cx + fan_offset, cy + extent - 40.0f * s};
+        return (Vector2){cx + fan_offset, cy + extent_tb};
     case POS_TOP:
-        return (Vector2){cx + fan_offset, cy - extent};
+        return (Vector2){cx + fan_offset, cy - extent_tb - 80.0f};
     case POS_LEFT:
-        return (Vector2){cx - extent, cy + fan_offset};
+        return (Vector2){cx - extent_lr, cy + fan_offset};
     case POS_RIGHT:
-        return (Vector2){cx + extent, cy + fan_offset};
+        return (Vector2){cx + extent_lr, cy + fan_offset};
     default:
         return (Vector2){cx, cy};
     }
@@ -336,11 +337,23 @@ void layout_scoring_table(const LayoutConfig *cfg, float slide_y,
                           ScoringTableLayout *out)
 {
     float s = cfg->scale;
-    out->col_w = 150.0f * s;
+    out->num_cols = 4;  /* Player | Total | Round | Cards */
     out->row_h = 80.0f * s;
-    out->num_cols = 4;  /* Player | Round | Total | Cards */
+
+    /* Per-column widths: tighter Total/Round, more room for Cards */
+    float player_w = 140.0f * s;
+    float total_w  =  80.0f * s;
+    float round_w  =  80.0f * s;
+    float cards_w  = 240.0f * s;
+    out->table_w = player_w + total_w + round_w + cards_w;
+    out->col_w = player_w;
+
     out->table_x = cfg->board_x +
-                   (cfg->board_size - out->col_w * (float)out->num_cols) * 0.5f;
+                   (cfg->board_size - out->table_w) * 0.5f;
+    out->col_total_x = out->table_x + player_w;
+    out->col_round_x = out->col_total_x + total_w;
+    out->col_cards_x = out->col_round_x + round_w;
+
     out->title_y = cfg->board_y + 100.0f * s + slide_y;
     out->header_y = cfg->board_y + 180.0f * s + slide_y;
     out->line_y = out->header_y + 28.0f * s;
@@ -356,8 +369,7 @@ Vector2 layout_scoring_card_position(int player_index, int card_index,
                                      const ScoringTableLayout *tbl)
 {
     float s = cfg->scale;
-    float card_area_x = tbl->table_x +
-                        tbl->col_w * (float)(tbl->num_cols - 1) - 10.0f * s;
+    float card_area_x = tbl->col_cards_x - 10.0f * s;
     float row_y = layout_scoring_row_y(player_index, tbl);
 
     /* Small cards at 0.5x scale, overlapping by ~60% of card width */

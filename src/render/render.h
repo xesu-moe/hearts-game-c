@@ -2,10 +2,13 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: struct RenderState (stat_elo: int32_t, stat_games_played: uint32_t, stat_games_won: uint32_t)
+ * @deps-exports: struct DragState, struct RenderState (suit_hover_active,
+ *                suit_indicator_rects[], suit_hover_idx, suit_border_t,
+ *                rogue_target_player, staged_rogue_cv_count, staged_rogue_cv_indices[], mirror_source_tid)
  * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/game_state.h
- * @deps-used-by: render.c, game/update.c, game/process_input.c, main.c
- * @deps-last-changed: 2026-03-26 — Step 22.5: RenderState.stat_elo uint16_t→int32_t
+ * @deps-used-by: render.c, game/process_input.c, game/update.c, game/info_sync.c,
+ *                game/play_phase.c, game/phase_transitions.c, main.c
+ * @deps-last-changed: 2026-04-04 — Added mirror_source_tid field to RenderState for Mirror transmutation sprite morphing
  * ============================================================ */
 
 #include <stdbool.h>
@@ -22,21 +25,29 @@
 /* Forward declaration — full definition in phase2/phase2_state.h */
 struct Phase2State;
 
+#include "net/lobby_client.h"
+
+/* Stats screen tabs */
+#define STATS_TAB_COUNT 2
+typedef enum StatsTab {
+    STATS_TAB_GAME_STATS   = 0,
+    STATS_TAB_LEADERBOARDS = 1,
+} StatsTab;
+
 /* ---- Constants ---- */
 
 #include "card_dimens.h"
-#define MENU_ITEM_COUNT  6
+#define MENU_ITEM_COUNT  5
 #define MAX_PILE_CARDS   52  /* 13 tricks x 4 cards */
 
 /* ---- Menu Items ---- */
 
 typedef enum MenuItem {
-    MENU_PLAY_ONLINE   = 0,
-    MENU_PLAY_OFFLINE  = 1,
-    MENU_DECK_BUILDING = 2,
-    MENU_STATISTICS    = 3,
-    MENU_SETTINGS      = 4,
-    MENU_EXIT          = 5,
+    MENU_PLAY          = 0,
+    MENU_STATISTICS    = 1,
+    MENU_ACHIEVEMENTS  = 2,
+    MENU_SETTINGS      = 3,
+    MENU_EXIT          = 4,
 } MenuItem;
 
 /* ---- UI Button ---- */
@@ -51,8 +62,8 @@ typedef struct UIButton {
     bool        disabled;  /* grayed out and non-interactive */
 } UIButton;
 
-#define SETTINGS_ROW_COUNT     9  /* 3 display + 3 gameplay + 3 audio */
-#define SETTINGS_ACTIVE_COUNT  9
+#define SETTINGS_ROW_COUNT     8  /* 3 display + 2 gameplay + 3 audio */
+#define SETTINGS_ACTIVE_COUNT  8
 #define SETTINGS_TAB_COUNT     3
 
 typedef enum SettingsTab {
@@ -106,9 +117,13 @@ typedef struct DragState {
     Vector2 release_pos;     /* card position at moment of release */
     bool    has_release_pos; /* set on release, consumed by anim setup */
     int     release_mode;    /* TOSS_CLICK/FLICK/DROP/CANCEL */
-    /* Velocity tracking */
+    /* Velocity tracking (ring buffer for frame-rate-independent smoothing) */
+    #define DRAG_VEL_SAMPLES 6
+    Vector2 vel_ring[DRAG_VEL_SAMPLES]; /* recent per-frame velocities in px/s */
+    int     vel_ring_idx;               /* next write slot */
+    int     vel_ring_count;             /* filled slots (0..DRAG_VEL_SAMPLES) */
     Vector2 prev_pos;        /* previous frame position for velocity calc */
-    Vector2 velocity;        /* cursor velocity in px/s at release */
+    Vector2 velocity;        /* smoothed cursor velocity in px/s at release */
     /* Snap-back state */
     bool    snap_back;       /* card should animate back to hand */
     Vector2 original_pos;    /* card position before drag started */
@@ -120,6 +135,9 @@ typedef struct DragState {
     bool    is_play_drag;       /* true = can toss to play (player's turn + playable) */
     int     rearrange_map[MAX_HAND_SIZE]; /* maps display slot -> original hand index (excluding dragged card) */
     int     rearrange_count;    /* entries in rearrange_map */
+    bool    is_transmute_drag;  /* true = dragging a transmute card, not a hand card */
+    int     transmute_slot_origin;  /* transmute inventory slot where drag started */
+    int     transmute_slot_current; /* current target slot for rearranging */
 } DragState;
 
 /* ---- Render State ---- */
@@ -156,6 +174,7 @@ typedef struct RenderState {
     PassSubphase pass_subphase;
     float        pass_subphase_remaining;  /* countdown for UI */
     const char  *pass_status_text;         /* waiting/instruction text, or NULL */
+    bool         pass_ready_waiting;      /* true after "Ready" pressed (0-card pass) */
 
     /* Display caches */
     int           displayed_round_points[NUM_PLAYERS];
@@ -177,6 +196,10 @@ typedef struct RenderState {
     int      contract_option_ids[4];     /* contract IDs for hit-testing */
     int      selected_contract_idx;      /* -1 = none */
     bool     contract_ui_active;
+    float    contract_anim_t;              /* 0→1 scale+alpha fade-in */
+    bool     draft_waiting;               /* true = picked, waiting for others */
+    float    draft_wait_border_t;         /* 0→1 wrapping orbit timer */
+    float    draft_fadeout_t;             /* 1→0 fade for unselected buttons */
     char     draft_btn_labels[4][128];   /* Contract condition description */
     char     draft_btn_subtitles[4][320]; /* "desc\nReward: tmute - desc" */
     int      draft_transmute_ids[4];     /* paired transmutation ID per button, -1 = none */
@@ -202,6 +225,12 @@ typedef struct RenderState {
     int  chat_head;   /* index of oldest message */
     int  chat_count;  /* number of messages stored (0..CHAT_LOG_MAX) */
     Color chat_colors[CHAT_LOG_MAX]; /* per-message color, parallel to chat_msgs */
+    char  chat_highlight[CHAT_LOG_MAX][32];  /* substring to underline (empty=none) */
+    int   chat_transmute_id[CHAT_LOG_MAX];   /* transmute id for tooltip (-1=none) */
+
+    /* Chat hover tooltip — set by draw, consumed by update */
+    int   chat_hover_tid;       /* transmute_id from hovered chat highlight, -1=none */
+    Rectangle chat_hover_rect;  /* bounding rect of hovered highlight */
 
     /* Dealer phase UI */
 #define DEALER_DIR_BTN_COUNT 3
@@ -216,26 +245,41 @@ typedef struct RenderState {
     /* Info panel: contracts (player 0, up to 3) */
     char info_contract_name[3][32];
     char info_contract_desc[3][128];
+    int  info_contract_transmute_id[3]; /* paired transmutation ID, -1 if none */
     int  info_contract_count;
 
-    /* Transmutation inventory UI */
-#define MAX_TRANSMUTE_BTNS 8  /* matches MAX_TRANSMUTE_INVENTORY */
-    UIButton transmute_btns[MAX_TRANSMUTE_BTNS];
+    /* Transmutation inventory UI (card visuals in left panel) */
+#define MAX_TRANSMUTE_BTNS 18  /* matches MAX_TRANSMUTE_INVENTORY */
     int      transmute_btn_ids[MAX_TRANSMUTE_BTNS]; /* TransmutationDef IDs */
-    char     transmute_btn_labels[MAX_TRANSMUTE_BTNS][32];
     int      transmute_btn_count;
     int      pending_transmutation_id;  /* -1 = none; mirrors main.c state */
+    Rectangle transmute_card_rects[MAX_TRANSMUTE_BTNS]; /* hit-test rects */
+    float    transmute_card_y;   /* y position of transmute card row */
+    int      transmute_drop_target; /* hand card visual idx hovered during transmute drag, -1 = none */
 
-    /* Transmutation descriptions for info panel */
-#define MAX_TRANSMUTE_INFO 8
-    char     transmute_info_text[MAX_TRANSMUTE_INFO][64]; /* "ID: desc" */
-    int      transmute_info_count;
+    /* Contract sprite hit-test rects (for tooltip) */
+    Rectangle info_contract_sprite_rects[3];
+    int       info_contract_sprite_ids[3]; /* transmutation IDs parallel to sprite_rects */
+    int       info_contract_sprite_count;
 
     /* Per-card transmuted flag for player 0 hand */
     int      hand_transmute_ids[MAX_HAND_SIZE]; /* -1 = not transmuted */
 
     /* Transmute IDs for cards in the current trick */
     int      trick_transmute_ids[CARDS_PER_TRICK]; /* -1 = not transmuted */
+    int      mirror_source_tid[CARDS_PER_TRICK];    /* per-slot: transmute_id Mirror copies, -1 = none */
+    bool     mirror_morphed[CARDS_PER_TRICK];      /* per-slot: true after burst + sprite changed */
+    float    mirror_morph_timer[CARDS_PER_TRICK];  /* per-slot: countdown before morph (seconds) */
+
+    /* Transmutation hover tooltip */
+    struct {
+        int     transmute_id;  /* -1 = inactive */
+        float   anim_t;        /* 0→1 grow-in, 1→0 shrink-out */
+        bool    active;        /* mouse currently over a transmute sprite */
+        Vector2 anchor;        /* top-left of the hovered card */
+        float   anchor_w;      /* card width */
+        float   anchor_h;      /* card height */
+    } transmute_tooltip;
 
     /* Settings UI */
     SettingsTab settings_tab;
@@ -260,7 +304,12 @@ typedef struct RenderState {
     int             contract_reveal_count;  /* how many rows revealed (0..contract_result_count) */
     float           contract_reveal_timer;  /* countdown to next reveal */
     bool            scoring_screen_done;    /* online: true when scoring UI completes */
+    bool            scoring_ready_sent;     /* true after last-screen CONFIRM sent to server */
     float           score_auto_timer;       /* 15s auto-advance countdown (online) */
+
+    int             scoring_cards_per_player[NUM_PLAYERS]; /* card count per row for effect indicators */
+    int             scoring_martyr[NUM_PLAYERS];           /* martyr effect count per player (2^count multiplier) */
+    int             scoring_gatherer[NUM_PLAYERS];         /* gatherer/pendulum reduction per player */
 
     /* Trick pile visuals — separate from cards[], survives sync_hands() */
     CardVisual pile_cards[MAX_PILE_CARDS];
@@ -277,7 +326,7 @@ typedef struct RenderState {
 
     /* Pause overlay */
     PauseState pause_state;
-    bool       online;      /* true when connected — menu doesn't pause game */
+
     UIButton   pause_btns[PAUSE_BTN_COUNT];     /* Continue, Settings, Return to Menu, Quit */
     UIButton   pause_confirm_yes;
     UIButton   pause_confirm_no;
@@ -305,6 +354,26 @@ typedef struct RenderState {
 
     /* Opponent hover (for Rogue/Duel card picking) */
     bool opponent_hover_active;
+    Rectangle opponent_indicator_rects[NUM_PLAYERS]; /* name indicator windows per local seat */
+    int       opponent_hover_player;                 /* local seat of hovered opponent, -1 = none */
+    float     opponent_border_t;                     /* orbiting border timer 0-1 */
+
+    /* Suit selection UI (Rogue) */
+    bool      suit_hover_active;                     /* suit windows visible? */
+    Rectangle suit_indicator_rects[SUIT_COUNT];      /* hit-test rects */
+    int       suit_hover_idx;                        /* hovered suit, -1 = none */
+    float     suit_border_t;                         /* orbiting border timer */
+    int       rogue_target_player;                   /* stored target for suit pick */
+
+    /* Staged card indices for Rogue/Duel animations.
+     * Set by turn_flow, read by sync to preserve card state across resync. */
+    int staged_rogue_cv_count;                       /* number of staged rogue cards */
+    int staged_rogue_cv_indices[MAX_HAND_SIZE];      /* indices into cards[] */
+    int staged_duel_cv_idx;   /* -1 = none */
+
+    /* Rogue reveal border animation (timer border around revealed cards) */
+    bool      rogue_border_active;      /* draw the border? */
+    float     rogue_border_progress;    /* 0→1 over reveal duration */
 
     /* Flow-driven sync control */
     bool sync_needed;      /* when true, sync_hands() rebuilds visuals */
@@ -312,10 +381,17 @@ typedef struct RenderState {
     int  anim_trick_slot;  /* trick slot to animate (-1 = use last trick visual) */
 
     /* Deal animation */
-    bool deal_complete;    /* set by render_update when all deal animations finish */
+    bool deal_complete;      /* set by render_update when all deal animations finish */
+    bool deal_anim;          /* client-side deal animation in progress */
 
     /* Particle effects */
     ParticleSystem particles;
+
+    /* Custom fonts (multiple sizes for crisp rendering) */
+#define FONT_SIZE_COUNT 4
+    Font fonts[FONT_SIZE_COUNT];     /* 16, 32, 48, 96 */
+    int  font_base_sizes[FONT_SIZE_COUNT];
+    bool font_loaded;
 
     /* Login UI (Step 19) */
     UIButton btn_login_submit;
@@ -323,20 +399,38 @@ typedef struct RenderState {
     const struct LoginUIState *login_ui; /* set by main.c, read by render */
 
     /* Online menu UI (Step 20) */
-#define ONLINE_BTN_COUNT 4 /* Create Room, Join Room, Quick Match, Back */
-    UIButton online_btns[ONLINE_BTN_COUNT];
+#define ONLINE_BTN_MAX 5 /* Reconnect + Create Room + Join Room + Quick Match + Back */
+    UIButton online_btns[ONLINE_BTN_MAX];
+    int      online_btn_count; /* actual count this frame (4 or 5) */
     UIButton btn_online_join_submit;
+    UIButton btn_online_ai_diff_prev;
+    UIButton btn_online_ai_diff_next;
     UIButton btn_online_add_ai;
+    UIButton btn_online_remove_ai;
     UIButton btn_online_start_game;
     UIButton btn_online_cancel;
+    UIButton btn_online_try_again;
     const struct OnlineUIState *online_ui; /* set by main.c, read by render */
 
-    /* Stats screen (Step 21) */
+    /* Player display names (usernames or default names) */
+    char player_names[NUM_PLAYERS][32];
+
+    /* Stats screen */
+    StatsTab stats_tab;
+    UIButton stats_tab_btns[STATS_TAB_COUNT];
     UIButton btn_stats_back;
     bool     stats_available;  /* true if lobby_client_info() was valid */
-    int32_t  stat_elo;
-    uint32_t stat_games_played;
-    uint32_t stat_games_won;
+
+    /* Game Stats tab */
+    PlayerFullStats stats_data;
+    bool            stats_loaded;
+    bool            stats_loading;
+
+    /* Leaderboards tab */
+    LeaderboardData leaderboard_data;
+    bool            leaderboard_loaded;
+    bool            leaderboard_loading;
+    float           leaderboard_scroll_y;
 } RenderState;
 
 /* ---- Public API ---- */
@@ -350,6 +444,12 @@ void render_update(const GameState *gs, RenderState *rs, float dt);
 
 /* Draw everything. Reads GameState immutably for text/phase info. */
 void render_draw(const GameState *gs, const RenderState *rs);
+
+/* Font-aware text drawing. Uses the loaded custom font if available,
+ * otherwise falls back to Raylib's default font. */
+void hh_draw_text(const RenderState *rs, const char *text, int x, int y,
+                  int font_size, Color color);
+int  hh_measure_text(const RenderState *rs, const char *text, int font_size);
 
 /* Hit-test mouse position against human player's hand cards.
  * Returns index into rs->cards[], or -1 if no hit.
@@ -389,6 +489,11 @@ void render_commit_hand_reorder(GameState *gs, RenderState *rs,
 /* Recompute snap-back target position for the current target slot. */
 void render_update_snap_target(RenderState *rs);
 
+/* Reset all non-dragged, non-animating human hand cards to their layout
+ * slot positions.  Use after committing a hand reorder when sync_hands
+ * may be blocked (e.g. pass_anim_in_progress). */
+void render_snap_all_hand_cards(RenderState *rs);
+
 /* Hit-test mouse position against contract option buttons.
  * Returns index (0-3) into contract_options[], or -1 if no hit. */
 int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos);
@@ -398,7 +503,15 @@ int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos);
 void render_set_contract_options(RenderState *rs, const int ids[], int count,
                                  const char *names[], const char *descs[]);
 
-/* Hit-test mouse position against transmutation inventory buttons.
+/* Start dragging a transmutation card from the inventory.
+ * slot: index in transmute_btn_ids[]. */
+void render_start_transmute_drag(RenderState *rs, int slot, Vector2 mouse);
+
+/* Commit the rearranged transmutation inventory order.
+ * Reorders both rs->transmute_btn_ids[] and p2->players[0].transmute_inv. */
+void render_commit_transmute_reorder(RenderState *rs, struct Phase2State *p2);
+
+/* Hit-test mouse position against transmutation card visuals.
  * Returns button index (0..transmute_btn_count-1), or -1 if no hit. */
 int render_hit_test_transmute(const RenderState *rs, Vector2 mouse_pos);
 
@@ -409,10 +522,15 @@ void render_clear_piles(RenderState *rs);
 int render_alloc_card_visual(RenderState *rs);
 
 /* Push a message into the chat log ring buffer. */
+void render_chat_log_clear(RenderState *rs);
 void render_chat_log_push(RenderState *rs, const char *msg);
 
 /* Push a colored message into the chat log ring buffer. */
 void render_chat_log_push_color(RenderState *rs, const char *msg, Color color);
+
+/* Push a colored message with an underlined highlight and transmutation hover tooltip. */
+void render_chat_log_push_rich(RenderState *rs, const char *msg, Color color,
+                               const char *highlight, int transmute_id);
 
 
 /* Reset render state for returning to main menu mid-game.

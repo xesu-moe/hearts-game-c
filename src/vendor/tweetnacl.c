@@ -809,13 +809,29 @@ int crypto_sign_open(u8 *m,u64 *mlen,const u8 *sm,u64 n,const u8 *pk)
 }
 
 /* ================================================================
- * randombytes — required by TweetNaCl, provided via getrandom(2)
+ * randombytes — required by TweetNaCl
  * ================================================================ */
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+
+#include <windows.h>
+#include <bcrypt.h>
+
+void randombytes(u8 *buf, u64 len)
+{
+    if (BCryptGenRandom(NULL, buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        fprintf(stderr, "FATAL: BCryptGenRandom() failed\n");
+        abort();
+    }
+}
+
+#else /* POSIX */
+
+#include <errno.h>
 #include <sys/random.h>
 
 void randombytes(u8 *buf, u64 len)
@@ -831,3 +847,5 @@ void randombytes(u8 *buf, u64 len)
         len -= (u64)n;
     }
 }
+
+#endif

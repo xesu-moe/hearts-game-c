@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "rlgl.h"
+#include "core/resource.h"
 
 #define CARD_CORNER_RADIUS 0.15f
 
@@ -24,6 +25,35 @@
 static Texture2D s_spritesheet;
 static Texture2D s_card_back;
 static bool      s_textures_loaded = false;
+
+/* Custom font for procedural cards */
+static Font s_custom_font = {0};
+static bool s_custom_font_set = false;
+
+void card_render_set_font(Font font)
+{
+    s_custom_font = font;
+    s_custom_font_set = true;
+}
+
+static void cr_draw_text(const char *text, int x, int y, int font_size, Color color)
+{
+    if (s_custom_font_set) {
+        DrawTextEx(s_custom_font, text, (Vector2){(float)x, (float)y},
+                   (float)font_size, 1.0f, color);
+    } else {
+        DrawText(text, x, y, font_size, color);
+    }
+}
+
+static int cr_measure_text(const char *text, int font_size)
+{
+    if (s_custom_font_set) {
+        Vector2 size = MeasureTextEx(s_custom_font, text, (float)font_size, 1.0f);
+        return (int)size.x;
+    }
+    return MeasureText(text, font_size);
+}
 
 /* ---- Transmutation sprite state ---- */
 
@@ -95,8 +125,8 @@ static Rectangle card_source_rect(Card card)
 
 bool card_render_init(void)
 {
-    s_spritesheet = LoadTexture("assets/cards_spritesheet.png");
-    s_card_back   = LoadTexture("assets/card_back.png");
+    s_spritesheet = res_load_texture("assets/cards_spritesheet.png");
+    s_card_back   = res_load_texture("assets/card_back.png");
 
     s_textures_loaded = IsTextureValid(s_spritesheet) && IsTextureValid(s_card_back);
 
@@ -181,24 +211,24 @@ static void card_render_face_procedural(Card card, Vector2 pos, float scale,
     int font_size_rank = (int)(20.0f * scale);
     int font_size_suit = (int)(28.0f * scale);
 
-    DrawText(rank_str,
+    cr_draw_text(rank_str,
              (int)(6.0f * scale),
              (int)(6.0f * scale),
              font_size_rank, suit_col);
 
-    DrawText(suit_str,
+    cr_draw_text(suit_str,
              (int)(6.0f * scale),
              (int)(24.0f * scale),
              font_size_rank, suit_col);
 
-    int suit_w = MeasureText(suit_str, font_size_suit);
-    DrawText(suit_str,
+    int suit_w = cr_measure_text(suit_str, font_size_suit);
+    cr_draw_text(suit_str,
              (int)((w - (float)suit_w) * 0.5f),
              (int)((h - (float)font_size_suit) * 0.5f),
              font_size_suit, suit_col);
 
-    int rank_w = MeasureText(rank_str, font_size_rank);
-    DrawText(rank_str,
+    int rank_w = cr_measure_text(rank_str, font_size_rank);
+    cr_draw_text(rank_str,
              (int)(w - (float)rank_w - 6.0f * scale),
              (int)(h - 24.0f * scale),
              font_size_rank, suit_col);
@@ -303,25 +333,33 @@ void card_render_transmute_init(void)
 
     /* Keep in sync with assets/defs/transmutations.json IDs */
     static const struct { int id; const char *path; } SPRITE_MAP[] = {
-        {  4, "assets/sprites-temp/gatherer-final.png"   },
-        {  6, "assets/sprites-temp/pendulum-final.png"   },
-        {  7, "assets/sprites-temp/duel-final.png"       },
-        {  9, "assets/sprites-temp/mirror-final.png"     },
-        { 12, "assets/sprites-temp/trap-final.png"       },
-        { 13, "assets/sprites-temp/shield-final.png"     },
-        { 14, "assets/sprites-temp/curse-final.png"      },
-        { 15, "assets/sprites-temp/anchor-final.png"     },
-        { 16, "assets/sprites-temp/crown-final.png"      },
-        { 17, "assets/sprites-temp/parasite-final.png"   },
-        { 18, "assets/sprites-temp/bounty-final.png"     },
-        { 19, "assets/sprites-temp/inversion-final.png"  },
-        { 20, "assets/sprites-temp/binding-final.png"    },
+        {  0, "assets/sprites-temp/redjoker-final.png"     },
+        {  1, "assets/sprites-temp/blackjoker-final.png"   },
+        {  2, "assets/sprites-temp/shadowqueen-final.png"  },
+        {  3, "assets/sprites-temp/martyr-final.png"       },
+        {  4, "assets/sprites-temp/gatherer-final.png"     },
+        {  5, "assets/sprites-temp/rogue-final.png"        },
+        {  6, "assets/sprites-temp/pendulum-final.png"     },
+        {  7, "assets/sprites-temp/duel-final.png"         },
+        {  8, "assets/sprites-temp/fog-final.png"          },
+        {  9, "assets/sprites-temp/mirror-final.png"       },
+        { 10, "assets/sprites-temp/roulette-final.png"     },
+        { 12, "assets/sprites-temp/trap-final.png"         },
+        { 13, "assets/sprites-temp/shield-final.png"       },
+        { 14, "assets/sprites-temp/curse-final.png"        },
+        { 15, "assets/sprites-temp/anchor-final.png"       },
+        { 16, "assets/sprites-temp/crown-final.png"        },
+        { 17, "assets/sprites-temp/parasite-final.png"     },
+        { 18, "assets/sprites-temp/bounty-final.png"       },
+        { 19, "assets/sprites-temp/inversion-final.png"    },
+        { 20, "assets/sprites-temp/binding-final.png"      },
+        { 21, "assets/sprites-temp/joker-final.png"        },
     };
     int count = (int)(sizeof(SPRITE_MAP) / sizeof(SPRITE_MAP[0]));
 
     int loaded = 0;
     for (int i = 0; i < count; i++) {
-        Texture2D tex = LoadTexture(SPRITE_MAP[i].path);
+        Texture2D tex = res_load_texture(SPRITE_MAP[i].path);
         if (IsTextureValid(tex)) {
             SetTextureFilter(tex, TEXTURE_FILTER_BILINEAR);
             s_transmute_sprites[SPRITE_MAP[i].id] = tex;

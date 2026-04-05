@@ -9,11 +9,11 @@ Main source of bugs: Networking implementation. Networking bugs.
 
 ## Build
 
+Always build all three binaries together:
+
 ```sh
-make          # client release build
-make debug    # client debug build (-DDEBUG -g -O0)
-make server   # game server — no Raylib
-make lobby    # lobby server — no Raylib
+make all        # client + server + lobby (release)
+make debug-all  # client + server + lobby (debug: -DDEBUG -g -O0)
 ```
 
 ## Conventions
@@ -28,9 +28,24 @@ make lobby    # lobby server — no Raylib
 3. **Audit** — Run `@code-auditor` to review the fix for correctness, memory safety, and C best practices
 4. **Map** — If the fix changed headers, structs, enums, typedefs, or function signatures, run `@dependency-mapper` to update `.claude/deps.json`
 
-## Navigating the Codebase
+## Code Intelligence
 
-Use the **file tree** below and **`.claude/deps.json`** to locate code quickly. `deps.json` maps every file to its exported symbols, requirements, and reverse dependencies — grep it to find where a type or function lives without reading source files.
+USE LSP over Grep/Glob/Read/Search/Find for code navigation in order to save token consumption:
+
+- `goToDefinition` / `goToImplementation` to jump to source
+- `findReferences` to see all usages across the codebase
+- `workspaceSymbol` to find where something is defined
+- `documentSymbol` to list all symbols in a file
+- `hover` for type info without reading the file
+- `incomingCalls` / `outgoingCalls` for call hierarchy
+
+Before renaming or changing a function signature, use
+`findReferences` to find all call sites first.
+
+After writing or editing code, check LSP diagnostics before
+moving on. Fix any type errors or missing imports immediately.
+
+## Navigating the Codebase
 
 ```
 hollow-hearts/

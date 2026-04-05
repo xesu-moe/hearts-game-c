@@ -8,15 +8,14 @@
  * This header does NOT include Raylib. It includes only core/card.h
  * and core/input_cmd.h (both Raylib-free) and standard library headers.
  *
- * @deps-exports: NetMsgType (NET_MSG_SERVER_ROOM_DESTROYED=65),
- *                NetMsg, NetCard, NetInputCmd, NetPlayerView,
- *                NetMsgLoginAck (elo_rating: int32_t),
- *                NetMsgServerRoomDestroyed (room_code[8]),
- *                net_frame_write/read, net_msg_serialize/deserialize
+ * @deps-exports: NetMsgType (includes NET_MSG_REQUEST_START_GAME, etc),
+ *                NetMsg (now includes start_game union member),
+ *                NetCard, NetInputCmd (rogue_reveal.suit), NetPlayerView
+ *                (last_played_transmuted_card_suit, last_played_transmuted_card_rank), PROTOCOL_VERSION (now 6)
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS),
  *                 core/input_cmd.h (InputCmd, InputCmdType)
- * @deps-used-by: protocol.c, socket.c, server_net.c, lobby_client.c, server_lobby_link.c, lobby_net.c
- * @deps-last-changed: 2026-03-27 — Step 23: Added NET_MSG_SERVER_ROOM_DESTROYED enum (65) and NetMsgServerRoomDestroyed struct
+ * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.c, lobby_client.c, lobby_net.c
+ * @deps-last-changed: 2026-04-05 — Added last_played_transmuted_card_suit/rank fields to NetPlayerView for Mirror transmutation history
  * ============================================================ */
 
 #include <stdbool.h>
@@ -30,14 +29,14 @@
  * Constants
  * ================================================================ */
 
-#define PROTOCOL_VERSION       4
+#define PROTOCOL_VERSION       6
 #define NET_MAX_MSG_SIZE       8192 /* 8KB max payload */
 #define NET_FRAME_HEADER_SIZE  4    /* uint32_t length prefix */
 #define NET_MAX_PLAYERS        4
 #define NET_MAX_HAND_SIZE      13
 #define NET_MAX_PASS_CARDS     4
 #define NET_MAX_CONTRACTS      3
-#define NET_MAX_TRANSMUTE_INV  8
+#define NET_MAX_TRANSMUTE_INV  18
 #define NET_MAX_EFFECTS        8
 #define NET_DRAFT_GROUP_SIZE   4
 #define NET_DRAFT_PICKS        3
@@ -49,8 +48,8 @@
  *       + scores(2*4*2) + trick(4*2+4+3) + pass(4+4*2) + dealer(1+1+4) + p2flag(1)
  *     = 4 + 7 + 27 + 4 + 16 + 15 + 12 + 6 + 1 = 92
  * Phase2: contracts(1 + 3*23) + opp_contracts(4*13) + inv(1 + 8*2) + transmutes(13*7)
- *       + draft(31+2) + trick_transmute(20) + effects(1 + 32*9) + game_scoped(24) = 590
- * Total: 92 + 590 = 682. Use 1024 for headroom. */
+ *       + draft(31+2) + trick_transmute(24) + effects(1 + 32*9) + game_scoped(28) = 598
+ * Total: 92 + 598 = 690. Use 1024 for headroom. */
 #define NET_PLAYER_VIEW_MAX_SIZE 1024
 #define NET_MAX_NAME_LEN       32
 #define NET_AUTH_TOKEN_LEN     32
@@ -84,7 +83,9 @@ typedef enum NetMsgType {
     NET_MSG_GAME_OVER        = 24,
     NET_MSG_PHASE_CHANGE     = 25,
     NET_MSG_REQUEST_ADD_AI   = 26, /* client -> server: add AI to waiting room */
-    NET_MSG_REQUEST_START_GAME = 27, /* client -> server: start game (creator) */
+    NET_MSG_REQUEST_REMOVE_AI = 27, /* client -> server: remove last AI */
+    NET_MSG_REQUEST_START_GAME = 28, /* client -> server: start game (creator) */
+    NET_MSG_PASS_CONFIRMED     = 29, /* server -> clients: a player confirmed pass */
 
     /* Lobby C<->L messages (40-59) */
     NET_MSG_REGISTER         = 40,
@@ -101,6 +102,10 @@ typedef enum NetMsgType {
     NET_MSG_LOGIN_RESPONSE   = 51,  /* client -> lobby: signature */
     NET_MSG_REGISTER_ACK     = 52,  /* lobby -> client: success (no payload) */
     NET_MSG_CHANGE_USERNAME  = 53,  /* client -> lobby: rename */
+    NET_MSG_STATS_REQUEST    = 54,  /* client -> lobby: request full stats */
+    NET_MSG_STATS_RESPONSE   = 55,  /* lobby -> client: full stats payload */
+    NET_MSG_LEADERBOARD_REQUEST  = 56,  /* client -> lobby: request top 100 */
+    NET_MSG_LEADERBOARD_RESPONSE = 57,  /* lobby -> client: top 100 + rank */
 
     /* Lobby <-> Game Server messages (60-69) */
     NET_MSG_SERVER_REGISTER    = 60,
@@ -194,6 +199,9 @@ typedef struct NetMsgError {
 typedef struct NetMsgChat {
     uint8_t seat;
     char    text[NET_MAX_CHAT_LEN];
+    uint8_t color_r, color_g, color_b; /* message color (0,0,0 = default LIGHTGRAY) */
+    int16_t transmute_id;              /* transmutation tooltip (-1 = none) */
+    char    highlight[32];             /* substring to underline (empty = none) */
 } NetMsgChat;
 
 typedef struct NetMsgRoomStatus {
@@ -224,14 +232,15 @@ typedef struct NetInputCmd {
         } transmute_select; /* SELECT_TRANSMUTATION */
         struct {
             int8_t hand_index;
+            int8_t card_suit;
+            int8_t card_rank;
         } transmute_apply; /* APPLY_TRANSMUTATION */
         struct {
             int8_t target_player;
-            int8_t hand_index;
+            int8_t suit;
         } rogue_reveal; /* ROGUE_REVEAL */
         struct {
             int8_t target_player;
-            int8_t hand_index;
         } duel_pick; /* DUEL_PICK */
         struct {
             int8_t hand_index;
@@ -267,6 +276,10 @@ typedef struct NetMsgGameOver {
 typedef struct NetMsgPhaseChange {
     uint8_t new_phase;
 } NetMsgPhaseChange;
+
+typedef struct NetMsgStartGame {
+    uint8_t ai_difficulty; /* 0=casual, 1=competitive */
+} NetMsgStartGame;
 
 /* ================================================================
  * Lobby Message Payloads
@@ -326,6 +339,46 @@ typedef struct NetMsgChangeUsername {
     char    new_username[NET_MAX_NAME_LEN];
 } NetMsgChangeUsername;
 
+typedef struct NetMsgStatsRequest {
+    uint8_t auth_token[NET_AUTH_TOKEN_LEN];
+} NetMsgStatsRequest;
+
+typedef struct NetMsgStatsResponse {
+    int32_t  elo_rating;
+    uint32_t games_played;
+    uint32_t games_won;
+    int32_t  total_score;
+    uint32_t moon_shots;
+    uint32_t qos_caught;
+    uint32_t contracts_fulfilled;
+    uint32_t perfect_rounds;
+    uint32_t hearts_collected;
+    uint32_t tricks_won;
+    int32_t  best_score;    /* lowest single-game score (derived) */
+    int32_t  worst_score;   /* highest single-game score (derived) */
+    uint16_t avg_placement_x100; /* avg placement * 100 (derived) */
+} NetMsgStatsResponse;
+
+#define LEADERBOARD_MAX_ENTRIES 100
+
+typedef struct NetLeaderboardEntry {
+    char     username[NET_MAX_NAME_LEN];
+    int32_t  elo_rating;
+    uint32_t games_played;
+    uint32_t games_won;
+} NetLeaderboardEntry;
+
+typedef struct NetMsgLeaderboardRequest {
+    uint8_t auth_token[NET_AUTH_TOKEN_LEN];
+} NetMsgLeaderboardRequest;
+
+typedef struct NetMsgLeaderboardResponse {
+    uint8_t              entry_count; /* 0-100 */
+    NetLeaderboardEntry  entries[LEADERBOARD_MAX_ENTRIES];
+    uint16_t             player_rank; /* requesting player's rank (0 = unranked) */
+    int32_t              player_elo;
+} NetMsgLeaderboardResponse;
+
 /* ================================================================
  * Lobby <-> Game Server Message Payloads
  * ================================================================ */
@@ -349,6 +402,13 @@ typedef struct NetMsgServerResult {
     uint8_t winner_count;
     uint16_t rounds_played;
     uint8_t player_tokens[NET_MAX_PLAYERS][NET_AUTH_TOKEN_LEN];
+    /* Per-player stat counters (accumulated over entire game) */
+    uint16_t moon_shots[NET_MAX_PLAYERS];
+    uint16_t qos_caught[NET_MAX_PLAYERS];
+    uint16_t contracts_fulfilled[NET_MAX_PLAYERS];
+    uint16_t perfect_rounds[NET_MAX_PLAYERS];
+    uint16_t hearts_collected[NET_MAX_PLAYERS];
+    uint16_t tricks_won[NET_MAX_PLAYERS];
 } NetMsgServerResult;
 
 typedef struct NetMsgServerHeartbeat {
@@ -364,6 +424,10 @@ typedef struct NetMsgServerRoomCreated {
 typedef struct NetMsgServerRoomDestroyed {
     char room_code[NET_ROOM_CODE_LEN];
 } NetMsgServerRoomDestroyed;
+
+typedef struct NetMsgPassConfirmed {
+    uint8_t seat; /* 0-3: which player just confirmed their pass */
+} NetMsgPassConfirmed;
 
 /* ================================================================
  * NetPlayerView Sub-Structs
@@ -426,6 +490,7 @@ typedef struct NetTrickTransmuteView {
     int8_t  transmuter_player[CARDS_PER_TRICK];
     uint8_t resolved_effects[CARDS_PER_TRICK];
     bool    fogged[CARDS_PER_TRICK];
+    int8_t  fog_transmuter[CARDS_PER_TRICK];
 } NetTrickTransmuteView;
 
 /* Opponent contract info (only revealed data) */
@@ -517,6 +582,34 @@ typedef struct NetPlayerView {
 
     /* Previous round points (for dealer determination UI) */
     int16_t prev_round_points[NET_MAX_PLAYERS];
+
+    /* Mirror history (game-scoped) */
+    int16_t last_played_transmute_id;
+    uint8_t last_played_resolved_effect;
+    int8_t  last_played_transmuted_card_suit;
+    int8_t  last_played_transmuted_card_rank;
+
+    /* Server-authoritative trick winner (for Roulette determinism) */
+    int8_t  trick_winner; /* -1 = no complete trick */
+
+    /* Rogue/Duel pending effect winners (-1 = none) */
+    int8_t  rogue_pending_winner;
+    int8_t  duel_pending_winner;
+
+    /* Rogue: suit reveal (public to all) */
+    int8_t  rogue_chosen_suit;       /* -1 = none */
+    int8_t  rogue_chosen_target;     /* opponent seat, -1 = none */
+    int8_t  rogue_revealed_count;    /* -1 = not resolved, 0 = no match, 1+ = cards */
+    NetCard rogue_revealed_cards[NET_MAX_HAND_SIZE]; /* up to 13 */
+
+    /* Duel (-1 = none) */
+    int8_t  duel_chosen_card_idx;
+    int8_t  duel_chosen_target;
+    NetCard duel_revealed_card;   /* actual card for duel peek (private to winner) */
+
+    /* Round-end transmutation effect tracking */
+    int8_t  martyr_flags[NET_MAX_PLAYERS];
+    int8_t  gatherer_reduction[NET_MAX_PLAYERS];
 } NetPlayerView;
 
 /* ================================================================
@@ -552,12 +645,18 @@ typedef struct NetMsg {
         NetMsgQueueMatchmake  queue_matchmake;
         NetMsgQueueStatus     queue_status;
         NetMsgChangeUsername  change_username;
+        NetMsgStatsRequest    stats_request;
+        NetMsgStatsResponse   stats_response;
+        NetMsgLeaderboardRequest  leaderboard_request;
+        NetMsgLeaderboardResponse leaderboard_response;
         NetMsgServerRegister    server_register;
         NetMsgServerCreateRoom  server_create_room;
         NetMsgServerResult      server_result;
         NetMsgServerHeartbeat   server_heartbeat;
         NetMsgServerRoomCreated   server_room_created;
         NetMsgServerRoomDestroyed server_room_destroyed;
+        NetMsgPassConfirmed       pass_confirmed;
+        NetMsgStartGame           start_game;
     };
 } NetMsg;
 

@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "net/platform.h"
 #include "net/protocol.h"
 
 /* ================================================================

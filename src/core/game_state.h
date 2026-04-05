@@ -2,13 +2,11 @@
 #define GAME_STATE_H
 
 /* ============================================================
- * @deps-exports: enum GamePhase (PHASE_MENU, PHASE_DEALING, PHASE_PASSING, PHASE_PLAYING,
- *                PHASE_SCORING, PHASE_GAME_OVER, PHASE_SETTINGS, PHASE_LOGIN,
- *                PHASE_ONLINE_MENU, PHASE_STATS), enum PassSubphase (added
- *                ), struct GameState
+ * @deps-exports: enum GamePhase, enum PassDirection, enum PassSubphase,
+ *                struct GameState (moon_shot, moon_shooter fields)
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: render.h, render.c, game/update.c, game/process_input.c, game/phase_transitions.c
- * @deps-last-changed: 2026-03-27 — Removed PASS_SUB_TRANSMUTE enum value
+ * @deps-used-by: render.h, render.c, game/update.c, turn_flow.c, server_game.h, contract_logic.h
+ * @deps-last-changed: 2026-03-30 — Added moon_shot (bool) and moon_shooter (int) fields
  * ============================================================ */
 
 #include <stdbool.h>
@@ -76,6 +74,10 @@ typedef struct GameState {
     /* Trick tracking */
     Trick         current_trick;
     int           tricks_played;  /* 0..12 within a round */
+
+    /* Moon tracking (set at end of round by complete_trick_with) */
+    bool          moon_shot;      /* true if a player hit the moon this round */
+    int           moon_shooter;   /* player index who hit the moon (-1 if none) */
 
     /* Passing state */
     Card          pass_selections[NUM_PLAYERS][MAX_PASS_CARD_COUNT];

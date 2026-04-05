@@ -1,13 +1,14 @@
 /* ============================================================
- * @deps-exports: ServerGame (selected_transmute_slot),
- *                ServerPassSubstate,
+ * @deps-exports: ServerGame (includes ai_play_delay, ai_play_timer,
+ *                ai_difficulty, comp_ai[NUM_PLAYERS]),
+ *                ServerPassSubstate, ServerPlaySubstate,
  *                server_game_init(), server_game_start(),
- *                server_game_tick(), server_game_is_over(),
- *                server_game_apply_cmd()
+ *                server_game_tick(), server_game_is_over()
  * @deps-requires: core/game_state.h (GameState), core/input_cmd.h (InputCmd),
- *                 phase2/phase2_state.h (Phase2State),
- *                 phase2/transmutation.h (TrickTransmuteInfo, TransmuteEffect)
- * @deps-last-changed: 2026-03-28 — Added SV_PLAY_TRICK_BROADCAST to ServerPlaySubstate
+ *                 phase2/phase2_state.h (Phase2State), phase2/transmutation.h,
+ *                 server/ai_competitive.h (CompetitiveAIState)
+ * @deps-used-by: server_game.c, server_main.c, server_net.c, room.h
+ * @deps-last-changed: 2026-04-02 — Added comp_ai[] array and ai_difficulty field to ServerGame
  * ============================================================ */
 
 #ifndef SERVER_GAME_H
@@ -19,6 +20,7 @@
 #include "core/game_state.h"
 #include "core/input_cmd.h"
 #include "phase2/phase2_state.h"
+#include "server/ai_competitive.h"
 #include "phase2/transmutation.h"
 
 /* ================================================================
@@ -74,13 +76,57 @@ typedef struct ServerGame {
     bool                draft_initialized; /* has draft_generate_pool been called */
     bool                state_dirty;     /* triggers broadcast for changes invisible to detector */
     bool                scoring_evaluated; /* two-tick SCORING: true after contracts evaluated */
+    bool                scoring_ready[NUM_PLAYERS]; /* per-player "done viewing scores" */
+    float               scoring_wait_timer;         /* timeout for unresponsive players */
 
     /* Duel target storage (between DUEL_PICK and DUEL_GIVE) */
     int                 duel_target_player;     /* opponent selected in DUEL_PICK */
     int                 duel_target_hand_index;  /* opponent card index */
 
+    /* Last trick winner (for client Roulette determinism) */
+    int                 last_trick_winner; /* -1 = no trick completed yet */
+
     /* Transmutation selection (during SV_PASS_CARD_SELECT) */
     int                 selected_transmute_slot[NUM_PLAYERS]; /* inv slot, -1 = none */
+
+    /* Pass/draft phase timer (server-side fallback for stuck/disconnected clients) */
+    float               pass_phase_timer;
+
+    /* Per-AI random delay before confirming pass cards (3-6s) */
+    float               ai_pass_delay[NUM_PLAYERS];
+
+    /* AI play delay for current turn (0-1s random, reset after each play) */
+    float               ai_play_delay;
+    float               ai_play_timer;
+
+    /* Snapshot of pass_ready[] for detecting per-player confirmations (AI/timeout) */
+    bool                prev_pass_ready[NUM_PLAYERS];
+
+    /* AI difficulty: 0=casual, 1=competitive */
+    uint8_t             ai_difficulty;
+
+    /* Player display names (copied from Room slots at game start) */
+    char                player_names[NUM_PLAYERS][32];
+
+    /* Per-player stat accumulators (sent to lobby at game end) */
+    uint16_t stat_moon_shots[NUM_PLAYERS];
+    uint16_t stat_qos_caught[NUM_PLAYERS];
+    uint16_t stat_contracts_fulfilled[NUM_PLAYERS];
+    uint16_t stat_perfect_rounds[NUM_PLAYERS];
+    uint16_t stat_hearts_collected[NUM_PLAYERS];
+    uint16_t stat_tricks_won[NUM_PLAYERS];
+
+    /* Game event log queue — drained by server_net after each tick */
+#define SV_CHAT_QUEUE_MAX 8
+#define SV_CHAT_MSG_LEN   128
+    char                chat_queue[SV_CHAT_QUEUE_MAX][SV_CHAT_MSG_LEN];
+    uint8_t             chat_colors[SV_CHAT_QUEUE_MAX][3]; /* r,g,b */
+    int16_t             chat_transmute_ids[SV_CHAT_QUEUE_MAX];
+    char                chat_highlights[SV_CHAT_QUEUE_MAX][32];
+    int                 chat_count;
+
+    /* Competitive AI state (per-player, per-hand) */
+    CompetitiveAIState  comp_ai[NUM_PLAYERS];
 } ServerGame;
 
 /* ================================================================

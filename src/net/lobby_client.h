@@ -12,12 +12,12 @@
  *                lobby_client_join_room, lobby_client_queue_matchmake,
  *                lobby_client_queue_cancel, lobby_client_cancel_create,
  *                lobby_client_cancel_join, lobby_client_state, lobby_client_info,
- *                lobby_client_error_msg, lobby_client_has_room_assignment,
- *                lobby_client_consume_room_assignment
+ *                lobby_client_error_msg, lobby_client_clear_error,
+ *                lobby_client_has_room_assignment, lobby_client_consume_room_assignment
  * @deps-requires: net/identity.h (Identity),
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN, NET_CHALLENGE_LEN, NET_ROOM_CODE_LEN, NET_ADDR_LEN)
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-27 — Step 23: Added lobby_client_cancel_create() and lobby_client_cancel_join() functions
+ * @deps-last-changed: 2026-03-30 — Added lobby_client_clear_error() function
  * ============================================================ */
 
 #ifndef LOBBY_CLIENT_H
@@ -95,6 +95,7 @@ void lobby_client_cancel_join(void);
 LobbyClientState       lobby_client_state(void);
 const LobbyClientInfo *lobby_client_info(void);  /* valid when AUTHENTICATED */
 const char            *lobby_client_error_msg(void);
+void                   lobby_client_clear_error(void);
 
 /* Room assignment query (set when ROOM_ASSIGNED received).
  * Returns true if a room assignment is pending.
@@ -103,5 +104,41 @@ bool lobby_client_has_room_assignment(void);
 void lobby_client_consume_room_assignment(char *addr_out, uint16_t *port_out,
                                           char *room_code_out,
                                           uint8_t *token_out);
+
+/* ================================================================
+ * Stats & Leaderboard
+ * ================================================================ */
+
+typedef struct PlayerFullStats {
+    int32_t  elo_rating;
+    uint32_t games_played, games_won;
+    int32_t  total_score;
+    uint32_t moon_shots, qos_caught, contracts_fulfilled, perfect_rounds;
+    uint32_t hearts_collected, tricks_won;
+    int32_t  best_score, worst_score;
+    float    avg_placement;
+} PlayerFullStats;
+
+typedef struct LeaderboardEntry {
+    char     username[NET_MAX_NAME_LEN];
+    int32_t  elo_rating;
+    uint32_t games_played, games_won;
+} LeaderboardEntry;
+
+typedef struct LeaderboardData {
+    LeaderboardEntry entries[LEADERBOARD_MAX_ENTRIES];
+    int      count;
+    uint16_t player_rank;
+    int32_t  player_elo;
+} LeaderboardData;
+
+/* Request stats/leaderboard from lobby (requires AUTHENTICATED). */
+void lobby_client_request_stats(void);
+void lobby_client_request_leaderboard(void);
+
+/* Poll for responses. Returns true and fills *out if data arrived.
+ * Consumes the ready flag (one-shot). */
+bool lobby_client_has_stats(PlayerFullStats *out);
+bool lobby_client_has_leaderboard(LeaderboardData *out);
 
 #endif /* LOBBY_CLIENT_H */

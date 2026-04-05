@@ -4,12 +4,12 @@
  * Manages the online submenu state: Create Room, Join Room,
  * Quick Match, waiting room, and game server connection flow.
  *
- * @deps-exports: OnlineSubphase, OnlineUIState,
+ * @deps-exports: OnlineSubphase, OnlineUIState (with has_reconnect field),
  *                online_ui_init, online_ui_update_text_input
  * @deps-requires: net/protocol.h (NET_ROOM_CODE_LEN, NET_ADDR_LEN,
- *                 NET_AUTH_TOKEN_LEN)
+ *                 NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)
  * @deps-used-by: main.c, game/update.c, render/render.c
- * @deps-last-changed: 2026-03-26 — Step 20.1: Added player_names to OnlineUIState
+ * @deps-last-changed: 2026-03-31 — Added has_reconnect bool field to OnlineUIState
  * ============================================================ */
 
 #ifndef ONLINE_UI_H
@@ -56,12 +56,18 @@ typedef struct OnlineUIState {
     char player_names[NET_MAX_PLAYERS][NET_MAX_NAME_LEN];
     bool slot_is_ai[NET_MAX_PLAYERS];
 
+    /* AI difficulty: 0 = Casual, 1 = Competitive */
+    int ai_difficulty;
+
     /* Server connection info (from ROOM_ASSIGNED) */
     char     server_addr[NET_ADDR_LEN];
     uint16_t server_port;
     char     assigned_room_code[NET_ROOM_CODE_LEN];
     uint8_t  assigned_auth_token[NET_AUTH_TOKEN_LEN];
     bool     room_assigned;
+
+    /* Set by main.c from settings; renderer reads to show Reconnect button */
+    bool     has_reconnect;
 } OnlineUIState;
 
 /* Initialize online UI state to defaults. */

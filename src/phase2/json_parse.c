@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef HH_EMBEDDED
+#include "core/resource.h"
+#endif
 #include "vendor/cJSON.h"
 
 /* ----------------------------------------------------------------
@@ -226,28 +229,26 @@ static ConditionParam parse_condition_param(const cJSON *obj)
     return cp;
 }
 
-/* Read entire file into malloc'd buffer. Returns NULL on failure. */
+/* Read entire file into malloc'd buffer. Returns NULL on failure.
+ * In embedded builds (HH_EMBEDDED), checks compiled-in data first. */
 static char *read_file_text(const char *path)
 {
+#ifdef HH_EMBEDDED
+    return res_read_file_text(path);
+#else
     FILE *f = fopen(path, "rb");
-    if (!f)
-        return NULL;
+    if (!f) return NULL;
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (len <= 0) {
-        fclose(f);
-        return NULL;
-    }
+    if (len <= 0) { fclose(f); return NULL; }
     char *buf = malloc((size_t)len + 1);
-    if (!buf) {
-        fclose(f);
-        return NULL;
-    }
+    if (!buf) { fclose(f); return NULL; }
     fread(buf, 1, (size_t)len, f);
     buf[len] = '\0';
     fclose(f);
     return buf;
+#endif
 }
 
 /* Load file text, parse as JSON root. Caller must cJSON_Delete().
@@ -433,6 +434,8 @@ bool json_load_transmutations(const char *path, TransmutationDef *defs,
         d->custom_points = json_get_int(item, "custom_points", -1);
         d->negative = cJSON_IsTrue(
             cJSON_GetObjectItemCaseSensitive(item, "negative"));
+        d->hide_in_scoring = cJSON_IsTrue(
+            cJSON_GetObjectItemCaseSensitive(item, "hide_in_scoring"));
         json_strcpy(d->art_asset, sizeof(d->art_asset),
                     cJSON_GetObjectItemCaseSensitive(item, "art_asset"));
 

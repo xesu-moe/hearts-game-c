@@ -1,32 +1,19 @@
 /* ============================================================
  * @deps-implements: net/state_recv.h
- * @deps-requires: net/state_recv.h, net/protocol.h (NetPlayerView,
- *                 NetCard, net_card_to_game, NET_MAX_PLAYERS,
- *                 NET_MAX_HAND_SIZE, NET_MAX_PASS_CARDS,
- *                 NET_MAX_CONTRACTS, NET_MAX_TRANSMUTE_INV,
- *                 NET_MAX_EFFECTS),
- *                 core/game_state.h (GameState, GamePhase,
- *                 PassDirection, NUM_PLAYERS),
- *                 core/hand.h (hand_init),
- *                 core/card.h (Card, Suit, CARDS_PER_TRICK,
- *                 SUIT_COUNT, MAX_HAND_SIZE),
- *                 core/trick.h (Trick),
- *                 phase2/phase2_state.h (Phase2State, PlayerPhase2,
- *                 DraftState, DraftPlayerState, DraftPair,
- *                 MAX_ACTIVE_CONTRACTS, DRAFT_GROUP_SIZE,
- *                 DRAFT_PICKS_PER_PLAYER),
+ * @deps-requires: net/state_recv.h, net/protocol.h (NetPlayerView.rogue/duel_revealed_card),
+ *                 core/game_state.h (GameState, GamePhase, PassDirection, NUM_PLAYERS),
+ *                 core/hand.h (hand_init), core/card.h (Card, Suit, CARDS_PER_TRICK),
+ *                 core/trick.h (Trick), phase2/phase2_state.h (Phase2State, PlayerPhase2),
  *                 phase2/contract.h (ContractInstance),
- *                 phase2/transmutation.h (TransmuteSlot,
- *                 TransmuteInventory, HandTransmuteState,
- *                 MAX_TRANSMUTE_INVENTORY),
- *                 phase2/effect.h (ActiveEffect, EffectScope,
- *                 Effect, EffectType, MAX_ACTIVE_EFFECTS),
- *                 string.h
- * @deps-last-changed: 2026-03-28 — Added defer_trick parameter
+ *                 phase2/transmutation.h (TransmuteInventory, HandTransmuteState),
+ *                 phase2/effect.h (ActiveEffect, EffectScope, Effect, MAX_ACTIVE_EFFECTS),
+ *                 string.h, stdio.h
+ * @deps-last-changed: 2026-04-04 — Updated to apply NetPlayerView rogue/duel revealed card fields
  * ============================================================ */
 
 #include "state_recv.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "net/protocol.h"
@@ -128,10 +115,54 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
     gs->tricks_played  = view->tricks_played;
 
     /* ---- 2. Own hand (full card identities) ---- */
+    /* Save old hand order to preserve manual arrangement after rebuild */
+    Card old_order[MAX_HAND_SIZE];
+    int old_count = gs->players[0].hand.count;
+    for (int i = 0; i < old_count; i++)
+        old_order[i] = gs->players[0].hand.cards[i];
+
     hand_init(&gs->players[0].hand);
     for (int i = 0; i < view->hand_count && i < MAX_HAND_SIZE; i++) {
         Card c = net_card_to_game(view->hand[i]);
         hand_add_card(&gs->players[0].hand, c);
+    }
+
+    /* Reorder new hand to match player's manual card arrangement.
+     * Cards that existed before keep their relative position;
+     * new cards (from pass exchange) are appended at the end.
+     * reorder_map[new_pos] = server_pos — used later to reorder
+     * transmute slots to stay in sync with the hand. */
+    int reorder_map[MAX_HAND_SIZE];
+    for (int i = 0; i < MAX_HAND_SIZE; i++)
+        reorder_map[i] = i; /* identity by default */
+
+    if (old_count > 0 && gs->players[0].hand.count > 0) {
+        Card reordered[MAX_HAND_SIZE];
+        bool used[MAX_HAND_SIZE] = {false};
+        int out = 0;
+
+        for (int o = 0; o < old_count; o++) {
+            for (int n = 0; n < gs->players[0].hand.count; n++) {
+                if (!used[n] && card_equals(gs->players[0].hand.cards[n],
+                                            old_order[o])) {
+                    reordered[out] = gs->players[0].hand.cards[n];
+                    reorder_map[out] = n;
+                    out++;
+                    used[n] = true;
+                    break;
+                }
+            }
+        }
+        for (int n = 0; n < gs->players[0].hand.count; n++) {
+            if (!used[n]) {
+                reordered[out] = gs->players[0].hand.cards[n];
+                reorder_map[out] = n;
+                out++;
+            }
+        }
+        /* out == hand.count: every new card is either matched or appended */
+        for (int i = 0; i < out; i++)
+            gs->players[0].hand.cards[i] = reordered[i];
     }
 
     /* ---- 3. All players: hand counts + scores (remapped) ---- */
@@ -228,11 +259,12 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
             p2->players[0].transmute_inv.items[i] = -1;
     }
 
-    /* ---- 8. Hand transmute state (player 0) ---- */
+    /* ---- 8. Hand transmute state (player 0, reordered to match hand) ---- */
     for (int i = 0; i < MAX_HAND_SIZE; i++) {
-        if (i < view->hand_count)
+        int src = reorder_map[i]; /* server-side index for this hand slot */
+        if (i < view->hand_count && src < view->hand_count)
             apply_transmute_slot(&p2->players[0].hand_transmutes.slots[i],
-                                 &view->hand_transmutes[i], my);
+                                 &view->hand_transmutes[src], my);
         else {
             p2->players[0].hand_transmutes.slots[i].transmutation_id = -1;
             p2->players[0].hand_transmutes.slots[i].fogged = false;
@@ -252,6 +284,15 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
         p2->anchor_force_suit[local]       = view->anchor_force_suit[s];
         p2->binding_auto_win[local]        = view->binding_auto_win[s];
     }
+
+    /* ---- 10b. Mirror history (game-scoped, no remapping needed) ---- */
+    p2->last_played_transmute_id = view->last_played_transmute_id;
+    p2->last_played_resolved_effect =
+        (TransmuteEffect)view->last_played_resolved_effect;
+    p2->last_played_transmuted_card = (Card){
+        (Suit)view->last_played_transmuted_card_suit,
+        (Rank)view->last_played_transmuted_card_rank
+    };
 
     /* ---- 11. Persistent effects (distribute across players, remapped) ---- */
     /* Clear all first */
@@ -287,5 +328,42 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
     for (int s = 0; s < NUM_PLAYERS; s++) {
         int local = remap_seat(s, my);
         p2->round.prev_round_points[local] = view->prev_round_points[s];
+    }
+
+    /* ---- 13. Rogue/Duel pending effect winners (remapped) ---- */
+    p2->round.transmute_round.rogue_pending_winner =
+        (view->rogue_pending_winner >= 0)
+            ? remap_seat(view->rogue_pending_winner, my) : -1;
+    p2->round.transmute_round.duel_pending_winner =
+        (view->duel_pending_winner >= 0)
+            ? remap_seat(view->duel_pending_winner, my) : -1;
+
+    /* Rogue suit reveal */
+    p2->round.transmute_round.rogue_chosen_suit = (int)view->rogue_chosen_suit;
+    p2->round.transmute_round.rogue_chosen_target =
+        (view->rogue_chosen_target >= 0)
+            ? remap_seat(view->rogue_chosen_target, my) : -1;
+    p2->round.transmute_round.rogue_revealed_count =
+        (int)view->rogue_revealed_count;
+    for (int i = 0; i < view->rogue_revealed_count && i < MAX_HAND_SIZE; i++)
+        p2->round.transmute_round.rogue_revealed_cards[i] =
+            net_card_to_game(view->rogue_revealed_cards[i]);
+
+    /* Duel */
+    p2->round.transmute_round.duel_chosen_card_idx =
+        (int)view->duel_chosen_card_idx;
+    p2->round.transmute_round.duel_chosen_target =
+        (view->duel_chosen_target >= 0)
+            ? remap_seat(view->duel_chosen_target, my) : -1;
+    p2->round.transmute_round.duel_revealed_card =
+        net_card_to_game(view->duel_revealed_card);
+
+    /* ---- 14. Round-end transmutation effects (remapped) ---- */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        int server_seat = (i + my) % NUM_PLAYERS;
+        p2->round.transmute_round.martyr_flags[i] =
+            view->martyr_flags[server_seat];
+        p2->round.transmute_round.gatherer_reduction[i] =
+            view->gatherer_reduction[server_seat];
     }
 }

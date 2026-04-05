@@ -1,13 +1,13 @@
 /* ============================================================
  * @deps-implements: info_sync.h
- * @deps-requires: info_sync.h, core/game_state.h, render/render.h,
+ * @deps-requires: info_sync.h, core/game_state.h, render/render.h (mirror_source_tid),
  *                 phase2/phase2_state.h (PlayerPhase2.contracts[],
  *                   PlayerPhase2.num_active_contracts, curse_force_hearts[],
  *                   anchor_force_suit[]),
- *                 phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation),
- *                 phase2/transmutation_logic.h,
- *                 phase2/transmutation.h, stdio.h
- * @deps-last-changed: 2026-03-21 — Updated for multi-contract info panel sync (info_contract_count)
+ *                 phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation,
+ *                   phase2_find_transmute_by_effect),
+ *                 phase2/transmutation_logic.h, phase2/transmutation.h, stdio.h
+ * @deps-last-changed: 2026-04-04 — Uses phase2_find_transmute_by_effect() and mirror_source_tid for Mirror transmutation detection
  * ============================================================ */
 
 #include "info_sync.h"
@@ -24,6 +24,8 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
     if (p2->enabled) {
         /* Contracts (up to 3) */
         rs->info_contract_count = 0;
+        for (int i = 0; i < 3; i++)
+            rs->info_contract_transmute_id[i] = -1;
         for (int c = 0; c < p2->players[0].num_active_contracts && c < 3; c++) {
             if (p2->players[0].contracts[c].contract_id >= 0) {
                 const ContractInstance *ci = &p2->players[0].contracts[c];
@@ -38,6 +40,8 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     snprintf(rs->info_contract_desc[idx],
                              sizeof(rs->info_contract_desc[idx]), "%s",
                              cd->description);
+                    rs->info_contract_transmute_id[idx] =
+                        ci->paired_transmutation_id;
                     rs->info_contract_count++;
                 }
             }
@@ -57,9 +61,6 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     phase2_get_transmutation(inv->items[i]);
                 if (td) {
                     rs->transmute_btn_ids[tcount] = inv->items[i];
-                    snprintf(rs->transmute_btn_labels[tcount], 32, "%s", td->name);
-                    rs->transmute_btns[tcount].label =
-                        rs->transmute_btn_labels[tcount];
                     tcount++;
                 }
             }
@@ -69,11 +70,17 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
             /* Hand transmute IDs + fog mode for player 0 */
             HandTransmuteState *hts = &p2->players[0].hand_transmutes;
             for (int i = 0; i < MAX_HAND_SIZE; i++) {
-                rs->hand_transmute_ids[i] =
-                    (i < gs->players[0].hand.count &&
-                     hts->slots[i].transmutation_id >= 0)
-                        ? hts->slots[i].transmutation_id
-                        : -1;
+                /* Fog doesn't replace the card sprite — fog_mode overlay handles it */
+                if (i < gs->players[0].hand.count &&
+                    hts->slots[i].transmutation_id >= 0) {
+                    const TransmutationDef *htd =
+                        phase2_get_transmutation(hts->slots[i].transmutation_id);
+                    int new_val = (htd && htd->effect == TEFFECT_FOG_HIDDEN) ? -1
+                        : hts->slots[i].transmutation_id;
+                    rs->hand_transmute_ids[i] = new_val;
+                } else {
+                    rs->hand_transmute_ids[i] = -1;
+                }
                 if (i < gs->players[0].hand.count &&
                     transmute_is_effective_fog(hts, i, p2)) {
                     int tp = (hts->slots[i].fogged)
@@ -85,10 +92,29 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 }
             }
 
-            /* Trick transmute IDs + fog mode */
+            /* Trick transmute IDs + fog mode
+             * Fog doesn't replace the trick card sprite — fog_mode overlay handles it */
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                rs->trick_transmute_ids[i] =
-                    pls->current_tti.transmutation_ids[i];
+                {
+                    int raw_tid = pls->current_tti.transmutation_ids[i];
+                    const TransmutationDef *ttd =
+                        (raw_tid >= 0) ? phase2_get_transmutation(raw_tid) : NULL;
+
+                    /* Mirror source: reverse-lookup from resolved effect */
+                    if (!rs->mirror_morphed[i] && ttd &&
+                        ttd->effect == TEFFECT_MIRROR) {
+                        TransmuteEffect eff = pls->current_tti.resolved_effects[i];
+                        if (eff != TEFFECT_NONE && eff != TEFFECT_FOG_HIDDEN)
+                            rs->mirror_source_tid[i] = phase2_find_transmute_by_effect(eff);
+                    }
+
+                    /* After morph: write morphed ID so render keeps the new sprite */
+                    int display_tid = raw_tid;
+                    if (rs->mirror_morphed[i] && rs->mirror_source_tid[i] >= 0)
+                        display_tid = rs->mirror_source_tid[i];
+                    rs->trick_transmute_ids[i] =
+                        (ttd && ttd->effect == TEFFECT_FOG_HIDDEN) ? -1 : display_tid;
+                }
                 int ttid = pls->current_tti.transmutation_ids[i];
                 if (ttid >= 0) {
                     if (pls->current_tti.fogged[i]) {
@@ -105,35 +131,12 @@ void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                 }
             }
 
-            /* Transmutation card descriptions for info panel */
-            rs->transmute_info_count = 0;
-            int seen_tids[MAX_TRANSMUTE_INFO];
-            int seen_count = 0;
-            for (int i = 0; i < gs->players[0].hand.count &&
-                 rs->transmute_info_count < MAX_TRANSMUTE_INFO &&
-                 seen_count < MAX_TRANSMUTE_INFO; i++) {
-                int tid = hts->slots[i].transmutation_id;
-                if (tid < 0) continue;
-                bool dup = false;
-                for (int d = 0; d < seen_count; d++) {
-                    if (seen_tids[d] == tid) { dup = true; break; }
-                }
-                if (dup) continue;
-                const TransmutationDef *td = phase2_get_transmutation(tid);
-                if (td) {
-                    seen_tids[seen_count++] = tid;
-                    snprintf(rs->transmute_info_text[rs->transmute_info_count],
-                             64, "%d: %.50s", tid, td->description);
-                    rs->transmute_info_count++;
-                }
-            }
         }
 
     } else {
         rs->info_contract_count = 0;
         rs->transmute_btn_count = 0;
         rs->pending_transmutation_id = -1;
-        rs->transmute_info_count = 0;
         for (int i = 0; i < MAX_HAND_SIZE; i++) {
             rs->hand_transmute_ids[i] = -1;
             rs->hand_fog_mode[i] = 0;

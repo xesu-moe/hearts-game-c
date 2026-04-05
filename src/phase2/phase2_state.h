@@ -8,7 +8,7 @@
  * @deps-requires: core/card.h (NUM_PLAYERS, SUIT_COUNT), contract.h (ContractInstance),
  *                 effect.h (ActiveEffect), transmutation.h (TransmuteEffect, TransmuteInventory, HandTransmuteState, TransmuteRoundState)
  * @deps-used-by: contract_logic.c, pass_phase.c, update.c, info_sync.c, turn_flow.c
- * @deps-last-changed: 2026-03-21 — Added DraftState and draft in RoundPhase2, replaced king_ids with contracts[MAX_ACTIVE_CONTRACTS] array
+ * @deps-last-changed: 2026-04-05 — Added last_played_transmuted_card (Card) field to Phase2State
  * ============================================================ */
 
 #include <stdbool.h>
@@ -92,6 +92,7 @@ typedef struct Phase2State {
     /* Game-scoped Mirror history (persists across rounds) */
     int             last_played_transmute_id;      /* -1 = none played yet */
     TransmuteEffect last_played_resolved_effect;   /* resolved effect (handles Mirror chain) */
+    Card            last_played_transmuted_card;   /* card that carried the last transmutation */
 
     /* Game-scoped Shield countdown (persists across rounds) */
     int shield_tricks_remaining[NUM_PLAYERS]; /* 0 = inactive, 1-3 = tricks of 0-point protection */

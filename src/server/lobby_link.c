@@ -10,9 +10,8 @@
  * @deps-last-changed: 2026-03-27 — Step 23: Sends NET_MSG_SERVER_ROOM_DESTROYED to notify lobby when room destroyed
  * ============================================================ */
 
-#define _POSIX_C_SOURCE 199309L
-
 #include "lobby_link.h"
+#include "server_game.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -259,7 +258,8 @@ void lobby_link_send_result(const char *room_code,
                             const uint8_t winner_seats[NET_MAX_PLAYERS],
                             int winner_count,
                             int rounds_played,
-                            const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN])
+                            const uint8_t player_tokens[][NET_AUTH_TOKEN_LEN],
+                            const ServerGame *sg)
 {
     if (!lobby_link_is_connected()) {
         printf("[lobby-link] Not connected, dropping result for '%.8s'\n",
@@ -276,6 +276,12 @@ void lobby_link_send_result(const char *room_code,
         msg.server_result.winner_seats[i] = winner_seats[i];
         memcpy(msg.server_result.player_tokens[i], player_tokens[i],
                NET_AUTH_TOKEN_LEN);
+        msg.server_result.moon_shots[i]          = sg->stat_moon_shots[i];
+        msg.server_result.qos_caught[i]          = sg->stat_qos_caught[i];
+        msg.server_result.contracts_fulfilled[i]  = sg->stat_contracts_fulfilled[i];
+        msg.server_result.perfect_rounds[i]       = sg->stat_perfect_rounds[i];
+        msg.server_result.hearts_collected[i]     = sg->stat_hearts_collected[i];
+        msg.server_result.tricks_won[i]           = sg->stat_tricks_won[i];
     }
     msg.server_result.winner_count = (uint8_t)winner_count;
     msg.server_result.rounds_played = (uint16_t)rounds_played;

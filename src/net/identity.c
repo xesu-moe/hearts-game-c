@@ -8,18 +8,19 @@
  * @deps-last-changed: 2026-03-24 — Step 15: Account System
  * ============================================================ */
 
-#define _POSIX_C_SOURCE 200809L
-
 #include "identity.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#include "net/platform.h"
+
+#ifndef _WIN32
 #include <sys/types.h>
-#include <unistd.h>
+#endif
 
 #include "vendor/tweetnacl.h"
 
@@ -88,12 +89,19 @@ bool identity_load_or_create(Identity *id)
     /* Create directory */
     char dir[512];
     if (!identity_build_dir(dir, sizeof(dir))) return false;
-    if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
+    if (net_mkdir(dir, 0700) != 0 && errno != EEXIST) {
         fprintf(stderr, "[identity] mkdir '%s' failed: %s\n", dir, strerror(errno));
         return false;
     }
 
     /* Write secret key with restrictive permissions from the start */
+#ifdef _WIN32
+    f = fopen(path, "wb");
+    if (!f) {
+        fprintf(stderr, "[identity] Cannot create '%s': %s\n", path, strerror(errno));
+        return false;
+    }
+#else
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         fprintf(stderr, "[identity] Cannot create '%s': %s\n", path, strerror(errno));
@@ -105,6 +113,7 @@ bool identity_load_or_create(Identity *id)
         fprintf(stderr, "[identity] fdopen '%s' failed: %s\n", path, strerror(errno));
         return false;
     }
+#endif
     size_t nwritten = fwrite(id->secret_key, 1, IDENTITY_SK_LEN, f);
     fclose(f); /* also closes fd */
     if (nwritten != IDENTITY_SK_LEN) {
@@ -189,7 +198,7 @@ bool identity_save_username(const char *username)
     /* Ensure directory exists */
     char dir[512];
     if (!identity_build_dir(dir, sizeof(dir))) return false;
-    if (mkdir(dir, 0700) != 0 && errno != EEXIST) return false;
+    if (net_mkdir(dir, 0700) != 0 && errno != EEXIST) return false;
 
     FILE *f = fopen(path, "w");
     if (!f) {

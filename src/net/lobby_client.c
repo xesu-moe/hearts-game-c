@@ -41,6 +41,12 @@ static char     g_assigned_room_code[NET_ROOM_CODE_LEN];
 static uint8_t  g_assigned_token[NET_AUTH_TOKEN_LEN];
 static bool     g_room_assigned;
 
+/* Stats & Leaderboard response storage */
+static PlayerFullStats g_full_stats;
+static bool            g_stats_ready;
+static LeaderboardData g_leaderboard;
+static bool            g_leaderboard_ready;
+
 /* ================================================================
  * Internal: Handle incoming messages
  * ================================================================ */
@@ -144,6 +150,41 @@ static void lc_handle_message(const NetMsg *msg, const Identity *id)
         printf("[lobby-client] Error: %s\n", g_error);
         break;
 
+    case NET_MSG_STATS_RESPONSE: {
+        const NetMsgStatsResponse *s = &msg->stats_response;
+        g_full_stats.elo_rating          = s->elo_rating;
+        g_full_stats.games_played        = s->games_played;
+        g_full_stats.games_won           = s->games_won;
+        g_full_stats.total_score         = s->total_score;
+        g_full_stats.moon_shots          = s->moon_shots;
+        g_full_stats.qos_caught          = s->qos_caught;
+        g_full_stats.contracts_fulfilled = s->contracts_fulfilled;
+        g_full_stats.perfect_rounds      = s->perfect_rounds;
+        g_full_stats.hearts_collected    = s->hearts_collected;
+        g_full_stats.tricks_won          = s->tricks_won;
+        g_full_stats.best_score          = s->best_score;
+        g_full_stats.worst_score         = s->worst_score;
+        g_full_stats.avg_placement       = (float)s->avg_placement_x100 / 100.0f;
+        g_stats_ready = true;
+        break;
+    }
+
+    case NET_MSG_LEADERBOARD_RESPONSE: {
+        const NetMsgLeaderboardResponse *lb = &msg->leaderboard_response;
+        g_leaderboard.count       = lb->entry_count;
+        g_leaderboard.player_rank = lb->player_rank;
+        g_leaderboard.player_elo  = lb->player_elo;
+        for (int i = 0; i < lb->entry_count; i++) {
+            memcpy(g_leaderboard.entries[i].username,
+                   lb->entries[i].username, NET_MAX_NAME_LEN);
+            g_leaderboard.entries[i].elo_rating   = lb->entries[i].elo_rating;
+            g_leaderboard.entries[i].games_played = lb->entries[i].games_played;
+            g_leaderboard.entries[i].games_won    = lb->entries[i].games_won;
+        }
+        g_leaderboard_ready = true;
+        break;
+    }
+
     default:
         printf("[lobby-client] Unexpected message type %d\n", msg->type);
         break;
@@ -246,15 +287,6 @@ void lobby_client_update(float dt, const Identity *id)
         }
     }
 
-    /* Debug: log if stuck in login states */
-    static int dbg_frames = 0;
-    if (g_state == LOBBY_LOGGING_IN || g_state == LOBBY_CHALLENGED) {
-        if (++dbg_frames <= 5 || dbg_frames % 60 == 0)
-            printf("[lobby-client] DBG frame %d: state=%d cs=%d\n",
-                   dbg_frames, g_state, (int)cs);
-    } else {
-        dbg_frames = 0;
-    }
 }
 
 void lobby_client_register(const char *username, const Identity *id)
@@ -400,6 +432,11 @@ const char *lobby_client_error_msg(void)
     return g_error;
 }
 
+void lobby_client_clear_error(void)
+{
+    g_error[0] = '\0';
+}
+
 bool lobby_client_has_room_assignment(void)
 {
     return g_room_assigned;
@@ -417,4 +454,45 @@ void lobby_client_consume_room_assignment(char *addr_out, uint16_t *port_out,
     room_code_out[NET_ROOM_CODE_LEN - 1] = '\0';
     memcpy(token_out, g_assigned_token, NET_AUTH_TOKEN_LEN);
     g_room_assigned = false;
+}
+
+void lobby_client_request_stats(void)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+    g_stats_ready = false;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_STATS_REQUEST;
+    memcpy(msg.stats_request.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_request_leaderboard(void)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+    g_leaderboard_ready = false;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_LEADERBOARD_REQUEST;
+    memcpy(msg.leaderboard_request.auth_token, g_info.auth_token,
+           NET_AUTH_TOKEN_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+bool lobby_client_has_stats(PlayerFullStats *out)
+{
+    if (!g_stats_ready) return false;
+    *out = g_full_stats;
+    g_stats_ready = false;
+    return true;
+}
+
+bool lobby_client_has_leaderboard(LeaderboardData *out)
+{
+    if (!g_leaderboard_ready) return false;
+    *out = g_leaderboard;
+    g_leaderboard_ready = false;
+    return true;
 }

@@ -1,16 +1,17 @@
 /* ============================================================
- * @deps-exports: Room, PlayerSlot, ConnSlotInfo, SlotStatus, RoomStatus,
+ * @deps-exports: Room (now includes ai_difficulty field), PlayerSlot,
+ *                ConnSlotInfo, SlotStatus, RoomStatus,
  *                room_manager_init(), room_create(), room_destroy(),
  *                room_join(), room_leave(), room_find_by_code(),
  *                room_find_by_conn(), room_get(), room_active_count(),
  *                room_tick(), room_tick_all(), room_cleanup_finished(),
  *                room_update_timers(), room_reconnect(), ROOM_CODE_LEN, MAX_ROOMS,
- *                DISCONNECT_GRACE_SEC, ROOM_ABANDON_SEC
+ *                DISCONNECT_GRACE_SEC
  * @deps-requires: server/server_game.h (ServerGame, server_game_init,
  *                 server_game_start, server_game_tick, server_game_is_over),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS),
- *                 core/clock.h (FIXED_DT)
- * @deps-last-changed: 2026-03-26 — Step 20.2: Added room_cleanup_finished() to extract finished room destruction
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)
+ * @deps-used-by: room.c, lobby_link.c, server_net.c
+ * @deps-last-changed: 2026-04-02 — Added ai_difficulty (uint8_t) field to Room struct
  * ============================================================ */
 
 #ifndef ROOM_H
@@ -29,7 +30,6 @@
 #define ROOM_CODE_LEN          5     /* 4 chars + NUL */
 #define MAX_ROOMS              100
 #define DISCONNECT_GRACE_SEC   30.0f /* seconds before AI takeover */
-#define ROOM_ABANDON_SEC      300.0f /* 5 min with 0 humans → destroy */
 
 /* ================================================================
  * Enums
@@ -76,8 +76,7 @@ typedef struct Room {
     PlayerSlot  slots[NET_MAX_PLAYERS];
     ServerGame  game;
     int         connected_count; /* number of SLOT_CONNECTED players */
-    float       abandon_timer;   /* counts up when 0 humans connected */
-
+    uint8_t     ai_difficulty;   /* 0=casual, 1=competitive */
     /* Broadcast change detection — skip sending when nothing changed */
     struct {
         int phase, num_played, tricks_played, round_number;
@@ -119,6 +118,11 @@ int room_join(int room_index, int conn_id,
  * Sets status to SLOT_AI, assigns name "Bot N".
  * Returns assigned seat (0-3) on success, -1 if no empty slot or not WAITING. */
 int room_add_ai(int room_index);
+
+/* Remove the last AI player from a WAITING room.
+ * Finds the highest-seat AI slot and sets it to EMPTY.
+ * Returns removed seat (0-3) on success, -1 if no AI or not WAITING. */
+int room_remove_ai(int room_index);
 
 /* Start the game in a WAITING room. All 4 slots must be filled.
  * Transitions room to PLAYING. Only the room creator should call this.
@@ -169,7 +173,7 @@ void room_cleanup_finished(void);
 
 /* Tick disconnect timers for all slots in a room.
  * Converts DISCONNECTED → SLOT_AI after grace period.
- * Returns true if room is abandoned (0 humans for ROOM_ABANDON_SEC). */
+ * Returns true if room should be destroyed (0 humans, all grace periods expired). */
 bool room_update_timers(int room_index, float dt);
 
 /* Attempt to reconnect a player by matching session token.

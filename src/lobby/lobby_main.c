@@ -15,8 +15,6 @@
  * @deps-last-changed: 2026-03-24 — Step 14: Lobby Server Foundation
  * ============================================================ */
 
-#define _POSIX_C_SOURCE 199309L
-
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>

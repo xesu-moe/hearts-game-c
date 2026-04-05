@@ -50,6 +50,13 @@ typedef enum LobbyStmtID {
     LOBBY_STMT_CHANGE_USERNAME,
     /* ELO update (Step 21) */
     LOBBY_STMT_UPDATE_ELO,
+    /* Stats & Leaderboard queries */
+    LOBBY_STMT_GET_FULL_STATS,
+    LOBBY_STMT_UPDATE_FULL_STATS,
+    LOBBY_STMT_GET_LEADERBOARD,
+    LOBBY_STMT_GET_PLAYER_RANK,
+    LOBBY_STMT_GET_BEST_WORST_SCORE,
+    LOBBY_STMT_GET_AVG_PLACEMENT,
     LOBBY_STMT__COUNT /* must be last */
 } LobbyStmtID;
 

@@ -8,8 +8,6 @@
  * @deps-last-changed: 2026-03-27 — Step 23: Added handler for NET_MSG_SERVER_ROOM_DESTROYED message
  * ============================================================ */
 
-#define _POSIX_C_SOURCE 199309L
-
 #include "lobby_net.h"
 
 #include <sqlite3.h>
@@ -101,6 +99,10 @@ static void lby_process_match(const MmMatchResult *match);
 static void lby_handle_server_register(int conn_id, const NetMsgServerRegister *sr);
 static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res);
 static void lby_handle_server_heartbeat(int conn_id, const NetMsgServerHeartbeat *hb);
+
+/* Stats & Leaderboard handlers */
+static void lby_handle_stats_request(int conn_id, const NetMsgStatsRequest *req);
+static void lby_handle_leaderboard_request(int conn_id, const NetMsgLeaderboardRequest *req);
 
 /* Pending timeout callbacks */
 static void lby_on_pending_timeout(int client_conn_id);
@@ -264,6 +266,12 @@ static void lby_handle_message(int conn_id, const NetMsg *msg)
         break;
     case NET_MSG_CHANGE_USERNAME:
         lby_handle_change_username(conn_id, &msg->change_username);
+        break;
+    case NET_MSG_STATS_REQUEST:
+        lby_handle_stats_request(conn_id, &msg->stats_request);
+        break;
+    case NET_MSG_LEADERBOARD_REQUEST:
+        lby_handle_leaderboard_request(conn_id, &msg->leaderboard_request);
         break;
 
     /* Game Server <-> Lobby messages (stubs) */
@@ -963,6 +971,115 @@ static void lby_handle_server_register(int conn_id, const NetMsgServerRegister *
            conn_id, sr->addr, sr->port, sr->current_rooms, sr->max_rooms);
 }
 
+/* ================================================================
+ * Stats & Leaderboard Handlers
+ * ================================================================ */
+
+static void lby_handle_stats_request(int conn_id, const NetMsgStatsRequest *req)
+{
+    int32_t account_id = auth_validate_token(g_db, req->auth_token);
+    if (account_id < 0) {
+        lby_send_error(conn_id, 1, "Invalid token");
+        return;
+    }
+
+    NetMsg resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.type = NET_MSG_STATS_RESPONSE;
+    NetMsgStatsResponse *s = &resp.stats_response;
+
+    /* Full stats from stats table */
+    sqlite3_stmt *stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_FULL_STATS);
+    if (!stmt) { lby_send_error(conn_id, 2, "DB error"); return; }
+    sqlite3_bind_int(stmt, 1, account_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        s->games_played        = (uint32_t)sqlite3_column_int(stmt, 0);
+        s->games_won           = (uint32_t)sqlite3_column_int(stmt, 1);
+        s->total_score         = sqlite3_column_int(stmt, 2);
+        s->elo_rating          = (int32_t)(sqlite3_column_double(stmt, 3));
+        s->moon_shots          = (uint32_t)sqlite3_column_int(stmt, 4);
+        s->qos_caught          = (uint32_t)sqlite3_column_int(stmt, 5);
+        s->contracts_fulfilled = (uint32_t)sqlite3_column_int(stmt, 6);
+        s->perfect_rounds      = (uint32_t)sqlite3_column_int(stmt, 7);
+        s->hearts_collected    = (uint32_t)sqlite3_column_int(stmt, 8);
+        s->tricks_won          = (uint32_t)sqlite3_column_int(stmt, 9);
+    }
+
+    /* Derived: best/worst score from match_players */
+    stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_BEST_WORST_SCORE);
+    if (stmt) {
+        sqlite3_bind_int(stmt, 1, account_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW &&
+            sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            s->best_score  = sqlite3_column_int(stmt, 0);
+            s->worst_score = sqlite3_column_int(stmt, 1);
+        }
+    }
+
+    /* Derived: avg placement */
+    stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_AVG_PLACEMENT);
+    if (stmt) {
+        sqlite3_bind_int(stmt, 1, account_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW &&
+            sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            s->avg_placement_x100 = (uint16_t)(sqlite3_column_double(stmt, 0) * 100.0);
+        }
+    }
+
+    net_socket_send_msg(&g_net, conn_id, &resp);
+}
+
+static void lby_handle_leaderboard_request(int conn_id,
+                                           const NetMsgLeaderboardRequest *req)
+{
+    int32_t account_id = auth_validate_token(g_db, req->auth_token);
+    if (account_id < 0) {
+        lby_send_error(conn_id, 1, "Invalid token");
+        return;
+    }
+
+    NetMsg resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.type = NET_MSG_LEADERBOARD_RESPONSE;
+    NetMsgLeaderboardResponse *lb = &resp.leaderboard_response;
+
+    /* Top 100 by ELO */
+    sqlite3_stmt *stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_LEADERBOARD);
+    if (stmt) {
+        int count = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW &&
+               count < LEADERBOARD_MAX_ENTRIES) {
+            NetLeaderboardEntry *e = &lb->entries[count];
+            const char *name = (const char *)sqlite3_column_text(stmt, 0);
+            if (name)
+                strncpy(e->username, name, NET_MAX_NAME_LEN - 1);
+            e->elo_rating   = (int32_t)(sqlite3_column_double(stmt, 1));
+            e->games_played = (uint32_t)sqlite3_column_int(stmt, 2);
+            e->games_won    = (uint32_t)sqlite3_column_int(stmt, 3);
+            count++;
+        }
+        lb->entry_count = (uint8_t)count;
+    }
+
+    /* Player's own rank */
+    stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_PLAYER_RANK);
+    if (stmt) {
+        sqlite3_bind_int(stmt, 1, account_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+            lb->player_rank = (uint16_t)sqlite3_column_int(stmt, 0);
+    }
+
+    /* Player's own ELO */
+    stmt = lobbydb_stmt(g_db, LOBBY_STMT_GET_STATS);
+    if (stmt) {
+        sqlite3_bind_int(stmt, 1, account_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+            lb->player_elo = (int32_t)(sqlite3_column_double(stmt, 2));
+    }
+
+    net_socket_send_msg(&g_net, conn_id, &resp);
+}
+
 static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res)
 {
     LobbyConnInfo *info = g_net.conns[conn_id].user_data;
@@ -1064,6 +1181,23 @@ static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res)
         sqlite3_bind_int(stmt, 3, account_ids[i]);
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             fprintf(stderr, "[lobby-net] Failed to update stats "
+                    "account %d: %s\n", account_ids[i],
+                    sqlite3_errmsg(lobbydb_handle(g_db)));
+            goto rollback;
+        }
+
+        /* Update extended stats */
+        stmt = lobbydb_stmt(g_db, LOBBY_STMT_UPDATE_FULL_STATS);
+        if (!stmt) goto rollback;
+        sqlite3_bind_int(stmt, 1, res->moon_shots[i]);
+        sqlite3_bind_int(stmt, 2, res->qos_caught[i]);
+        sqlite3_bind_int(stmt, 3, res->contracts_fulfilled[i]);
+        sqlite3_bind_int(stmt, 4, res->perfect_rounds[i]);
+        sqlite3_bind_int(stmt, 5, res->hearts_collected[i]);
+        sqlite3_bind_int(stmt, 6, res->tricks_won[i]);
+        sqlite3_bind_int(stmt, 7, account_ids[i]);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            fprintf(stderr, "[lobby-net] Failed to update full stats "
                     "account %d: %s\n", account_ids[i],
                     sqlite3_errmsg(lobbydb_handle(g_db)));
             goto rollback;

@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -Isrc -MMD -MP
+CFLAGS = -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200112L -Isrc -MMD -MP
 
 # ================================================================
 # Source lists
@@ -16,7 +16,7 @@ SHARED_SRC = $(CORE_SRC) $(NET_SRC) $(P2_SRC) $(VENDOR_SRC)
 
 # Client-only sources
 CLIENT_ONLY_SRC = src/main.c src/core/input.c src/core/clock.c \
-                  src/core/settings.c \
+                  src/core/settings.c src/core/resource.c \
                   $(wildcard src/render/*.c) \
                   $(wildcard src/game/*.c) \
                   $(wildcard src/audio/*.c)
@@ -94,7 +94,7 @@ debug-server:
 
 debug-all:
 	$(MAKE) clean
-	$(MAKE) $(CLIENT_BIN) $(SERVER_BIN) CFLAGS="$(CFLAGS) -DDEBUG -g -O0"
+	$(MAKE) $(CLIENT_BIN) $(SERVER_BIN) $(LOBBY_BIN) CFLAGS="$(CFLAGS) -DDEBUG -g -O0"
 
 # ================================================================
 # Clean
@@ -103,6 +103,75 @@ debug-all:
 clean:
 	rm -f $(ALL_OBJ) $(ALL_DEP) $(CLIENT_BIN) $(SERVER_BIN) $(LOBBY_BIN)
 
+clean-dist:
+	rm -rf build/dist-obj
+
 -include $(ALL_DEP)
 
-.PHONY: all server lobby debug clean
+# ================================================================
+# Distribution builds (single-file binary with embedded assets)
+# ================================================================
+
+RAYLIB_DIR     = vendor/raylib/src
+RAYLIB_A_LINUX = vendor/raylib/build-linux/libraylib.a
+RAYLIB_A_WIN   = vendor/raylib/build-win/libraylib.a
+EMBED_DIR      = build/embedded
+DIST_OBJ_DIR   = build/dist-obj
+
+# Collect dist source files: client sources + embedded asset .c files
+DIST_SRC     = $(CLIENT_SRC)
+DIST_EMBED_C = $(filter-out $(EMBED_DIR)/bin2c.c,$(wildcard $(EMBED_DIR)/*.c))
+
+# Convert source paths to dist object paths under build/dist-obj/
+DIST_OBJ     = $(patsubst %.c,$(DIST_OBJ_DIR)/%.o,$(DIST_SRC))
+DIST_EMBED_O = $(patsubst %.c,$(DIST_OBJ_DIR)/%.o,$(DIST_EMBED_C))
+
+DIST_CFLAGS_BASE = -Wall -Wextra -std=c11 -O2 -Isrc -I$(EMBED_DIR) -Ivendor/raylib/src -DHH_EMBEDDED -MMD -MP
+DIST_CFLAGS  = $(DIST_CFLAGS_BASE) -D_POSIX_C_SOURCE=200112L
+
+# ---- Embed assets ----
+.PHONY: embed
+embed:
+	./scripts/embed_assets.sh $(EMBED_DIR)
+
+# ---- Build raylib static (Linux) ----
+$(RAYLIB_A_LINUX):
+	mkdir -p vendor/raylib/build-linux
+	cd $(RAYLIB_DIR) && $(MAKE) clean && \
+		$(MAKE) PLATFORM=PLATFORM_DESKTOP RAYLIB_BUILD_MODE=RELEASE
+	cp $(RAYLIB_DIR)/libraylib.a $(RAYLIB_A_LINUX)
+
+# ---- Build raylib static (Windows/MinGW) ----
+$(RAYLIB_A_WIN):
+	mkdir -p vendor/raylib/build-win
+	cd $(RAYLIB_DIR) && $(MAKE) clean && \
+		$(MAKE) CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar \
+		PLATFORM=PLATFORM_DESKTOP OS=Windows_NT RAYLIB_BUILD_MODE=RELEASE
+	cp $(RAYLIB_DIR)/libraylib.a $(RAYLIB_A_WIN)
+
+# ---- Dist compile rule (separate obj dir to avoid conflicts with dev builds) ----
+$(DIST_OBJ_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(DIST_CFLAGS) -c $< -o $@
+
+# ---- Linux distribution binary ----
+.PHONY: dist-linux
+dist-linux: embed $(RAYLIB_A_LINUX)
+	rm -rf $(DIST_OBJ_DIR)
+	$(MAKE) hollow-hearts-dist
+
+hollow-hearts-dist: $(DIST_OBJ) $(DIST_EMBED_O)
+	$(CC) $^ -o hollow-hearts $(RAYLIB_A_LINUX) -lm -lGL -lpthread -ldl -lrt -lX11
+	@echo "==> Built: hollow-hearts (Linux distribution, $(shell du -h hollow-hearts | cut -f1))"
+
+# ---- Windows distribution binary ----
+.PHONY: dist-windows
+dist-windows: embed $(RAYLIB_A_WIN)
+	rm -rf $(DIST_OBJ_DIR)
+	$(MAKE) hollow-hearts-win CC=x86_64-w64-mingw32-gcc DIST_CFLAGS="$(DIST_CFLAGS_BASE)"
+
+hollow-hearts-win: $(DIST_OBJ) $(DIST_EMBED_O)
+	$(CC) $^ -o hollow-hearts.exe -static $(RAYLIB_A_WIN) -lopengl32 -lgdi32 -lwinmm -lws2_32 -lbcrypt -lm
+	@echo "==> Built: hollow-hearts.exe (Windows distribution, $(shell du -h hollow-hearts.exe | cut -f1))"
+
+.PHONY: all server lobby debug debug-server debug-all clean clean-dist embed dist-linux dist-windows

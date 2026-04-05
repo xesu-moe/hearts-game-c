@@ -12,13 +12,15 @@
 #include <math.h>
 
 #include "core/input.h"
+#include "game/online_ui.h"
+#include "phase2/phase2_defs.h"
 #include "render/render.h"
 #include "render/layout.h"
 
 /* Toss classification thresholds */
 #define TOSS_CLICK_DIST   10.0f
 #define TOSS_MIN_SPEED    400.0f
-#define TOSS_DROP_RADIUS  150.0f
+#define TOSS_DROP_RADIUS  250.0f
 #define TOSS_MIN_UPWARD   0.3f  /* minimum -vy/speed ratio to count as a flick (roughly 17 degrees from horizontal) */
 
 void process_input(GameState *gs, RenderState *rs,
@@ -29,6 +31,10 @@ void process_input(GameState *gs, RenderState *rs,
 
     const InputState *is = input_get_state();
 
+    /* Clear draft click-consumed flag once mouse is released */
+    if (!is->held[INPUT_ACTION_LEFT_CLICK])
+        pps->draft_click_consumed = false;
+
     /* Cancel drag release if paused */
     if (rs->pause_state != PAUSE_INACTIVE && rs->drag.active) {
         render_cancel_drag(rs);
@@ -36,6 +42,88 @@ void process_input(GameState *gs, RenderState *rs,
 
     /* Handle drag release — must come before new press detection */
     if (is->released[INPUT_ACTION_LEFT_CLICK] && rs->drag.active) {
+        if (rs->drag.is_transmute_drag) {
+            /* Transmute card drag release */
+            float dx = rs->drag.current_pos.x - rs->drag.original_pos.x;
+            float dy = rs->drag.current_pos.y - rs->drag.original_pos.y;
+            float drag_dist = sqrtf(dx*dx + dy*dy);
+
+            /* Drag-to-apply: dropped onto a hand card */
+            bool applied = false;
+            int drop_vi = rs->transmute_drop_target;
+            if (drop_vi >= 0 && drag_dist >= TOSS_CLICK_DIST &&
+                gs->phase == PHASE_PASSING &&
+                pps->subphase == PASS_SUB_CARD_PASS) {
+                int hand_idx = -1;
+                for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                    if (rs->hand_visuals[0][ci] == drop_vi) {
+                        hand_idx = ci;
+                        break;
+                    }
+                }
+                if (hand_idx >= 0) {
+                    int slot = rs->drag.transmute_slot_origin;
+                    int tid = (slot >= 0 && slot < rs->transmute_btn_count)
+                        ? rs->transmute_btn_ids[slot] : -1;
+                    Card target = gs->players[0].hand.cards[hand_idx];
+                    bool blocked = false;
+                    if (target.suit == SUIT_CLUBS && target.rank == RANK_2) {
+                        render_chat_log_push_rich(rs,
+                            "You cannot transmutate this card!",
+                            (Color){230, 41, 55, 255}, NULL, -1);
+                        blocked = true;
+                    } else if (target.suit == SUIT_SPADES && target.rank == RANK_Q) {
+                        const TransmutationDef *td = phase2_get_transmutation(tid);
+                        if (!td || td->effect != TEFFECT_FOG_HIDDEN) {
+                            render_chat_log_push_rich(rs,
+                                "Queen of Spades can only be transmutated with The Fog!",
+                                (Color){230, 41, 55, 255}, NULL, -1);
+                            blocked = true;
+                        }
+                    }
+                    if (!blocked) {
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_SELECT_TRANSMUTATION,
+                            .source_player = 0,
+                            .transmute_select = { .inv_slot = tid },
+                        });
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_APPLY_TRANSMUTATION,
+                            .source_player = 0,
+                            .transmute_apply = {
+                                .hand_index = hand_idx,
+                                .card = gs->players[0].hand.cards[hand_idx],
+                            },
+                        });
+                        applied = true;
+                    }
+                }
+            } else if (drag_dist < TOSS_CLICK_DIST &&
+                gs->phase == PHASE_PASSING &&
+                pps->subphase == PASS_SUB_CARD_PASS) {
+                /* Short click: toggle transmutation selection.
+                 * Only during card-pass subphase. */
+                int slot = rs->drag.transmute_slot_current;
+                int clicked_id = (slot >= 0 && slot < rs->transmute_btn_count)
+                    ? rs->transmute_btn_ids[slot] : -1;
+                int send_id = (clicked_id >= 0 &&
+                               clicked_id == rs->pending_transmutation_id)
+                    ? -1 : clicked_id;
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_SELECT_TRANSMUTATION,
+                    .source_player = 0,
+                    .transmute_select = { .inv_slot = send_id },
+                });
+            }
+
+            if (!applied)
+                render_commit_transmute_reorder(rs, p2);
+
+            rs->transmute_drop_target = -1;
+            rs->drag.active = false;
+            rs->drag.is_transmute_drag = false;
+            rs->sync_needed = true;
+        } else {
         int dvi = rs->drag.card_visual_idx;
         if (dvi < 0 || dvi >= rs->card_count) {
             render_cancel_drag(rs);
@@ -78,8 +166,20 @@ void process_input(GameState *gs, RenderState *rs,
                 if (mode != TOSS_CANCEL) {
                     Card play_card = rs->cards[dvi].card;
 
-                    /* Commit reorder before playing */
+                    /* Commit reorder before resolving hand index —
+                     * reorder shifts both hand[] and hand_visuals[] */
                     render_commit_hand_reorder(gs, rs, p2);
+
+                    /* Resolve visual index -> hand index so the server
+                     * can distinguish duplicate suit/rank (e.g. transmuted
+                     * card vs regular card with same suit+rank). */
+                    int hand_idx = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                        if (rs->hand_visuals[0][ci] == dvi) {
+                            hand_idx = ci;
+                            break;
+                        }
+                    }
 
                     rs->drag.release_pos = rs->drag.current_pos;
                     rs->drag.has_release_pos = true;
@@ -90,7 +190,7 @@ void process_input(GameState *gs, RenderState *rs,
                         .type = INPUT_CMD_PLAY_CARD,
                         .source_player = 0,
                         .card = {
-                            .card_index = -1,
+                            .card_index = hand_idx,
                             .card = play_card,
                         },
                     });
@@ -99,15 +199,18 @@ void process_input(GameState *gs, RenderState *rs,
                     /* Cancel toss: commit reorder and snap to new slot */
                     render_commit_hand_reorder(gs, rs, p2);
                     render_update_snap_target(rs);
+                    render_snap_all_hand_cards(rs);
                     rs->drag.snap_back = true;
                     rs->drag.active = false;
                 }
             } else {
                 /* Non-play drag (rearrange only) */
-                if (drag_dist < TOSS_CLICK_DIST && gs->phase == PHASE_PASSING) {
+                if (drag_dist < TOSS_CLICK_DIST && gs->phase == PHASE_PASSING &&
+                    pps->subphase == PASS_SUB_CARD_PASS) {
                     /* Short click in passing phase: commit any reorder, then toggle */
                     render_commit_hand_reorder(gs, rs, p2);
                     render_update_snap_target(rs);
+                    render_snap_all_hand_cards(rs);
                     rs->drag.active = false;
                     rs->drag.snap_back = true;
                     render_toggle_card_selection(rs, dvi);
@@ -123,9 +226,35 @@ void process_input(GameState *gs, RenderState *rs,
                     /* Commit reorder and snap back */
                     render_commit_hand_reorder(gs, rs, p2);
                     render_update_snap_target(rs);
+                    render_snap_all_hand_cards(rs);
                     rs->drag.snap_back = true;
                     rs->drag.active = false;
                 }
+            }
+        }
+        } /* end else (non-transmute drag) */
+    }
+
+    /* Update opponent hover state every frame during rogue/duel selection */
+    if (flow_step == FLOW_ROGUE_CHOOSING || flow_step == FLOW_DUEL_PICK_OPPONENT) {
+        rs->opponent_hover_player = -1;
+        Vector2 mpos = is->mouse_pos;
+        for (int p = 1; p < NUM_PLAYERS; p++) {
+            if (CheckCollisionPointRec(mpos, rs->opponent_indicator_rects[p])) {
+                rs->opponent_hover_player = p;
+                break;
+            }
+        }
+    }
+
+    /* Update suit hover state every frame during rogue suit selection */
+    if (flow_step == FLOW_ROGUE_SUIT_CHOOSING) {
+        rs->suit_hover_idx = -1;
+        Vector2 mpos = is->mouse_pos;
+        for (int s = 0; s < SUIT_COUNT; s++) {
+            if (CheckCollisionPointRec(mpos, rs->suit_indicator_rects[s])) {
+                rs->suit_hover_idx = s;
+                break;
             }
         }
     }
@@ -180,6 +309,36 @@ void process_input(GameState *gs, RenderState *rs,
             goto skip_game_clicks;
         }
 
+        /* Transmutation inventory drag: available in any phase for reorder.
+         * Selection/apply gated to PASS_SUB_CARD_PASS in the release handler. */
+        if (p2->enabled && rs->transmute_btn_count > 0) {
+            int tmut_hit = render_hit_test_transmute(rs, mouse);
+            if (tmut_hit >= 0) {
+                render_start_transmute_drag(rs, tmut_hit, mouse);
+                goto skip_game_clicks;
+            }
+        }
+
+        /* Universal hand card drag (rearrange only) for phases that don't
+         * have their own card drag logic. PHASE_PASSING (card pass) and
+         * PHASE_PLAYING have specialized handlers inside the switch. */
+        if (gs->phase != PHASE_PASSING && gs->phase != PHASE_PLAYING) {
+            int hit = render_hit_test_card(rs, mouse);
+            if (hit >= 0) {
+                int hand_slot = -1;
+                for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                    if (rs->hand_visuals[0][ci] == hit) {
+                        hand_slot = ci;
+                        break;
+                    }
+                }
+                if (hand_slot >= 0) {
+                    render_start_card_drag(rs, hit, hand_slot, mouse, false);
+                    goto skip_game_clicks;
+                }
+            }
+        }
+
         switch (gs->phase) {
         case PHASE_LOGIN:
             if (render_hit_test_button(&rs->btn_login_submit, mouse)) {
@@ -197,16 +356,27 @@ void process_input(GameState *gs, RenderState *rs,
 
         case PHASE_ONLINE_MENU:
             /* Sub-menu buttons */
-            for (int i = 0; i < ONLINE_BTN_COUNT; i++) {
+            for (int i = 0; i < rs->online_btn_count; i++) {
                 if (render_hit_test_button(&rs->online_btns[i], mouse)) {
-                    InputCmdType types[] = {
-                        INPUT_CMD_ONLINE_CREATE,
-                        INPUT_CMD_ONLINE_JOIN,       /* opens join input */
+                    /* When 5 buttons: 0=Reconnect,1=Quick,2=Create,3=Join,4=Back
+                     * When 4 buttons: 0=Quick,1=Create,2=Join,3=Back */
+                    InputCmdType types5[] = {
+                        INPUT_CMD_ONLINE_RECONNECT,
                         INPUT_CMD_ONLINE_QUICKMATCH,
-                        INPUT_CMD_ONLINE_CANCEL,     /* Back = cancel */
+                        INPUT_CMD_ONLINE_CREATE,
+                        INPUT_CMD_ONLINE_JOIN,
+                        INPUT_CMD_ONLINE_CANCEL,
                     };
+                    InputCmdType types4[] = {
+                        INPUT_CMD_ONLINE_QUICKMATCH,
+                        INPUT_CMD_ONLINE_CREATE,
+                        INPUT_CMD_ONLINE_JOIN,
+                        INPUT_CMD_ONLINE_CANCEL,
+                    };
+                    InputCmdType type = (rs->online_btn_count == 5)
+                        ? types5[i] : types4[i];
                     input_cmd_push((InputCmd){
-                        .type = types[i],
+                        .type = type,
                         .source_player = 0,
                     });
                     break;
@@ -219,6 +389,12 @@ void process_input(GameState *gs, RenderState *rs,
                     .source_player = 0,
                 });
             }
+            /* AI difficulty arrows — both cycle the same toggle */
+            if (render_hit_test_button(&rs->btn_online_ai_diff_prev, mouse) ||
+                render_hit_test_button(&rs->btn_online_ai_diff_next, mouse)) {
+                OnlineUIState *oui = (OnlineUIState *)rs->online_ui;
+                if (oui) oui->ai_difficulty = !oui->ai_difficulty;
+            }
             /* Add AI to waiting room */
             if (render_hit_test_button(&rs->btn_online_add_ai, mouse)) {
                 input_cmd_push((InputCmd){
@@ -226,10 +402,24 @@ void process_input(GameState *gs, RenderState *rs,
                     .source_player = 0,
                 });
             }
+            /* Remove AI from waiting room */
+            if (render_hit_test_button(&rs->btn_online_remove_ai, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_REMOVE_AI,
+                    .source_player = 0,
+                });
+            }
             /* Start game (room creator) */
             if (render_hit_test_button(&rs->btn_online_start_game, mouse)) {
                 input_cmd_push((InputCmd){
                     .type = INPUT_CMD_ONLINE_START,
+                    .source_player = 0,
+                });
+            }
+            /* Try Again from error screen */
+            if (render_hit_test_button(&rs->btn_online_try_again, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_ONLINE_JOIN,
                     .source_player = 0,
                 });
             }
@@ -246,15 +436,9 @@ void process_input(GameState *gs, RenderState *rs,
             for (int i = 0; i < MENU_ITEM_COUNT; i++) {
                 if (render_hit_test_button(&rs->menu_items[i], mouse)) {
                     switch ((MenuItem)i) {
-                    case MENU_PLAY_ONLINE:
+                    case MENU_PLAY:
                         input_cmd_push((InputCmd){
-                            .type = INPUT_CMD_OPEN_ONLINE,
-                            .source_player = 0,
-                        });
-                        break;
-                    case MENU_PLAY_OFFLINE:
-                        input_cmd_push((InputCmd){
-                            .type = INPUT_CMD_START_GAME,
+                            .type = INPUT_CMD_OPEN_PLAY,
                             .source_player = 0,
                         });
                         break;
@@ -264,6 +448,8 @@ void process_input(GameState *gs, RenderState *rs,
                             .source_player = 0,
                         });
                         break;
+                    case MENU_ACHIEVEMENTS:
+                        break; /* disabled — coming soon */
                     case MENU_SETTINGS:
                         input_cmd_push((InputCmd){
                             .type = INPUT_CMD_OPEN_SETTINGS,
@@ -319,9 +505,12 @@ void process_input(GameState *gs, RenderState *rs,
                         .source_player = 0,
                     });
                 }
-            } else if (pps->subphase == PASS_SUB_CONTRACT) {
+            } else if (pps->subphase == PASS_SUB_CONTRACT &&
+                       !pps->draft_pick_pending &&
+                       !pps->draft_click_consumed) {
                 int contract_hit = render_hit_test_contract(rs, mouse);
                 if (contract_hit >= 0) {
+                    pps->draft_click_consumed = true;
                     input_cmd_push((InputCmd){
                         .type = INPUT_CMD_SELECT_CONTRACT,
                         .source_player = 0,
@@ -336,18 +525,6 @@ void process_input(GameState *gs, RenderState *rs,
                         .source_player = 0,
                     });
                     break;
-                }
-                /* Transmutation inventory buttons */
-                if (p2->enabled) {
-                    int tmut_hit = render_hit_test_transmute(rs, mouse);
-                    if (tmut_hit >= 0) {
-                        input_cmd_push((InputCmd){
-                            .type = INPUT_CMD_SELECT_TRANSMUTATION,
-                            .source_player = 0,
-                            .transmute_select = { .inv_slot = tmut_hit },
-                        });
-                        break;
-                    }
                 }
                 /* Card click: apply transmutation or start drag for rearrange/selection */
                 int hit = render_hit_test_card(rs, mouse);
@@ -365,7 +542,10 @@ void process_input(GameState *gs, RenderState *rs,
                             input_cmd_push((InputCmd){
                                 .type = INPUT_CMD_APPLY_TRANSMUTATION,
                                 .source_player = 0,
-                                .transmute_apply = { .hand_index = hand_idx },
+                                .transmute_apply = {
+                                    .hand_index = hand_idx,
+                                    .card = gs->players[0].hand.cards[hand_idx],
+                                },
                             });
                         }
                     } else {
@@ -383,32 +563,42 @@ void process_input(GameState *gs, RenderState *rs,
                     }
                 }
             }
+            /* Fallback: rearrange-only card drag during any pass subphase
+             * that doesn't have its own card interaction (dealer, draft, anims). */
+            if (pps->subphase != PASS_SUB_CARD_PASS) {
+                int hit = render_hit_test_card(rs, mouse);
+                if (hit >= 0) {
+                    int hand_slot = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                        if (rs->hand_visuals[0][ci] == hit) {
+                            hand_slot = ci;
+                            break;
+                        }
+                    }
+                    if (hand_slot >= 0) {
+                        render_start_card_drag(rs, hit, hand_slot, mouse, false);
+                    }
+                }
+            }
             break;
         }
 
         case PHASE_PLAYING: {
-            /* Duel pick opponent: intercept clicks on opponent cards */
+            /* Duel pick opponent: intercept clicks on opponent name indicators */
             if (flow_step == FLOW_DUEL_PICK_OPPONENT) {
                 int opp_player = -1;
-                int cv_hit = render_hit_test_opponent_card(rs, mouse, &opp_player);
-                if (cv_hit >= 0 && opp_player > 0) {
-                    int hand_idx = -1;
-                    for (int ci = 0; ci < rs->hand_visual_counts[opp_player]; ci++) {
-                        if (rs->hand_visuals[opp_player][ci] == cv_hit) {
-                            hand_idx = ci;
-                            break;
-                        }
+                for (int p = 1; p < NUM_PLAYERS; p++) {
+                    if (CheckCollisionPointRec(mouse, rs->opponent_indicator_rects[p])) {
+                        opp_player = p;
+                        break;
                     }
-                    if (hand_idx >= 0) {
-                        input_cmd_push((InputCmd){
-                            .type = INPUT_CMD_DUEL_PICK,
-                            .source_player = 0,
-                            .duel_pick = {
-                                .target_player = opp_player,
-                                .hand_index = hand_idx,
-                            },
-                        });
-                    }
+                }
+                if (opp_player > 0) {
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_DUEL_PICK,
+                        .source_player = 0,
+                        .duel_pick = { .target_player = opp_player },
+                    });
                 }
                 break;
             }
@@ -444,45 +634,42 @@ void process_input(GameState *gs, RenderState *rs,
                 }
                 break;
             }
-            /* Rogue choosing: intercept clicks on opponent cards */
+            /* Rogue choosing: intercept clicks on opponent name indicators */
             if (flow_step == FLOW_ROGUE_CHOOSING) {
                 int opp_player = -1;
-                int cv_hit = render_hit_test_opponent_card(rs, mouse, &opp_player);
-                if (cv_hit >= 0 && opp_player > 0) {
-                    /* Reverse lookup: card visual index → hand index */
-                    int hand_idx = -1;
-                    for (int ci = 0; ci < rs->hand_visual_counts[opp_player]; ci++) {
-                        if (rs->hand_visuals[opp_player][ci] == cv_hit) {
-                            hand_idx = ci;
-                            break;
-                        }
+                for (int p = 1; p < NUM_PLAYERS; p++) {
+                    if (CheckCollisionPointRec(mouse, rs->opponent_indicator_rects[p])) {
+                        opp_player = p;
+                        break;
                     }
-                    if (hand_idx >= 0) {
+                }
+                if (opp_player > 0) {
+                    input_cmd_push((InputCmd){
+                        .type = INPUT_CMD_ROGUE_PICK,
+                        .source_player = 0,
+                        .rogue_pick = { .target_player = opp_player },
+                    });
+                }
+                break;
+            }
+            /* Rogue suit choosing: intercept clicks on suit windows */
+            if (flow_step == FLOW_ROGUE_SUIT_CHOOSING) {
+                for (int s = 0; s < SUIT_COUNT; s++) {
+                    if (CheckCollisionPointRec(mouse, rs->suit_indicator_rects[s])) {
                         input_cmd_push((InputCmd){
                             .type = INPUT_CMD_ROGUE_REVEAL,
                             .source_player = 0,
                             .rogue_reveal = {
-                                .target_player = opp_player,
-                                .hand_index = hand_idx,
+                                .target_player = rs->rogue_target_player,
+                                .suit = s,
                             },
                         });
+                        break;
                     }
                 }
                 break;
             }
-            /* Transmutation inventory buttons */
-            if (p2->enabled && flow_step == FLOW_WAITING_FOR_HUMAN) {
-                int tmut_hit = render_hit_test_transmute(rs, mouse);
-                if (tmut_hit >= 0) {
-                    input_cmd_push((InputCmd){
-                        .type = INPUT_CMD_SELECT_TRANSMUTATION,
-                        .source_player = 0,
-                        .transmute_select = { .inv_slot = tmut_hit },
-                    });
-                    break;
-                }
-            }
-            /* Card interaction: transmutation or drag */
+            /* Card interaction */
             {
                 int hit = render_hit_test_card(rs, mouse);
                 if (hit >= 0) {
@@ -496,25 +683,32 @@ void process_input(GameState *gs, RenderState *rs,
                     if (hand_slot >= 0) {
                         int current = game_state_current_player(gs);
                         bool is_human_turn = (current == 0 && flow_step == FLOW_WAITING_FOR_HUMAN);
-
-                        if (is_human_turn && pls->pending_transmutation >= 0) {
-                            input_cmd_push((InputCmd){
-                                .type = INPUT_CMD_APPLY_TRANSMUTATION,
-                                .source_player = 0,
-                                .transmute_apply = { .hand_index = hand_slot },
-                            });
-                        } else if (is_human_turn) {
-                            /* Only allow drag when it's our turn */
-                            bool play_drag = rs->card_playable[hand_slot];
-                            render_start_card_drag(rs, hit, hand_slot, mouse, play_drag);
-                        }
+                        bool play_drag = is_human_turn && rs->card_playable[hand_slot];
+                        render_start_card_drag(rs, hit, hand_slot, mouse, play_drag);
                     }
                 }
             }
             break;
         }
 
-        case PHASE_STATS:
+        case PHASE_STATS: {
+            /* Tab switching */
+            for (int t = 0; t < STATS_TAB_COUNT; t++) {
+                if (render_hit_test_button(&rs->stats_tab_btns[t], mouse)) {
+                    if (rs->stats_tab != (StatsTab)t) {
+                        rs->stats_tab = (StatsTab)t;
+                        if (t == STATS_TAB_LEADERBOARDS &&
+                            !rs->leaderboard_loaded &&
+                            !rs->leaderboard_loading &&
+                            lobby_client_state() == LOBBY_AUTHENTICATED) {
+                            rs->leaderboard_loading = true;
+                            rs->leaderboard_scroll_y = 0.0f;
+                            lobby_client_request_leaderboard();
+                        }
+                    }
+                    break;
+                }
+            }
             if (render_hit_test_button(&rs->btn_stats_back, mouse)) {
                 input_cmd_push((InputCmd){
                     .type = INPUT_CMD_CANCEL,
@@ -522,6 +716,7 @@ void process_input(GameState *gs, RenderState *rs,
                 });
             }
             break;
+        }
 
         case PHASE_SETTINGS: {
             /* Tab switching */
@@ -529,7 +724,6 @@ void process_input(GameState *gs, RenderState *rs,
             for (int t = 0; t < SETTINGS_TAB_COUNT; t++) {
                 if (render_hit_test_button(&rs->settings_tab_btns[t], mouse)) {
                     rs->settings_tab = (SettingsTab)t;
-                    rs->sync_needed = true;
                     tab_clicked = true;
                     break;
                 }

@@ -9,7 +9,6 @@
 #include <string.h>
 
 #define TRICKS_PER_ROUND 13
-#define ALL_POINTS       26
 
 void game_state_init(GameState *gs)
 {
@@ -19,6 +18,7 @@ void game_state_init(GameState *gs)
     }
     gs->phase = PHASE_LOGIN;
     gs->round_number = 0;
+    gs->moon_shooter = -1;
 }
 
 bool game_state_start_game(GameState *gs)
@@ -76,6 +76,8 @@ void game_state_new_round(GameState *gs)
     gs->pass_card_count = DEFAULT_PASS_CARD_COUNT;
     gs->hearts_broken = false;
     gs->tricks_played = 0;
+    gs->moon_shot = false;
+    gs->moon_shooter = -1;
 
     /* Always clear trick to prevent stale cards from previous round */
     trick_init(&gs->current_trick, -1);
@@ -244,19 +246,26 @@ bool game_state_complete_trick_with(GameState *gs, int winner, int points)
 
     if (gs->tricks_played >= TRICKS_PER_ROUND) {
         /* Shoot-the-moon check.
-         * NOTE: Inversion (Phase 2) negates point cards per-trick, making
-         * it effectively impossible to reach exactly 26. This is by design —
-         * Inversion blocks moon-shooting as a natural consequence. */
+         * If exactly one player has all the points (> 0) and everyone else
+         * has 0, that player hit the moon. Their points become 0 and every
+         * other player receives that same amount — regardless of total. */
+        int scorer = -1;
+        int scorers_count = 0;
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            if (gs->players[i].round_points == ALL_POINTS) {
-                gs->players[i].round_points = 0;
-                for (int j = 0; j < NUM_PLAYERS; j++) {
-                    if (j != i) {
-                        gs->players[j].round_points = ALL_POINTS;
-                    }
-                }
-                break;
+            if (gs->players[i].round_points > 0) {
+                scorer = i;
+                scorers_count++;
             }
+        }
+        if (scorers_count == 1) {
+            int moon_points = gs->players[scorer].round_points;
+            gs->players[scorer].round_points = 0;
+            for (int j = 0; j < NUM_PLAYERS; j++) {
+                if (j != scorer)
+                    gs->players[j].round_points = moon_points;
+            }
+            gs->moon_shot = true;
+            gs->moon_shooter = scorer;
         }
 
         for (int i = 0; i < NUM_PLAYERS; i++) {

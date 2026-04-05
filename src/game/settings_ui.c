@@ -9,6 +9,7 @@
 
 #include "settings_ui.h"
 
+#include <math.h>
 #include <stdio.h>
 
 #include "render/render.h"
@@ -31,13 +32,12 @@ void sync_settings_values(SettingsUIState *sui, GameSettings *settings,
     COPY_SETTING(1, settings_resolution_name(show_res));
     COPY_SETTING(2, settings_fps_name(show_fps));
     COPY_SETTING(3, settings_anim_speed_name(settings->anim_speed));
-    COPY_SETTING(4, settings_ai_speed_name(settings->ai_speed));
-    COPY_SETTING(5, settings->auto_sort_received ? "On" : "Off");
-    snprintf(rs->settings_value_bufs[6], sizeof(rs->settings_value_bufs[6]),
+    COPY_SETTING(4, settings->auto_sort_received ? "On" : "Off");
+    snprintf(rs->settings_value_bufs[5], sizeof(rs->settings_value_bufs[5]),
              "%d%%", (int)(settings->master_volume * 100.0f + 0.5f));
-    snprintf(rs->settings_value_bufs[7], sizeof(rs->settings_value_bufs[7]),
+    snprintf(rs->settings_value_bufs[6], sizeof(rs->settings_value_bufs[6]),
              "%d%%", (int)(settings->music_volume * 100.0f + 0.5f));
-    snprintf(rs->settings_value_bufs[8], sizeof(rs->settings_value_bufs[8]),
+    snprintf(rs->settings_value_bufs[7], sizeof(rs->settings_value_bufs[7]),
              "%d%%", (int)(settings->sfx_volume * 100.0f + 0.5f));
     #undef COPY_SETTING
 }
@@ -86,29 +86,28 @@ void setting_adjust(SettingsUIState *sui, GameSettings *settings,
         settings->anim_speed = (AnimSpeed)(((int)settings->anim_speed + delta +
                                             ANIM_SPEED_COUNT) % ANIM_SPEED_COUNT);
         break;
-    case 4: /* ai_speed — immediate */
-        settings->ai_speed = (AISpeed)(((int)settings->ai_speed + delta +
-                                        AI_SPEED_COUNT) % AI_SPEED_COUNT);
-        break;
-    case 5: /* auto_sort_received — immediate toggle */
+    case 4: /* auto_sort_received — immediate toggle */
         settings->auto_sort_received = !settings->auto_sort_received;
         break;
-    case 6: { /* master_volume — immediate */
+    case 5: { /* master_volume — immediate */
         float v = settings->master_volume + delta * 0.1f;
+        v = roundf(v * 10.0f) / 10.0f;
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         settings->master_volume = v;
         break;
     }
-    case 7: { /* music_volume — immediate */
+    case 6: { /* music_volume — immediate */
         float v = settings->music_volume + delta * 0.1f;
+        v = roundf(v * 10.0f) / 10.0f;
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         settings->music_volume = v;
         break;
     }
-    case 8: { /* sfx_volume — immediate */
+    case 7: { /* sfx_volume — immediate */
         float v = settings->sfx_volume + delta * 0.1f;
+        v = roundf(v * 10.0f) / 10.0f;
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         settings->sfx_volume = v;
@@ -133,5 +132,6 @@ void apply_display_settings(SettingsUIState *sui, GameSettings *settings,
     sui->is_pending = false;
     settings_apply(settings);
     layout_recalculate(&rs->layout, GetScreenWidth(), GetScreenHeight());
+    rs->sync_needed = true;
     sync_settings_values(sui, settings, rs);
 }

@@ -7,6 +7,7 @@
 
 #include "settings.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,28 @@
 #include "vendor/cJSON.h"
 
 #define SETTINGS_FILE "settings.json"
+#define SESSION_TOKEN_LEN 32
+#define SESSION_TOKEN_HEX_LEN (SESSION_TOKEN_LEN * 2)
+
+static void hex_encode(const uint8_t *data, int len, char *out)
+{
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < len; i++) {
+        out[i * 2]     = hex[data[i] >> 4];
+        out[i * 2 + 1] = hex[data[i] & 0x0f];
+    }
+    out[len * 2] = '\0';
+}
+
+static bool hex_decode(const char *hex_str, uint8_t *out, int out_len)
+{
+    for (int i = 0; i < out_len; i++) {
+        unsigned int byte;
+        if (sscanf(hex_str + i * 2, "%2x", &byte) != 1) return false;
+        out[i] = (uint8_t)byte;
+    }
+    return true;
+}
 
 const Resolution RESOLUTIONS[RESOLUTION_COUNT] = {
     {1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440},
@@ -29,12 +52,12 @@ void settings_default(GameSettings *s)
     s->resolution_index = 0;  /* 1280x720 */
     s->fps_index        = 1;  /* 60 fps */
     s->anim_speed       = ANIM_SPEED_NORMAL;
-    s->ai_speed         = AI_SPEED_NORMAL;
     s->auto_sort_received = true;
     s->master_volume    = 1.0f;
     s->music_volume     = 1.0f;
     s->sfx_volume       = 1.0f;
     s->dirty            = false;
+    memset(&s->reconnect, 0, sizeof(s->reconnect));
 }
 
 void settings_load(GameSettings *s)
@@ -103,19 +126,6 @@ void settings_load(GameSettings *s)
             s->anim_speed = ANIM_SPEED_NORMAL;
     }
 
-    /* AI speed */
-    cJSON *jai = cJSON_GetObjectItem(root, "ai_speed");
-    if (cJSON_IsString(jai)) {
-        if (strcmp(jai->valuestring, "slow") == 0)
-            s->ai_speed = AI_SPEED_SLOW;
-        else if (strcmp(jai->valuestring, "fast") == 0)
-            s->ai_speed = AI_SPEED_FAST;
-        else if (strcmp(jai->valuestring, "instant") == 0)
-            s->ai_speed = AI_SPEED_INSTANT;
-        else
-            s->ai_speed = AI_SPEED_NORMAL;
-    }
-
     /* Auto-sort received */
     cJSON *jasr = cJSON_GetObjectItem(root, "auto_sort_received");
     if (cJSON_IsBool(jasr)) s->auto_sort_received = cJSON_IsTrue(jasr);
@@ -130,6 +140,28 @@ void settings_load(GameSettings *s)
     cJSON *jsv = cJSON_GetObjectItem(root, "sfx_volume");
     if (cJSON_IsNumber(jsv)) s->sfx_volume = (float)jsv->valuedouble;
 
+    /* Reconnect info (optional) */
+    cJSON *jrecon = cJSON_GetObjectItem(root, "reconnect");
+    if (cJSON_IsObject(jrecon)) {
+        cJSON *jip   = cJSON_GetObjectItem(jrecon, "server_ip");
+        cJSON *jport = cJSON_GetObjectItem(jrecon, "server_port");
+        cJSON *jrc   = cJSON_GetObjectItem(jrecon, "room_code");
+        cJSON *jtok  = cJSON_GetObjectItem(jrecon, "session_token");
+        if (cJSON_IsString(jip) && cJSON_IsNumber(jport) &&
+            cJSON_IsString(jrc) && cJSON_IsString(jtok) &&
+            strlen(jtok->valuestring) == SESSION_TOKEN_HEX_LEN) {
+            strncpy(s->reconnect.server_ip, jip->valuestring,
+                    sizeof(s->reconnect.server_ip) - 1);
+            s->reconnect.server_port = (uint16_t)jport->valueint;
+            strncpy(s->reconnect.room_code, jrc->valuestring,
+                    sizeof(s->reconnect.room_code) - 1);
+            if (hex_decode(jtok->valuestring, s->reconnect.session_token,
+                           SESSION_TOKEN_LEN)) {
+                s->reconnect.valid = true;
+            }
+        }
+    }
+
     cJSON_Delete(root);
 
     /* Clamp volumes to valid range */
@@ -139,6 +171,11 @@ void settings_load(GameSettings *s)
     if (s->music_volume > 1.0f) s->music_volume = 1.0f;
     if (s->sfx_volume < 0.0f) s->sfx_volume = 0.0f;
     if (s->sfx_volume > 1.0f) s->sfx_volume = 1.0f;
+
+    /* Snap to nearest 0.1 to avoid ugly floating-point drift in settings.json */
+    s->master_volume = roundf(s->master_volume * 10.0f) / 10.0f;
+    s->music_volume  = roundf(s->music_volume  * 10.0f) / 10.0f;
+    s->sfx_volume    = roundf(s->sfx_volume    * 10.0f) / 10.0f;
 
     s->dirty = false;
 }
@@ -163,18 +200,24 @@ void settings_save(const GameSettings *s)
     else if (s->anim_speed == ANIM_SPEED_FAST) anim_str = "fast";
     cJSON_AddStringToObject(root, "anim_speed", anim_str);
 
-    /* AI speed as string */
-    const char *ai_str = "normal";
-    if (s->ai_speed == AI_SPEED_SLOW) ai_str = "slow";
-    else if (s->ai_speed == AI_SPEED_FAST) ai_str = "fast";
-    else if (s->ai_speed == AI_SPEED_INSTANT) ai_str = "instant";
-    cJSON_AddStringToObject(root, "ai_speed", ai_str);
-
     cJSON_AddBoolToObject(root, "auto_sort_received", s->auto_sort_received);
 
     cJSON_AddNumberToObject(root, "master_volume", (double)s->master_volume);
     cJSON_AddNumberToObject(root, "music_volume", (double)s->music_volume);
     cJSON_AddNumberToObject(root, "sfx_volume", (double)s->sfx_volume);
+
+    /* Reconnect info (only if valid) */
+    if (s->reconnect.valid) {
+        cJSON *jrecon = cJSON_AddObjectToObject(root, "reconnect");
+        if (jrecon) {
+            cJSON_AddStringToObject(jrecon, "server_ip", s->reconnect.server_ip);
+            cJSON_AddNumberToObject(jrecon, "server_port", s->reconnect.server_port);
+            cJSON_AddStringToObject(jrecon, "room_code", s->reconnect.room_code);
+            char hex[SESSION_TOKEN_HEX_LEN + 1];
+            hex_encode(s->reconnect.session_token, SESSION_TOKEN_LEN, hex);
+            cJSON_AddStringToObject(jrecon, "session_token", hex);
+        }
+    }
 
     char *json_str = cJSON_Print(root);
     cJSON_Delete(root);
@@ -234,17 +277,6 @@ float settings_anim_multiplier(AnimSpeed speed)
     }
 }
 
-float settings_ai_think_time(AISpeed speed)
-{
-    switch (speed) {
-    case AI_SPEED_SLOW:    return 0.8f;
-    case AI_SPEED_NORMAL:  return 0.4f;
-    case AI_SPEED_FAST:    return 0.15f;
-    case AI_SPEED_INSTANT: return 0.0f;
-    default:               return 0.4f;
-    }
-}
-
 const char *settings_window_mode_name(WindowMode m)
 {
     switch (m) {
@@ -283,13 +315,27 @@ const char *settings_anim_speed_name(AnimSpeed s)
     }
 }
 
-const char *settings_ai_speed_name(AISpeed s)
+
+void settings_save_reconnect(const char *ip, uint16_t port,
+                             const char *room_code, const uint8_t *token)
 {
-    switch (s) {
-    case AI_SPEED_SLOW:    return "Slow";
-    case AI_SPEED_NORMAL:  return "Normal";
-    case AI_SPEED_FAST:    return "Fast";
-    case AI_SPEED_INSTANT: return "Instant";
-    default:               return "Unknown";
-    }
+    GameSettings tmp;
+    settings_load(&tmp);
+    strncpy(tmp.reconnect.server_ip, ip, sizeof(tmp.reconnect.server_ip) - 1);
+    tmp.reconnect.server_ip[sizeof(tmp.reconnect.server_ip) - 1] = '\0';
+    tmp.reconnect.server_port = port;
+    strncpy(tmp.reconnect.room_code, room_code, sizeof(tmp.reconnect.room_code) - 1);
+    tmp.reconnect.room_code[sizeof(tmp.reconnect.room_code) - 1] = '\0';
+    memcpy(tmp.reconnect.session_token, token, SESSION_TOKEN_LEN);
+    tmp.reconnect.valid = true;
+    settings_save(&tmp);
+}
+
+void settings_clear_reconnect(void)
+{
+    GameSettings tmp;
+    settings_load(&tmp);
+    if (!tmp.reconnect.valid) return;
+    memset(&tmp.reconnect, 0, sizeof(tmp.reconnect));
+    settings_save(&tmp);
 }

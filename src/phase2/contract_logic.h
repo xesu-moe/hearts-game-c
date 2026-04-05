@@ -4,28 +4,26 @@
 /* ============================================================
  * @deps-exports: draft_generate_pool, draft_pick, draft_auto_pick,
  *                draft_ai_pick, draft_all_picked, draft_advance_round,
- *                draft_finalize, draft_is_complete,
- *                contract_state_init, contract_round_reset,
- *                contract_all_chosen, contract_on_trick_complete,
- *                contract_record_received_cards, contract_evaluate_all,
- *                contract_apply_rewards_all, DRAFT_POOL_SIZE, DRAFT_ROUNDS,
- *                DRAFT_TIMER_SECONDS
- * @deps-requires: phase2_state.h (Phase2State, DraftState, DraftPlayerState),
- *                 core/trick.h (Trick), transmutation.h (TrickTransmuteInfo)
- * @deps-used-by: pass_phase.c, update.c, turn_flow.c
- * @deps-last-changed: 2026-03-21 — Complete API rewrite: replaced contract_get_available/contract_select with draft_* functions, added contract_evaluate_all/contract_apply_rewards_all
+ *                draft_finalize, draft_is_complete, contract_state_init,
+ *                contract_round_reset, contract_all_chosen, contract_on_trick_complete,
+ *                contract_record_received_cards, contract_evaluate_all, contract_apply_rewards_all
+ * @deps-requires: core/game_state.h (GameState), core/trick.h (Trick),
+ *                 phase2_state.h (Phase2State), transmutation.h (TrickTransmuteInfo)
+ * @deps-used-by: turn_flow.c, update.c, server_game.c
+ * @deps-last-changed: 2026-03-30 — Added const GameState *gs to contract_on_trick_complete() and contract_evaluate_all()
  * ============================================================ */
 
 #include <stdbool.h>
 
 #include "phase2_state.h"
 #include "core/trick.h"
+#include "core/game_state.h"
 
 /* ---- Draft constants ---- */
 
 #define DRAFT_POOL_SIZE       16
 #define DRAFT_ROUNDS           3
-#define DRAFT_TIMER_SECONDS   30.0f
+#define DRAFT_TIMER_SECONDS   15.0f
 
 /* ---- Draft functions ---- */
 
@@ -62,7 +60,8 @@ bool contract_all_chosen(const Phase2State *p2);
 
 /* ---- Contract tracking ---- */
 
-void contract_on_trick_complete(Phase2State *p2, const Trick *trick, int winner,
+void contract_on_trick_complete(Phase2State *p2, const GameState *gs,
+                                const Trick *trick, int winner,
                                 int trick_number, const TrickTransmuteInfo *tti,
                                 bool hearts_broken_before);
 
@@ -71,7 +70,7 @@ void contract_record_received_cards(Phase2State *p2, int player_id,
 
 /* ---- Contract evaluation ---- */
 
-void contract_evaluate_all(Phase2State *p2, int player_id);
+void contract_evaluate_all(Phase2State *p2, const GameState *gs, int player_id);
 void contract_apply_rewards_all(Phase2State *p2, int player_id);
 
 #endif /* CONTRACT_LOGIC_H */

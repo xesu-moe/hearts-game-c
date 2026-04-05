@@ -8,7 +8,7 @@
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN),
  *                 core/game_state.h (game_state_get_winners),
  *                 core/clock.h (FIXED_DT), string.h, fcntl.h, unistd.h
- * @deps-last-changed: 2026-03-27 — Step 23: Calls lobby_link_notify_room_destroyed() when all players leave waiting room
+ * @deps-last-changed: 2026-03-30 — Removed abandon_timer field; per-player disconnect_timer in PlayerSlot replaces room-level tracking
  * ============================================================ */
 
 #include "room.h"
@@ -315,6 +315,35 @@ int room_add_ai(int room_index)
     return seat;
 }
 
+int room_remove_ai(int room_index)
+{
+    if (room_index < 0 || room_index >= MAX_ROOMS) return -1;
+
+    Room *room = &g_rooms[room_index];
+    if (room->status != ROOM_WAITING) return -1;
+
+    /* Find highest-seat AI slot (remove last added) */
+    int seat = -1;
+    for (int i = NET_MAX_PLAYERS - 1; i >= 0; i--) {
+        if (room->slots[i].status == SLOT_AI) {
+            seat = i;
+            break;
+        }
+    }
+    if (seat < 0) return -1;
+
+    PlayerSlot *slot = &room->slots[seat];
+    printf("Room %s: AI removed seat %d (%s)\n",
+           room->code, seat, slot->name);
+
+    memset(slot, 0, sizeof(*slot));
+    slot->status = SLOT_EMPTY;
+    slot->conn_id = -1;
+    slot->disconnect_timer = -1.0f;
+
+    return seat;
+}
+
 int room_start(int room_index)
 {
     if (room_index < 0 || room_index >= MAX_ROOMS) return -1;
@@ -329,6 +358,13 @@ int room_start(int room_index)
     }
     if (occupied < NET_MAX_PLAYERS) return -1;
 
+    /* Copy player names from slots to ServerGame for event log */
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        strncpy(room->game.player_names[i], room->slots[i].name,
+                sizeof(room->game.player_names[i]) - 1);
+        room->game.player_names[i][sizeof(room->game.player_names[i]) - 1] = '\0';
+    }
+    room->game.ai_difficulty = room->ai_difficulty;
     server_game_start(&room->game);
     for (int i = 0; i < NET_MAX_PLAYERS; i++) {
         room->game.gs.players[i].is_human =
@@ -415,7 +451,7 @@ void room_tick(int room_index)
 
         lobby_link_send_result(room->code, scores, winner_seats,
                                winner_count, room->game.gs.round_number,
-                               tokens);
+                               tokens, &room->game);
 
         room->status = ROOM_FINISHED;
         printf("Room %s: game finished\n", room->code);
@@ -428,7 +464,7 @@ void room_tick_all(void)
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (g_rooms[i].status == ROOM_PLAYING) {
             if (room_update_timers(i, FIXED_DT)) {
-                printf("Room %s: abandoned, destroying\n", g_rooms[i].code);
+                printf("Room %s: no humans remaining, destroying\n", g_rooms[i].code);
                 room_destroy(i);
                 continue;
             }
@@ -482,13 +518,17 @@ bool room_update_timers(int room_index, float dt)
         }
     }
 
-    /* Track room abandonment (0 humans connected) */
+    /* Destroy room once no humans remain and all grace periods expired */
     if (room->connected_count == 0) {
-        room->abandon_timer += dt;
-        if (room->abandon_timer >= ROOM_ABANDON_SEC)
-            return true; /* caller should destroy */
-    } else {
-        room->abandon_timer = 0.0f;
+        bool has_disconnected = false;
+        for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+            if (room->slots[s].status == SLOT_DISCONNECTED) {
+                has_disconnected = true;
+                break;
+            }
+        }
+        if (!has_disconnected)
+            return true; /* no humans, no one reconnecting — destroy */
     }
 
     return false;
@@ -516,7 +556,6 @@ int room_reconnect(int room_index, int conn_id,
         slot->disconnect_timer = -1.0f;
         room->game.gs.players[s].is_human = true;
         room->connected_count++;
-        room->abandon_timer = 0.0f;
         room->force_broadcast = true;
 
         printf("Room %s: seat %d reconnected (conn %d)\n",

@@ -10,7 +10,8 @@
       "suit_mask": ["SUIT_HEARTS", "SUIT_DIAMONDS"],
       "custom_points": 0,
       "negative": false,
-      "effect": "EFFECT_NONE"
+      "effect": "EFFECT_NONE",
+      "hide_in_scoring": true
     },
     {
       "id": 1,
@@ -22,7 +23,8 @@
       "suit_mask": ["SUIT_SPADES", "SUIT_CLUBS"],
       "custom_points": 0,
       "negative": true,
-      "effect": "EFFECT_NONE"
+      "effect": "EFFECT_NONE",
+      "hide_in_scoring": true
     },
     {
       "id": 2,
@@ -58,7 +60,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "WOTT_REDUCE_SCORE_3"
+      "effect": "WOTT_REDUCE_SCORE_3",
+      "hide_in_scoring": true
     },
     {
       "id": 5,
@@ -94,7 +97,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "WOTT_SWAP_CARD"
+      "effect": "WOTT_SWAP_CARD",
+      "hide_in_scoring": true
     },
     {
       "id": 8,
@@ -118,7 +122,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "MIRROR_COPY_EFFECTS"
+      "effect": "MIRROR_COPY_EFFECTS",
+      "hide_in_scoring": true
     },
     {
       "id": 10,
@@ -130,19 +135,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "RANDOM_TRICK_WINNER"
-    },
-    {
-      "id": 11,
-      "name": "The Echo",
-      "description": "Points in this trick are also obtained in the next round.",
-      "result_suit": "SUIT_HEARTS",
-      "result_rank": "RANK_J",
-      "special": "TRANSMUTE_NORMAL",
-      "suit_mask": [],
-      "custom_points": -1,
-      "negative": false,
-      "effect": "ECHO_NEXT_ROUND"
+      "effect": "RANDOM_TRICK_WINNER",
+      "hide_in_scoring": true
     },
     {
       "id": 12,
@@ -166,7 +160,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "WOTT_SHIELD_NEXT_TRICK"
+      "effect": "WOTT_SHIELD_NEXT_TRICK",
+      "hide_in_scoring": true
     },
     {
       "id": 14,
@@ -178,7 +173,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "WOTT_FORCE_LEAD_HEARTS"
+      "effect": "WOTT_FORCE_LEAD_HEARTS",
+      "hide_in_scoring": true
     },
     {
       "id": 15,
@@ -250,7 +246,8 @@
       "suit_mask": [],
       "custom_points": -1,
       "negative": false,
-      "effect": "BINDING_AUTO_WIN_NEXT"
+      "effect": "BINDING_AUTO_WIN_NEXT",
+      "hide_in_scoring": true
     },
     {
       "id": 21,
@@ -262,7 +259,8 @@
       "suit_mask": ["SUIT_CLUBS", "SUIT_DIAMONDS", "SUIT_SPADES", "SUIT_HEARTS"],
       "custom_points": 0,
       "negative": false,
-      "effect": "JOKER_LEAD_WIN"
+      "effect": "JOKER_LEAD_WIN",
+      "hide_in_scoring": true
     }
   ]
 }

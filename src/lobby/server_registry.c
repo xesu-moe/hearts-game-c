@@ -7,8 +7,6 @@
  * @deps-last-changed: 2026-03-25 — Step 18: Added heartbeat timeout
  * ============================================================ */
 
-#define _POSIX_C_SOURCE 199309L
-
 #include "server_registry.h"
 
 #include <sqlite3.h>

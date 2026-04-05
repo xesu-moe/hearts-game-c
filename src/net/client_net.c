@@ -1,34 +1,24 @@
 /* ============================================================
  * @deps-implements: net/client_net.h
- * @deps-requires: net/client_net.h (ClientNetState, client_net_*),
- *                 net/socket.h (NetSocket, net_socket_*),
- *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView,
- *                 NetMsgRoomStatus, NetInputCmd, NET_ADDR_LEN, PROTOCOL_VERSION,
- *                 NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN,
- *                 net_input_cmd_is_relevant, net_input_cmd_from_local),
- *                 net/reconnect.h (ReconnectState, reconnect_init,
- *                 reconnect_begin, reconnect_update, reconnect_cancel,
- *                 reconnect_is_active, RECONNECT_MAX_ATTEMPTS),
- *                 core/input_cmd.h (InputCmd),
- *                 string.h, stdio.h, time.h
- * @deps-last-changed: 2026-03-28 — Added client_net_peek_state(), increased STATE_QUEUE_CAP to 16
+ * @deps-requires: net/client_net.h, net/socket.h (NetSocket, net_socket_*),
+ *                 net/protocol.h (NetMsg, NetPlayerView.rogue/duel_revealed_card, PROTOCOL_VERSION),
+ *                 net/reconnect.h (ReconnectState, reconnect_init, reconnect_begin, reconnect_update),
+ *                 core/input_cmd.h (InputCmd), string.h, stdio.h, time.h
+ * @deps-last-changed: 2026-04-04 — Updated state queue to handle NetPlayerView with new revealed card fields
  * ============================================================ */
-
-#define _POSIX_C_SOURCE 199309L /* clock_gettime */
 
 #include "client_net.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
+
+#include "net/platform.h"
 
 #include "net/socket.h"
 #include "net/protocol.h"
 #include "net/reconnect.h"
 #include "core/input_cmd.h"
-#include "core/debug_log.h"
+
 
 /* ================================================================
  * Constants
@@ -74,15 +64,27 @@ static char             g_username[NET_MAX_NAME_LEN];
 static char           g_error_msg[NET_MAX_CHAT_LEN];
 static bool           g_has_error;
 
+/* Pass confirmation queue (async toss animation) */
+#define PASS_CONFIRM_QUEUE_MAX 4
+static uint8_t g_pass_confirm_queue[PASS_CONFIRM_QUEUE_MAX];
+static int     g_pass_confirm_count;
+
+/* Chat/system message queue */
+#define CLIENT_CHAT_QUEUE_MAX 8
+static char    g_chat_queue[CLIENT_CHAT_QUEUE_MAX][NET_MAX_CHAT_LEN];
+static uint8_t g_chat_colors[CLIENT_CHAT_QUEUE_MAX][3];
+static int16_t g_chat_transmute_ids[CLIENT_CHAT_QUEUE_MAX];
+static char    g_chat_highlights[CLIENT_CHAT_QUEUE_MAX][32];
+static int     g_chat_head;
+static int     g_chat_count;
+
 /* ================================================================
  * Internal helpers
  * ================================================================ */
 
 static uint32_t get_monotonic_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint32_t)((uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    return net_get_monotonic_ms();
 }
 
 static void reset_state(void)
@@ -103,6 +105,9 @@ static void reset_state(void)
     memset(&g_room_status, 0, sizeof(g_room_status));
     g_error_msg[0] = '\0';
     g_has_error = false;
+    g_chat_head = 0;
+    g_chat_count = 0;
+    g_pass_confirm_count = 0;
 }
 
 void client_net_set_auth_token(const uint8_t token[NET_AUTH_TOKEN_LEN])
@@ -119,9 +124,10 @@ static void send_handshake(void)
     memcpy(msg.handshake.room_code, g_room_code, NET_ROOM_CODE_LEN);
     memcpy(msg.handshake.username, g_username, NET_MAX_NAME_LEN);
 
-    /* If reconnecting, send session token so server can match our seat */
-    if (reconnect_is_active(&g_reconnect))
-        memcpy(msg.handshake.auth_token, g_session_token, NET_AUTH_TOKEN_LEN);
+    /* Always send session token — needed for both auto-reconnect and
+     * manual reconnect via the Reconnect button. For initial joins this
+     * contains the lobby-assigned auth token set via set_auth_token(). */
+    memcpy(msg.handshake.auth_token, g_session_token, NET_AUTH_TOKEN_LEN);
 
     if (net_socket_send_msg(&g_net, g_conn_id, &msg) < 0) {
         fprintf(stderr, "[client_net] Failed to send handshake\n");
@@ -173,19 +179,12 @@ static void handle_message(const NetMsg *msg)
         /* Enqueue into ring buffer; on overflow drop oldest */
         int tail = (g_vq_head + g_vq_count) % STATE_QUEUE_CAP;
         if (g_vq_count >= STATE_QUEUE_CAP) {
-            DBG(DBG_QUEUE, "OVERFLOW: depth=%d/%d dropped phase=%d num_played=%d",
-                g_vq_count, STATE_QUEUE_CAP,
-                (int)g_view_queue[g_vq_head].phase,
-                g_view_queue[g_vq_head].current_trick.num_played);
             g_vq_head = (g_vq_head + 1) % STATE_QUEUE_CAP;
             /* count stays at CAP */
         } else {
             g_vq_count++;
         }
         memcpy(&g_view_queue[tail], &msg->state_update, sizeof(NetPlayerView));
-        DBG(DBG_QUEUE, "enqueue: depth=%d phase=%d tricks=%d num_played=%d",
-            g_vq_count, (int)msg->state_update.phase,
-            msg->state_update.tricks_played, msg->state_update.current_trick.num_played);
         break;
     }
 
@@ -208,6 +207,35 @@ static void handle_message(const NetMsg *msg)
         g_error_msg[NET_MAX_CHAT_LEN - 1] = '\0';
         g_has_error = true;
         break;
+
+    case NET_MSG_CHAT: {
+        /* Queue system/chat message for main loop to display */
+        int slot;
+        if (g_chat_count < CLIENT_CHAT_QUEUE_MAX) {
+            slot = (g_chat_head + g_chat_count) % CLIENT_CHAT_QUEUE_MAX;
+            g_chat_count++;
+        } else {
+            slot = g_chat_head;
+            g_chat_head = (g_chat_head + 1) % CLIENT_CHAT_QUEUE_MAX;
+        }
+        snprintf(g_chat_queue[slot], NET_MAX_CHAT_LEN, "%s",
+                 msg->chat.text);
+        g_chat_colors[slot][0] = msg->chat.color_r;
+        g_chat_colors[slot][1] = msg->chat.color_g;
+        g_chat_colors[slot][2] = msg->chat.color_b;
+        g_chat_transmute_ids[slot] = msg->chat.transmute_id;
+        strncpy(g_chat_highlights[slot], msg->chat.highlight, 31);
+        g_chat_highlights[slot][31] = '\0';
+        break;
+    }
+
+    case NET_MSG_PASS_CONFIRMED: {
+        uint8_t seat = msg->pass_confirmed.seat;
+        if (seat < 4 && g_pass_confirm_count < PASS_CONFIRM_QUEUE_MAX) {
+            g_pass_confirm_queue[g_pass_confirm_count++] = seat;
+        }
+        break;
+    }
 
     case NET_MSG_DISCONNECT:
         printf("[client_net] Server disconnected\n");
@@ -327,7 +355,7 @@ void client_net_disconnect(void)
         NetConn *c = &g_net.conns[g_conn_id];
         if (c->fd >= 0) {
             shutdown(c->fd, SHUT_RDWR);
-            close(c->fd);
+            net_close_fd(c->fd);
             c->fd = -1;
         }
         c->state = NET_CONN_DISCONNECTED;
@@ -489,9 +517,6 @@ void client_net_consume_state(NetPlayerView *out)
         memcpy(out, &g_view_queue[g_vq_head], sizeof(NetPlayerView));
     g_vq_head = (g_vq_head + 1) % STATE_QUEUE_CAP;
     g_vq_count--;
-    DBG(DBG_QUEUE, "consume: remaining=%d phase=%d num_played=%d",
-        g_vq_count, out ? (int)out->phase : -1,
-        out ? out->current_trick.num_played : -1);
 }
 
 int32_t client_net_ping_ms(void)
@@ -541,6 +566,18 @@ void client_net_set_username(const char *name)
     }
 }
 
+void client_net_get_reconnect_info(char *ip_out, uint16_t *port_out,
+                                   char *room_code_out,
+                                   uint8_t *session_token_out)
+{
+    strncpy(ip_out, g_last_ip, NET_ADDR_LEN - 1);
+    ip_out[NET_ADDR_LEN - 1] = '\0';
+    *port_out = g_last_port;
+    strncpy(room_code_out, g_room_code, NET_ROOM_CODE_LEN - 1);
+    room_code_out[NET_ROOM_CODE_LEN - 1] = '\0';
+    memcpy(session_token_out, g_session_token, NET_AUTH_TOKEN_LEN);
+}
+
 bool client_net_has_error(void)
 {
     return g_has_error;
@@ -556,6 +593,57 @@ bool client_net_consume_error(char *out, size_t len)
     g_has_error = false;
     g_error_msg[0] = '\0';
     return true;
+}
+
+bool client_net_has_chat(void)
+{
+    return g_chat_count > 0;
+}
+
+bool client_net_consume_chat(char *out, size_t len,
+                             uint8_t color_out[3],
+                             int16_t *transmute_id_out,
+                             char highlight_out[32])
+{
+    if (g_chat_count <= 0) return false;
+    int slot = g_chat_head;
+    if (out && len > 0) {
+        strncpy(out, g_chat_queue[slot], len - 1);
+        out[len - 1] = '\0';
+    }
+    if (color_out) {
+        color_out[0] = g_chat_colors[slot][0];
+        color_out[1] = g_chat_colors[slot][1];
+        color_out[2] = g_chat_colors[slot][2];
+    }
+    if (transmute_id_out) *transmute_id_out = g_chat_transmute_ids[slot];
+    if (highlight_out) {
+        strncpy(highlight_out, g_chat_highlights[slot], 31);
+        highlight_out[31] = '\0';
+    }
+    g_chat_head = (g_chat_head + 1) % CLIENT_CHAT_QUEUE_MAX;
+    g_chat_count--;
+    return true;
+}
+
+/* ================================================================
+ * Public API — Pass Confirmation Queue (async toss)
+ * ================================================================ */
+
+int client_net_consume_pass_confirmed(void)
+{
+    if (g_pass_confirm_count <= 0) return -1;
+    uint8_t seat = g_pass_confirm_queue[0];
+    /* Shift remaining entries forward */
+    for (int i = 1; i < g_pass_confirm_count; i++)
+        g_pass_confirm_queue[i - 1] = g_pass_confirm_queue[i];
+    g_pass_confirm_count--;
+    return (int)seat;
+}
+
+void client_net_reset_pass_confirmed(void)
+{
+    g_pass_confirm_count = 0;
 }
 
 /* ================================================================
@@ -574,7 +662,19 @@ int client_net_send_add_ai(void)
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }
 
-int client_net_send_start_game(void)
+int client_net_send_remove_ai(void)
+{
+    if (g_state != CLIENT_NET_CONNECTED || g_conn_id < 0)
+        return -1;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_REQUEST_REMOVE_AI;
+
+    return net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+int client_net_send_start_game(int ai_difficulty)
 {
     if (g_state != CLIENT_NET_CONNECTED || g_conn_id < 0)
         return -1;
@@ -582,6 +682,7 @@ int client_net_send_start_game(void)
     NetMsg msg;
     memset(&msg, 0, sizeof(msg));
     msg.type = NET_MSG_REQUEST_START_GAME;
+    msg.start_game.ai_difficulty = (uint8_t)ai_difficulty;
 
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }
@@ -599,7 +700,5 @@ int client_net_send_cmd(const InputCmd *cmd)
     msg.type = NET_MSG_INPUT_CMD;
     net_input_cmd_from_local(cmd, &msg.input_cmd);
 
-    DBG(DBG_CMD, "send: type=%d card=(%d,%d)",
-        cmd->type, cmd->card.card.suit, cmd->card.card.rank);
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }

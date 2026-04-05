@@ -8,17 +8,19 @@
  * connect, handshake, per-frame send/recv, ping, and state
  * storage. Steps 8-9 consume the stored NetPlayerView.
  *
- * @deps-exports: ClientNetState (+ CLIENT_NET_RECONNECTING), client_net_init/shutdown/
- *                connect/disconnect/update/state/seat/has_new_state/peek_state/
- *                consume_state/ping_ms/reject_reason/send_cmd/is_reconnecting/
- *                reconnect_attempt/reconnect_time_remaining/
- *                has_room_status/consume_room_status/set_username
+ * @deps-exports: ClientNetState, client_net_init/shutdown/connect/
+ *                disconnect/update/state/seat/has_new_state/peek_state/
+ *                consume_state/ping_ms/reject_reason/send_add_ai/
+ *                send_remove_ai/send_start_game(int ai_difficulty)/
+ *                send_cmd/is_reconnecting/reconnect_attempt/
+ *                reconnect_time_remaining/has_room_status/
+ *                consume_room_status/set_username/get_reconnect_info()
  * @deps-requires: net/protocol.h (NetPlayerView, NetRejectReason,
  *                 PROTOCOL_VERSION, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN),
  *                 net/reconnect.h (ReconnectState, reconnect_*),
  *                 core/input_cmd.h (InputCmd)
- * @deps-used-by: main.c, cmd_send.c, state_recv.c
- * @deps-last-changed: 2026-03-28 — Added client_net_peek_state() for non-consuming state inspection
+ * @deps-used-by: main.c, state_recv.c
+ * @deps-last-changed: 2026-04-02 — Changed client_net_send_start_game() signature to accept int ai_difficulty
  * ============================================================ */
 
 #include <stdbool.h>
@@ -117,12 +119,41 @@ void client_net_consume_room_status(NetMsgRoomStatus *out);
 /* Set the username to include in the handshake. Call before connect. */
 void client_net_set_username(const char *name);
 
+/* Copy current connection info for reconnect persistence.
+ * Only valid when state is CLIENT_NET_CONNECTED. */
+void client_net_get_reconnect_info(char *ip_out, uint16_t *port_out,
+                                   char *room_code_out,
+                                   uint8_t *session_token_out);
+
 /* True if a server error message has been received since last consume. */
 bool client_net_has_error(void);
 
 /* Copy the error message into out (up to len bytes) and clear the flag.
  * Returns false if no error was pending. */
 bool client_net_consume_error(char *out, size_t len);
+
+/* True if a server chat/system message has been received since last consume. */
+bool client_net_has_chat(void);
+
+/* Copy the next chat message into out (up to len bytes) and dequeue.
+ * color_out receives (r,g,b) — pass NULL to ignore.
+ * transmute_id_out receives tooltip id (-1=none) — pass NULL to ignore.
+ * highlight_out receives underline substring (32 bytes) — pass NULL to ignore.
+ * Returns false if no chat was pending. */
+bool client_net_consume_chat(char *out, size_t len,
+                             uint8_t color_out[3],
+                             int16_t *transmute_id_out,
+                             char highlight_out[32]);
+
+/* ================================================================
+ * Pass Confirmation Queue (async toss animation)
+ * ================================================================ */
+
+/* Consume the next pending pass confirmation. Returns seat (0-3) or -1 if none. */
+int client_net_consume_pass_confirmed(void);
+
+/* Reset all pass confirmation tracking (call on new round). */
+void client_net_reset_pass_confirmed(void);
 
 /* ================================================================
  * Command Sending (used by Step 8)
@@ -132,9 +163,14 @@ bool client_net_consume_error(char *out, size_t len);
  * Returns 0 on success, -1 on error (not connected). */
 int client_net_send_add_ai(void);
 
-/* Send a request to start the game (room creator only).
+/* Send a request to remove the last AI player from the waiting room.
  * Returns 0 on success, -1 on error (not connected). */
-int client_net_send_start_game(void);
+int client_net_send_remove_ai(void);
+
+/* Send a request to start the game (room creator only).
+ * ai_difficulty: 0=casual, 1=competitive.
+ * Returns 0 on success, -1 on error (not connected). */
+int client_net_send_start_game(int ai_difficulty);
 
 /* Serialize and send an InputCmd to the server. Client-only commands
  * (hover, drag, settings) are silently filtered out.

@@ -10,8 +10,6 @@
  * @deps-last-changed: 2026-03-24 — Step 16: Lobby link integration
  * ============================================================ */
 
-#define _POSIX_C_SOURCE 199309L
-
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,12 +20,6 @@
 #include "room.h"
 #include "lobby_link.h"
 #include "core/clock.h" /* FIXED_DT, MAX_FRAME_DT, MAX_CATCHUP */
-#include "core/debug_log.h"
-
-#ifdef DEBUG
-unsigned g_dbg_mask = DBG_ALL;
-unsigned g_dbg_frame = 0;
-#endif
 
 #define DEFAULT_PORT 7777
 
@@ -59,19 +51,21 @@ static void time_sleep(double seconds)
 
 int main(int argc, char *argv[])
 {
-    /* Parse CLI: hh-server [port] [lobby_addr lobby_port] */
+    /* Parse CLI: hh-server [port] [lobby_addr lobby_port] [public_addr] */
     uint16_t port = DEFAULT_PORT;
     const char *lobby_addr = NULL;
     uint16_t lobby_port = 0;
+    const char *public_addr = "127.0.0.1";
     bool use_lobby = false;
 
     if (argc >= 2) {
         int p = atoi(argv[1]);
         if (p <= 0 || p > 65535) {
-            fprintf(stderr, "Usage: %s [port] [lobby_addr lobby_port]\n", argv[0]);
-            fprintf(stderr, "  port:       1-65535 (default: %d)\n", DEFAULT_PORT);
-            fprintf(stderr, "  lobby_addr: lobby server IP (optional)\n");
-            fprintf(stderr, "  lobby_port: lobby server port (optional)\n");
+            fprintf(stderr, "Usage: %s [port] [lobby_addr lobby_port] [public_addr]\n", argv[0]);
+            fprintf(stderr, "  port:        1-65535 (default: %d)\n", DEFAULT_PORT);
+            fprintf(stderr, "  lobby_addr:  lobby server IP (optional)\n");
+            fprintf(stderr, "  lobby_port:  lobby server port (optional)\n");
+            fprintf(stderr, "  public_addr: address clients connect to (default: 127.0.0.1)\n");
             return 1;
         }
         port = (uint16_t)p;
@@ -85,6 +79,9 @@ int main(int argc, char *argv[])
         }
         lobby_port = (uint16_t)lp;
         use_lobby = true;
+    }
+    if (argc >= 5) {
+        public_addr = argv[4];
     }
 
     /* Signal handling for graceful shutdown */
@@ -109,15 +106,13 @@ int main(int argc, char *argv[])
 
     /* Initialize lobby link if configured */
     if (use_lobby) {
-        lobby_link_init(lobby_addr, lobby_port, "127.0.0.1", port, MAX_ROOMS);
+        lobby_link_init(lobby_addr, lobby_port, public_addr, port, MAX_ROOMS);
         lobby_link_connect();
     }
 
     /* Fixed-timestep loop — server runs indefinitely */
     double last_time = time_now();
     double accumulator = 0.0;
-
-    dbg_init_from_env();
 
     while (g_running) {
         double now = time_now();
@@ -133,9 +128,6 @@ int main(int argc, char *argv[])
         /* Process fixed-timestep ticks */
         int ticks = 0;
         while (accumulator >= (double)FIXED_DT && ticks < MAX_CATCHUP) {
-#ifdef DEBUG
-            g_dbg_frame++;
-#endif
             server_net_update();
             if (use_lobby) lobby_link_update();
             accumulator -= (double)FIXED_DT;

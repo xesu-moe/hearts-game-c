@@ -3,10 +3,12 @@
 
 /* ============================================================
  * @deps-exports: enum TransmuteEffect (TEFFECT_NONE..TEFFECT_JOKER_LEAD_WIN),
- *                enum SuitMask, struct TransmuteSlot, struct TrickTransmuteInfo
+ *                enum SuitMask, struct TransmuteSlot, struct TrickTransmuteInfo,
+ *                struct TransmuteRoundState (rogue_chosen_suit, rogue_chosen_target,
+ *                rogue_revealed_count, rogue_revealed_cards[])
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE, CARDS_PER_TRICK)
  * @deps-used-by: transmutation_logic.h, phase2_state.h, json_parse.c, play_phase.c, info_sync.c, pass_phase.c, turn_flow.c, phase_transitions.c, main.c
- * @deps-last-changed: 2026-03-21 — Added TEFFECT_JOKER_LEAD_WIN (wins leading, loses non-leading)
+ * @deps-last-changed: 2026-04-04 — Rogue redesign: replaced rogue_chosen_card_idx/rogue_revealed_card with rogue_chosen_suit/rogue_chosen_target/rogue_revealed_count/rogue_revealed_cards[] in TransmuteRoundState
  * ============================================================ */
 
 #include <stdbool.h>
@@ -56,7 +58,7 @@ typedef enum SuitMask {
 /* --- Constants --- */
 
 #define MAX_TRANSMUTATION_DEFS   64
-#define MAX_TRANSMUTE_INVENTORY   8
+#define MAX_TRANSMUTE_INVENTORY   18
 
 /* --- TransmutationDef (loaded from JSON, immutable) --- */
 
@@ -70,6 +72,7 @@ typedef struct TransmutationDef {
     SuitMask         suit_mask;      /* Override suit-following (0 = use result_suit) */
     int              custom_points;  /* Point value override; -1 = use card_points() */
     bool             negative;       /* AI hint: pass this to opponents */
+    bool             hide_in_scoring; /* Don't show as pile card in scoring screen */
     TransmuteEffect  effect;         /* Triggered effect (TEFFECT_NONE = no effect) */
     char             art_asset[32];  /* Future: card art key */
 } TransmutationDef;
@@ -108,10 +111,17 @@ typedef struct TrickTransmuteInfo {
 /* --- Per-round transmutation effect tracking --- */
 
 typedef struct TransmuteRoundState {
-    bool martyr_flags[NUM_PLAYERS]; /* true = this player's round_points doubled at round end */
+    int martyr_flags[NUM_PLAYERS]; /* count of martyr effects (2^count multiplier at round end) */
     int gatherer_reduction[NUM_PLAYERS]; /* Accumulated score reduction (multiples of 3) */
     int rogue_pending_winner; /* Player who won a Rogue trick, -1 = none */
     int duel_pending_winner;  /* Player who won a Duel trick, -1 = none */
+    int rogue_chosen_suit;      /* suit chosen by rogue winner, -1 = none */
+    int rogue_chosen_target;    /* opponent targeted by rogue, -1 = none */
+    int rogue_revealed_count;   /* number of revealed cards, -1 = not yet resolved */
+    Card rogue_revealed_cards[MAX_HAND_SIZE]; /* up to 13 cards of chosen suit */
+    int duel_chosen_card_idx;   /* server-chosen card for duel pick, -1 = none */
+    int duel_chosen_target;     /* server-chosen target player for duel, -1 = none */
+    Card duel_revealed_card;    /* actual card for duel peek */
 } TransmuteRoundState;
 
 #endif /* TRANSMUTATION_H */
