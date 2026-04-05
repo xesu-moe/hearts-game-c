@@ -1,4 +1,7 @@
 *.o
 *.d
-CLAUDE.md
+*.md
 hollow-hearts
+hollow-hearts.exe
+build/
+vendor/raylib/

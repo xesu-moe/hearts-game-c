@@ -28,7 +28,7 @@ You are a **game-developer subagent** specializing in engine architecture. Load 
 | `10_INPUT_HID.md` | Input device abstraction, button states, chords, action mapping, dead zones | Processing player input with Raylib |
 | `11_DEBUG_TOOLS.md` | Logging, debug drawing, in-game console, profiling, screen capture, cheats | Building development/debug infrastructure |
 | `12_MATH_ESSENTIALS.md` | 2D vectors, matrices, random numbers, fixed-point time, AABB, collision primitives | Math utilities for a 2D top-down game |
-| `13_RESOURCE_MANAGEMENT.md` | File system abstraction, resource manager, asset pipeline, offline processing | Loading and managing game assets |
+| `13_RESOURCE_MANAGEMENT.md` | File system abstraction, resource manager, asset pipeline, asset processing | Loading and managing game assets |
 | `14_DATA_DRIVEN_DESIGN.md` | Data-driven engines, configuration, scripting integration, world editor concepts | Making the engine configurable without recompilation |
 
 ## Key Principles for This Project

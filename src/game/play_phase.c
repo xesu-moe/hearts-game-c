@@ -78,11 +78,13 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
             return false;
     }
 
-    bool ok;
+    if (hand_idx < 0) return false;  /* Card not in hand */
+
+    if (gs->phase != PHASE_PLAYING) return false;
+    if (game_state_current_player(gs) != player_id) return false;
+    bool first_trick = (gs->tricks_played == 0);
+
     if (is_transmuted) {
-        if (gs->phase != PHASE_PLAYING) return false;
-        if (game_state_current_player(gs) != player_id) return false;
-        bool first_trick = (gs->tricks_played == 0);
         /* Curse bypasses hearts-broken restriction when leading */
         bool hb = gs->hearts_broken || (leading && p2->curse_force_hearts[player_id]);
         if (!transmute_is_valid_play(&gs->current_trick, hand, hts,
@@ -90,23 +92,23 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
                                      hb, first_trick)) {
             return false;
         }
-        hand_remove_at(hand, hand_idx);
-        trick_play_card(&gs->current_trick, player_id, card);
-        if (card.suit == SUIT_HEARTS) {
-            gs->hearts_broken = true;
-        }
-        ok = true;
     } else {
         /* Curse bypasses hearts-broken for non-transmuted cards */
         bool was_broken = gs->hearts_broken;
         if (leading && p2->curse_force_hearts[player_id]) {
             gs->hearts_broken = true;
         }
-        ok = game_state_play_card(gs, player_id, card);
-        if (!ok) {
+        if (!trick_is_valid_play(&gs->current_trick, hand, card,
+                                 gs->hearts_broken, first_trick)) {
             gs->hearts_broken = was_broken;
             return false;
         }
+    }
+
+    hand_remove_at(hand, hand_idx);
+    trick_play_card(&gs->current_trick, player_id, card);
+    if (card.suit == SUIT_HEARTS) {
+        gs->hearts_broken = true;
     }
 
     /* Consume curse after leading */

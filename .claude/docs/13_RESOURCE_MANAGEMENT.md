@@ -152,7 +152,7 @@ void resource_unload_all_sounds(void) {
 3. **Sound files** → consistent format (OGG for music, WAV for SFX)
 4. **Data files** → convert JSON/CSV to binary for fast parsing
 
-For a small project, you can skip the offline pipeline and load raw files directly. Add conversion steps only when loading times become a problem.
+For a small project, you can skip the build-time pipeline and load raw files directly. Add conversion steps only when loading times become a problem.
 
 ## File Organization
 

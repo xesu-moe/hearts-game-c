@@ -1,17 +1,33 @@
 ---
-name: Network Step 6 audit patterns
-description: Common issues found in server network loop implementation - incomplete command handlers, lost state across ticks, missing NULL checks on malloc
+name: Network server audit patterns
+description: Server game loop issues: broadcast-before-destroy ordering, stale ConnSlotInfo, duplicate room codes, plus earlier Step 6 patterns
 type: project
 ---
 
-Key patterns found in Step 6 (Server Network Loop) audit:
+Key patterns from server code audits:
 
-1. **Incomplete multi-step command flows**: SELECT_CARD + CONFIRM pass flow was written with comments describing intent but no actual implementation. Watch for "TODO" or placeholder handlers that accept commands but don't mutate state.
+**Full-lifecycle audit (2026-03-26), status: items 1-3 fixed as of latest review.**
 
-2. **Lost state between ticks**: DUEL_PICK validates target player/index but doesn't store them, so DUEL_GIVE can't complete the swap. Any command split across multiple network messages needs persistent storage in ServerGame or Phase2State. File-scope statics were considered but not used.
+1. ~~Broadcast ordering vs room destruction~~ FIXED: FINISHED rooms now survive one tick for broadcast, then `sv_cleanup_finished_rooms` destroys them.
 
-3. **Missing malloc NULL checks**: ConnSlotInfo allocation in server_net.c had no NULL check. Always verify malloc results in server code -- a crash takes down all rooms.
+2. ~~Stale ConnSlotInfo~~ FIXED: `sv_cleanup_finished_rooms` frees ConnSlotInfo before calling `room_destroy`. Abandoned rooms only destroyed when `connected_count == 0` (all ConnSlotInfo already freed via `sv_cleanup_connection`).
 
-4. **Dead code from double-condition checks**: CONFIRM handler checked `!pass_ready[seat]` twice -- once to enter the branch, once to reject inside it, making the handler always return false.
+3. ~~Duplicate room codes~~ FIXED: `room_create_with_code` now checks `room_find_by_code`.
 
-**How to apply:** When auditing multi-step network flows (any command that requires data from a previous command), verify the intermediate state is persisted in a struct field, not lost on the stack.
+**New findings (2026-03-26 second audit):**
+
+4. **Missing null-termination on `room_code` deserialization**: `NetMsgHandshake.room_code` is read as raw bytes (8 chars) without forcing a NUL terminator. `room_find_by_code` uses `strcmp`, risking read-past-buffer.
+
+5. **Trick transmute info not sent to clients**: `net_build_player_view` zeroes `trick_transmutes` but server never populates it. Clients see no transmutation effects on trick cards.
+
+6. **Every-tick broadcast**: `sv_broadcast_state` sends full state to all connected players every server tick (~16ms). No dirty flag or delta mechanism.
+
+**Earlier Step 6 patterns:**
+
+4. **Incomplete multi-step command flows**: Watch for placeholder handlers that accept commands but don't mutate state.
+
+5. **Lost state between ticks**: Any command split across multiple messages needs persistent storage in ServerGame. Verify intermediate state is in a struct field, not lost on the stack.
+
+6. **Missing malloc NULL checks**: ConnSlotInfo allocation originally had no NULL check (now fixed). Always verify malloc results in server code.
+
+**How to apply:** When auditing server code changes, trace the full lifecycle: message received -> command applied -> state changed -> room status transition -> broadcast -> cleanup. Check ordering dependencies between stages.

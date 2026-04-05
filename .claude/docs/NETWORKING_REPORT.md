@@ -239,8 +239,8 @@ Minimum round-trip: 2× network latency + 1 server tick (16.7ms). For a card gam
 
 12. **Connection quality indicator**: `client_net_ping_ms()` tracks RTT but nothing displays it. A small overlay showing ping would help during testing.
 
-13. **`bool online` parameter proliferation**: Three functions now take this parameter. If more functions need it, consider a global flag or a field in GameState (`gs->online_mode`). The current approach is explicit but could become unwieldy.
+13. **`bool online` parameter removal**: The `bool online` parameter was removed from update functions since the game is always networked.
 
-14. **Server-side AI for non-human players**: Currently the server calls `ai_play_card()` from `server_game.c`. The AI logic is the same as the client's offline AI. For a competitive game, the server should have configurable AI difficulty.
+14. **Server-side AI for non-human players**: Currently the server calls `ai_play_card()` from `server_game.c`. For a competitive game, the server should have configurable AI difficulty.
 
 15. **Unit tests for serialization**: `protocol.c` has ~1868 lines of serialization code with no automated tests. A round-trip test (serialize → deserialize → compare) for each message type would catch regressions.
