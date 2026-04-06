@@ -6,9 +6,10 @@
  * (real logic added in Steps 15-18).
  *
  * @deps-exports: lobby_net_init, lobby_net_shutdown,
- *                lobby_net_listen, lobby_net_update
+ *                lobby_net_listen, lobby_net_update,
+ *                lobby_net_find_conn_by_account
  * @deps-requires: lobby/db.h (LobbyDB — forward-declared)
- * @deps-used-by: lobby/lobby_main.c
+ * @deps-used-by: lobby/lobby_main.c, lobby/friends.c
  * @deps-last-changed: 2026-03-24 — Step 14: Lobby Server Foundation
  * ============================================================ */
 
@@ -34,5 +35,8 @@ bool lobby_net_listen(uint16_t port);
 
 /* Per-tick update: poll, accept, receive, route, cleanup. */
 void lobby_net_update(void);
+
+/* Find connection ID for an authenticated account_id. Returns -1 if not found. */
+int lobby_net_find_conn_by_account(int32_t account_id);
 
 #endif /* LOBBY_NET_H */

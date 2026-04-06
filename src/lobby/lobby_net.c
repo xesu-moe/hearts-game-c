@@ -3,13 +3,15 @@
  * @deps-requires: lobby/lobby_net.h, lobby/db.h, lobby/auth.h,
  *                 lobby/rooms.h, lobby/server_registry.h,
  *                 lobby/matchmaking.h, lobby/stats.h (stats_calc_elo_deltas),
+ *                 lobby/friends.h,
  *                 net/socket.h, net/protocol.h (NET_MSG_SERVER_ROOM_DESTROYED, NetMsgServerRoomDestroyed),
  *                 stdio.h, stdlib.h, string.h, time.h
- * @deps-last-changed: 2026-03-27 — Step 23: Added handler for NET_MSG_SERVER_ROOM_DESTROYED message
+ * @deps-last-changed: 2026-04-06 — Task 5: Friends dispatch, auth/disconnect hooks, room lifecycle hooks
  * ============================================================ */
 
 #include "lobby_net.h"
 
+#include <math.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +20,7 @@
 
 #include "auth.h"
 #include "db.h"
+#include "friends.h"
 #include "matchmaking.h"
 #include "rooms.h"
 #include "stats.h"
@@ -139,6 +142,7 @@ void lobby_net_init(int max_connections, struct LobbyDB *ldb)
     lobby_pending_init();
     svreg_init();
     mm_init();
+    friends_init(&g_net);
     printf("[lobby-net] Initialized (max %d connections)\n", max_connections);
 }
 
@@ -230,6 +234,18 @@ void lobby_net_update(void)
     }
 }
 
+int lobby_net_find_conn_by_account(int32_t account_id)
+{
+    for (int i = 0; i < g_net.max_conns; i++) {
+        if (net_socket_state(&g_net, i) != NET_CONN_CONNECTED) continue;
+        LobbyConnInfo *ci = g_net.conns[i].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED &&
+            ci->account_id == account_id)
+            return i;
+    }
+    return -1;
+}
+
 /* ================================================================
  * Message Routing
  * ================================================================ */
@@ -273,6 +289,50 @@ static void lby_handle_message(int conn_id, const NetMsg *msg)
     case NET_MSG_LEADERBOARD_REQUEST:
         lby_handle_leaderboard_request(conn_id, &msg->leaderboard_request);
         break;
+
+    /* Friend system messages */
+    case NET_MSG_FRIEND_SEARCH: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_search(conn_id, ci->account_id, &msg->friend_search, g_db);
+        break;
+    }
+    case NET_MSG_FRIEND_REQUEST: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_request(conn_id, ci->account_id, &msg->friend_request, g_db);
+        break;
+    }
+    case NET_MSG_FRIEND_ACCEPT: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_accept(conn_id, ci->account_id, &msg->friend_accept, g_db);
+        break;
+    }
+    case NET_MSG_FRIEND_REJECT: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_reject(conn_id, ci->account_id, &msg->friend_reject, g_db);
+        break;
+    }
+    case NET_MSG_FRIEND_REMOVE: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_remove(conn_id, ci->account_id, &msg->friend_remove, g_db);
+        break;
+    }
+    case NET_MSG_FRIEND_LIST_REQUEST: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_list_request(conn_id, ci->account_id, g_db);
+        break;
+    }
+    case NET_MSG_ROOM_INVITE: {
+        LobbyConnInfo *ci = g_net.conns[conn_id].user_data;
+        if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED)
+            friends_handle_room_invite(conn_id, ci->account_id, &msg->room_invite, g_db);
+        break;
+    }
 
     /* Game Server <-> Lobby messages (stubs) */
     case NET_MSG_SERVER_REGISTER:
@@ -358,6 +418,8 @@ static void lby_cleanup_connection(int conn_id)
             lobby_pending_remove_by_server(conn_id);
             mm_pending_remove_by_server(conn_id);
         }
+        if (info->auth_state == LOBBY_AUTH_AUTHENTICATED && info->account_id > 0)
+            friends_on_player_disconnected(info->account_id, g_db);
         printf("[lobby-net] Cleanup conn %d (type=%s, account=%d)\n",
                conn_id, type_str, info->account_id);
         free(info);
@@ -487,6 +549,7 @@ static void lby_handle_login_response(int conn_id, const NetMsgLoginResponse *re
     reply.login_ack.games_played = acct_info.games_played;
     reply.login_ack.games_won = acct_info.games_won;
     net_socket_send_msg(&g_net, conn_id, &reply);
+    friends_on_player_authenticated(conn_id, info->account_id, g_db);
 
     printf("[lobby-net] Login success: conn %d -> account %d\n",
            conn_id, info->account_id);
@@ -724,6 +787,18 @@ static void lby_handle_server_room_created(int conn_id,
                    AUTH_TOKEN_LEN);
             net_socket_send_msg(&g_net, cc, &reply);
         }
+        /* Notify friends module of new room */
+        {
+            int32_t account_ids[MM_PLAYERS_PER_MATCH];
+            int player_count = 0;
+            for (int i = 0; i < MM_PLAYERS_PER_MATCH; i++) {
+                LobbyConnInfo *ci = g_net.conns[match_conns[i]].user_data;
+                if (ci && ci->auth_state == LOBBY_AUTH_AUTHENTICATED &&
+                    ci->account_id > 0)
+                    account_ids[player_count++] = ci->account_id;
+            }
+            friends_on_room_created(rc->room_code, account_ids, player_count, g_db);
+        }
         printf("[lobby-net] Matchmade room '%.8s' created -> %s:%d "
                "(4 players notified)\n", rc->room_code, addr, port);
         return;
@@ -783,6 +858,12 @@ static void lby_handle_server_room_created(int conn_id,
     memcpy(reply.room_assigned.auth_token, info->session_token, AUTH_TOKEN_LEN);
     net_socket_send_msg(&g_net, client_conn, &reply);
 
+    /* Notify friends module of new room */
+    if (info->auth_state == LOBBY_AUTH_AUTHENTICATED && info->account_id > 0) {
+        int32_t account_ids[1] = { info->account_id };
+        friends_on_room_created(rc->room_code, account_ids, 1, g_db);
+    }
+
     printf("[lobby-net] Room '%.8s' created, assigned to client conn %d -> %s:%d\n",
            rc->room_code, client_conn, addr, port);
 }
@@ -797,6 +878,8 @@ static void lby_handle_server_room_destroyed(int conn_id,
     }
 
     lobby_rooms_set_status(g_db, rd->room_code, "expired");
+    friends_on_room_destroyed(rd->room_code, g_db);
+    friends_expire_room_invites(rd->room_code);
 
     int idx = lobby_pending_find_by_code(rd->room_code);
     if (idx >= 0)
@@ -1249,6 +1332,31 @@ static void lby_handle_server_result(int conn_id, const NetMsgServerResult *res)
     printf("[lobby-net] Recorded match %lld: room='%.8s', %d players, "
            "%d rounds\n", (long long)match_id, res->room_code,
            valid_count, res->rounds_played);
+
+    /* Send ELO results back to game server */
+    {
+        NetMsg elo_resp;
+        memset(&elo_resp, 0, sizeof(elo_resp));
+        elo_resp.type = NET_MSG_SERVER_ELO_RESULT;
+        strncpy(elo_resp.server_elo_result.room_code, res->room_code,
+                NET_ROOM_CODE_LEN - 1);
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            if (account_ids[i] < 0) {
+                elo_resp.server_elo_result.prev_elo[i] = -1;
+                elo_resp.server_elo_result.new_elo[i]  = -1;
+            } else {
+                elo_resp.server_elo_result.prev_elo[i] = (int32_t)round(current_elos[i]);
+                double ne = current_elos[i] + elo_deltas[i];
+                if (ne < ELO_MIN) ne = ELO_MIN;
+                if (ne > ELO_MAX) ne = ELO_MAX;
+                elo_resp.server_elo_result.new_elo[i] = (int32_t)round(ne);
+            }
+        }
+        net_socket_send_msg(&g_net, conn_id, &elo_resp);
+        printf("[lobby-net] Sent ELO results for room '%.8s'\n",
+               res->room_code);
+    }
+
     return;
 
 rollback:
