@@ -15,7 +15,7 @@
  * Schema Version (via PRAGMA user_version)
  * ================================================================ */
 
-#define LOBBY_SCHEMA_VERSION 7
+#define LOBBY_SCHEMA_VERSION 8
 
 /* ================================================================
  * Migrations
@@ -115,6 +115,30 @@ static const Migration MIGRATIONS[] = {
      "ALTER TABLE stats ADD COLUMN hearts_collected INTEGER NOT NULL DEFAULT 0;"
      "ALTER TABLE stats ADD COLUMN tricks_won INTEGER NOT NULL DEFAULT 0;",
      "extended stats columns"},
+
+    {8,
+     "CREATE TABLE friendships ("
+     "  account_a  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  account_b  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),"
+     "  PRIMARY KEY (account_a, account_b),"
+     "  CHECK(account_a < account_b)"
+     ");"
+     "CREATE INDEX idx_friendships_b ON friendships(account_b);"
+     "CREATE TABLE friend_requests ("
+     "  from_account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  to_account   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),"
+     "  PRIMARY KEY (from_account, to_account)"
+     ");"
+     "CREATE INDEX idx_friend_requests_to ON friend_requests(to_account);"
+     "CREATE TABLE friend_blocks ("
+     "  blocker_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  blocked_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),"
+     "  PRIMARY KEY (blocker_id, blocked_id)"
+     ");",
+     "friendships, friend_requests, friend_blocks tables"},
 };
 
 #define MIGRATION_COUNT (int)(sizeof(MIGRATIONS) / sizeof(MIGRATIONS[0]))
@@ -296,6 +320,49 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
         "FROM match_players WHERE account_id = ?",
     [LOBBY_STMT_GET_AVG_PLACEMENT] =
         "SELECT AVG(placement) FROM match_players WHERE account_id = ?",
+    /* Friend system (migration v8) */
+    [LOBBY_STMT_FRIEND_SEARCH] =
+        "SELECT id, username FROM accounts "
+        "WHERE username LIKE ? COLLATE NOCASE AND id != ? "
+        "LIMIT 10",
+    [LOBBY_STMT_FRIEND_COUNT] =
+        "SELECT COUNT(*) FROM friendships "
+        "WHERE account_a = ? OR account_b = ?",
+    [LOBBY_STMT_FRIEND_LIST] =
+        "SELECT CASE WHEN account_a = ?1 THEN account_b ELSE account_a END AS friend_id "
+        "FROM friendships "
+        "WHERE account_a = ?1 OR account_b = ?1",
+    [LOBBY_STMT_FRIEND_INSERT] =
+        "INSERT OR IGNORE INTO friendships (account_a, account_b) VALUES (?, ?)",
+    [LOBBY_STMT_FRIEND_DELETE] =
+        "DELETE FROM friendships "
+        "WHERE (account_a = ? AND account_b = ?) OR (account_a = ? AND account_b = ?)",
+    [LOBBY_STMT_FRIEND_CHECK] =
+        "SELECT 1 FROM friendships "
+        "WHERE (account_a = ?1 AND account_b = ?2) OR (account_a = ?2 AND account_b = ?1) "
+        "LIMIT 1",
+    [LOBBY_STMT_FREQ_INSERT] =
+        "INSERT OR IGNORE INTO friend_requests (from_account, to_account) VALUES (?, ?)",
+    [LOBBY_STMT_FREQ_DELETE] =
+        "DELETE FROM friend_requests WHERE from_account = ? AND to_account = ?",
+    [LOBBY_STMT_FREQ_LIST_INCOMING] =
+        "SELECT fr.from_account, a.username FROM friend_requests fr "
+        "JOIN accounts a ON fr.from_account = a.id "
+        "WHERE fr.to_account = ?",
+    [LOBBY_STMT_FREQ_LIST_OUTGOING] =
+        "SELECT to_account FROM friend_requests WHERE from_account = ?",
+    [LOBBY_STMT_FREQ_CHECK] =
+        "SELECT 1 FROM friend_requests "
+        "WHERE from_account = ? AND to_account = ? LIMIT 1",
+    [LOBBY_STMT_FREQ_COUNT_OUTGOING] =
+        "SELECT COUNT(*) FROM friend_requests WHERE from_account = ?",
+    [LOBBY_STMT_FBLOCK_INSERT] =
+        "INSERT OR IGNORE INTO friend_blocks (blocker_id, blocked_id) VALUES (?, ?)",
+    [LOBBY_STMT_FBLOCK_CHECK] =
+        "SELECT 1 FROM friend_blocks "
+        "WHERE blocker_id = ? AND blocked_id = ? LIMIT 1",
+    [LOBBY_STMT_GET_USERNAME] =
+        "SELECT username FROM accounts WHERE id = ?",
 };
 
 static int lobbydb_prepare_all(LobbyDB *ldb)
