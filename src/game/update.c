@@ -122,6 +122,10 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             friend_panel_update(&oui->friend_panel, dt);
             friend_panel_set_can_invite(&oui->friend_panel,
                 oui->subphase == ONLINE_SUB_CONNECTED_WAITING);
+            if (oui->subphase == ONLINE_SUB_CONNECTED_WAITING) {
+                memcpy(oui->friend_panel.current_room_code,
+                       oui->created_room_code[0] ? oui->created_room_code : oui->assigned_room_code, 8);
+            }
             break;
 
         case PHASE_MENU:

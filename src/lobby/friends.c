@@ -219,8 +219,15 @@ void friends_on_player_authenticated(int conn_id, int32_t account_id, LobbyDB *d
 
 void friends_on_player_disconnected(int32_t account_id, LobbyDB *db)
 {
-    /* Determine their new presence (may still be in-game) */
-    uint8_t presence = friends_get_presence(account_id);
+    /* Check in-game map directly — don't use friends_get_presence which
+       may see a stale connection that hasn't been fully closed yet */
+    uint8_t presence = FRIEND_PRESENCE_OFFLINE;
+    for (int i = 0; i < g_ingame_count; i++) {
+        if (g_ingame[i].account_id == account_id) {
+            presence = FRIEND_PRESENCE_IN_GAME;
+            break;
+        }
+    }
     notify_friends_presence(account_id, presence, db);
 }
 

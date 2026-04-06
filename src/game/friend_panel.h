@@ -52,6 +52,7 @@ typedef struct {
 
     /* Room invite capability */
     bool    can_invite;
+    char    current_room_code[8]; /* set by online_ui when in a room */
 } FriendPanelState;
 
 void friend_panel_init(FriendPanelState *state);

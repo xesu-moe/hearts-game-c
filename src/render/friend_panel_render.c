@@ -40,8 +40,9 @@ static bool draw_button(Font font, const char *text, Rectangle rect, Color bg, C
 {
     Vector2 mouse = GetMousePosition();
     bool hover = CheckCollisionPointRec(mouse, rect);
-    Color c = hover ? (Color){(uint8_t)(bg.r + 20), (uint8_t)(bg.g + 20),
-                               (uint8_t)(bg.b + 20), bg.a} : bg;
+    Color c = hover ? (Color){(uint8_t)(bg.r + 20 > 255 ? 255 : bg.r + 20),
+                               (uint8_t)(bg.g + 20 > 255 ? 255 : bg.g + 20),
+                               (uint8_t)(bg.b + 20 > 255 ? 255 : bg.b + 20), bg.a} : bg;
     DrawRectangleRec(rect, c);
     Vector2 tsz = MeasureTextEx(font, text, FONT_SM, FONT_SPACING);
     Vector2 tpos = {rect.x + (rect.width - tsz.x) / 2.0f,
@@ -311,24 +312,29 @@ void friend_panel_render_input(FriendPanelState *state, Rectangle pr)
     }
 
     if (state->search_active) {
+        bool text_changed = false;
         int ch = GetCharPressed();
         while (ch > 0) {
             if (ch >= 32 && ch < 127 && state->search_len < 31) {
                 state->search_buf[state->search_len++] = (char)ch;
                 state->search_buf[state->search_len] = '\0';
+                text_changed = true;
             }
             ch = GetCharPressed();
         }
         if (IsKeyPressed(KEY_BACKSPACE) && state->search_len > 0) {
             state->search_len--;
             state->search_buf[state->search_len] = '\0';
+            text_changed = true;
         }
-        /* Trigger search when >= 4 chars */
-        if (state->search_len >= 4) {
-            lobby_client_friend_search(state->search_buf);
-        } else {
-            state->search_results_visible = false;
-            state->search_result_count = 0;
+        /* Trigger search only when text changed and >= 4 chars */
+        if (text_changed) {
+            if (state->search_len >= 4) {
+                lobby_client_friend_search(state->search_buf);
+            } else {
+                state->search_results_visible = false;
+                state->search_result_count = 0;
+            }
         }
     }
 
@@ -398,7 +404,7 @@ void friend_panel_render_input(FriendPanelState *state, Rectangle pr)
                 state->entries[i].presence == FRIEND_PRESENCE_ONLINE) {
                 Rectangle ir = {btn_x - BTN_W - 2, ey + 8, BTN_W, BTN_H};
                 if (CheckCollisionPointRec(mouse, ir)) {
-                    lobby_client_room_invite(state->entries[i].account_id, "");
+                    lobby_client_room_invite(state->entries[i].account_id, state->current_room_code);
                     break;
                 }
             }
