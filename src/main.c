@@ -162,6 +162,7 @@ int main(int argc, char **argv)
     render_init(&rs);
     rs.login_ui = &lui;
     rs.online_ui = &oui;
+    rs.friend_panel = &oui.friend_panel;
 
     /* Apply loaded settings (fullscreen, fps, layout) */
     settings_apply(&g_settings);
@@ -599,6 +600,25 @@ int main(int argc, char **argv)
                         }
                         if (valid &&
                             rs.selected_count == gs.pass_card_count) {
+                            /* Set transmutation hints before select_pass */
+                            for (int i = 0; i < gs.pass_card_count; i++) {
+                                int vi = rs.selected_indices[i];
+                                gs.pass_selection_hints[0][i] = -1;
+                                if (p2.enabled) {
+                                    int hand_idx = -1;
+                                    for (int ci = 0; ci < rs.hand_visual_counts[0]; ci++) {
+                                        if (rs.hand_visuals[0][ci] == vi) {
+                                            hand_idx = ci;
+                                            break;
+                                        }
+                                    }
+                                    if (hand_idx >= 0) {
+                                        const HandTransmuteState *hts = &p2.players[0].hand_transmutes;
+                                        if (transmute_is_transmuted(hts, hand_idx))
+                                            gs.pass_selection_hints[0][i] = hts->slots[hand_idx].transmutation_id;
+                                    }
+                                }
+                            }
                             game_state_select_pass(&gs, 0, pass_cards,
                                                    gs.pass_card_count);
                             render_clear_selection(&rs);
@@ -759,7 +779,8 @@ int main(int argc, char **argv)
                 } else if (cmd.type == INPUT_CMD_ONLINE_START) {
                     if (oui.subphase == ONLINE_SUB_CREATE_WAITING &&
                         client_net_state() == CLIENT_NET_CONNECTED) {
-                        client_net_send_start_game(oui.ai_difficulty);
+                        client_net_send_start_game(oui.ai_difficulty,
+                            oui.timer_option, oui.point_goal, oui.gamemode);
                     }
                 } else if (cmd.type == INPUT_CMD_ONLINE_CANCEL ||
                            cmd.type == INPUT_CMD_CANCEL) {
@@ -824,8 +845,27 @@ int main(int argc, char **argv)
             bool would_defer = (flow.step != FLOW_IDLE &&
                                 flow.step != FLOW_WAITING_FOR_HUMAN &&
                                 flow.step != FLOW_ROGUE_WAITING &&
-                                flow.step != FLOW_DUEL_WAITING);
-            if (would_defer) goto skip_state_apply;
+                                flow.step != FLOW_DUEL_WAITING &&
+                                !(flow.duel_watching &&
+                                  (flow.step == FLOW_DUEL_PICK_OWN ||
+                                   flow.step == FLOW_DUEL_ANIM_TO_CENTER ||
+                                   flow.step == FLOW_DUEL_ANIM_RETURN ||
+                                   flow.step == FLOW_DUEL_ANIM_EXCHANGE ||
+                                   flow.step == FLOW_DUEL_RECEIVE_REVEAL ||
+                                   flow.step == FLOW_DUEL_RECEIVE)));
+            if (would_defer) {
+                /* Even when deferring, peek at trick_winner so Roulette
+                 * (random winner) is available for the pile animation.
+                 * The full state update stays queued for later. */
+                const NetPlayerView *peek = client_net_peek_state();
+                if (peek && (int8_t)peek->trick_winner >= 0) {
+                    int tw = peek->trick_winner;
+                    pls.server_trick_winner =
+                        (tw >= 0) ? (int)((tw - peek->my_seat + NUM_PLAYERS)
+                                          % NUM_PLAYERS) : -1;
+                }
+                goto skip_state_apply;
+            }
 
             /* Defer non-SCORING states while the scoring screen is active.
              * Allow consuming additional SCORING states (to get evaluated
@@ -955,6 +995,10 @@ int main(int argc, char **argv)
 
             state_recv_apply(&gs, &p2, &view, false);
 
+            /* Apply configured turn time limit from server */
+            if (view.turn_time_limit > 0.0f && view.turn_time_limit <= 120.0f)
+                flow.turn_time_limit = view.turn_time_limit;
+
             /* Apply trick transmutation info from server to PlayPhaseState
              * so info_sync can detect Mirror and other per-slot effects */
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
@@ -1054,6 +1098,18 @@ int main(int argc, char **argv)
         }
         skip_state_apply: ;
 
+        /* Game-over ELO data from server */
+        if (client_net_has_game_over()) {
+            const NetMsgGameOver *go = client_net_get_game_over();
+            rs.elo_has_data = go->has_elo;
+            if (go->has_elo) {
+                for (int i = 0; i < NUM_PLAYERS; i++) {
+                    rs.elo_prev[i] = go->prev_elo[i];
+                    rs.elo_new[i]  = go->new_elo[i];
+                }
+            }
+        }
+
         /* Step 13: Display server error messages in chat log */
         {
             char errbuf[NET_MAX_CHAT_LEN];
@@ -1074,6 +1130,9 @@ int main(int argc, char **argv)
                 ? (Color){clr[0], clr[1], clr[2], 255} : LIGHTGRAY;
             if (hl[0] && tid >= 0) {
                 render_chat_log_push_rich(&rs, chat_buf, c, hl, tid);
+            } else if (hl[0] && strncmp(hl, "trick ", 6) == 0) {
+                int trick_num = atoi(hl + 6);
+                render_chat_log_push_trick(&rs, chat_buf, c, hl, trick_num);
             } else {
                 render_chat_log_push_color(&rs, chat_buf, c);
             }
@@ -1146,6 +1205,15 @@ int main(int argc, char **argv)
 
         /* Pass turn timer to render state for display */
         rs.turn_time_remaining = flow.turn_timer;
+
+        /* Pass duel state to render */
+        rs.duel_watching = flow.duel_watching;
+        if (!flow.duel_watching &&
+            (flow.step == FLOW_DUEL_PICK_OPPONENT ||
+             flow.step == FLOW_DUEL_PICK_OWN))
+            rs.duel_time_remaining = flow.timer;
+        else
+            rs.duel_time_remaining = -1.0f;
 
         /* Music: single background track for all phases */
         audio_set_music(&audio, MUSIC_BACKGROUND);

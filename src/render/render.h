@@ -2,13 +2,12 @@
 #define RENDER_H
 
 /* ============================================================
- * @deps-exports: struct DragState, struct RenderState (suit_hover_active,
- *                suit_indicator_rects[], suit_hover_idx, suit_border_t,
- *                rogue_target_player, staged_rogue_cv_count, staged_rogue_cv_indices[], mirror_source_tid)
+ * @deps-exports: struct DragState, struct RenderState (elo_has_data,
+ *                elo_prev[4], elo_new[4])
  * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/game_state.h
  * @deps-used-by: render.c, game/process_input.c, game/update.c, game/info_sync.c,
  *                game/play_phase.c, game/phase_transitions.c, main.c
- * @deps-last-changed: 2026-04-04 — Added mirror_source_tid field to RenderState for Mirror transmutation sprite morphing
+ * @deps-last-changed: 2026-04-06 — Added elo_has_data (bool), elo_prev[4], elo_new[4] fields for ELO result display
  * ============================================================ */
 
 #include <stdbool.h>
@@ -20,11 +19,13 @@
 #include "core/game_state.h"
 #include "layout.h"
 #include "particle.h"
+#include "help_menu.h"
 #include "phase2/effect.h"
 
 /* Forward declaration — full definition in phase2/phase2_state.h */
 struct Phase2State;
 
+#include "game/friend_panel.h"
 #include "net/lobby_client.h"
 
 /* Stats screen tabs */
@@ -39,6 +40,16 @@ typedef enum StatsTab {
 #include "card_dimens.h"
 #define MENU_ITEM_COUNT  5
 #define MAX_PILE_CARDS   52  /* 13 tricks x 4 cards */
+
+/* Trick history record for tooltip display */
+#define MAX_TRICKS_PER_ROUND 13
+typedef struct TrickRecord {
+    Card cards[CARDS_PER_TRICK];
+    int  player_ids[CARDS_PER_TRICK];
+    int  transmute_ids[CARDS_PER_TRICK]; /* transmutation ID per card, -1=none */
+    int  winner;
+    int  num_played;
+} TrickRecord;
 
 /* ---- Menu Items ---- */
 
@@ -184,6 +195,7 @@ typedef struct RenderState {
     int           last_trick_winner;
     float         trick_winner_timer;
     float         turn_time_remaining;  /* seconds left for current turn */
+    float         duel_time_remaining;  /* seconds left for duel pick/give, <0 = inactive */
 
     /* UI buttons */
     UIButton menu_items[MENU_ITEM_COUNT];
@@ -227,10 +239,13 @@ typedef struct RenderState {
     Color chat_colors[CHAT_LOG_MAX]; /* per-message color, parallel to chat_msgs */
     char  chat_highlight[CHAT_LOG_MAX][32];  /* substring to underline (empty=none) */
     int   chat_transmute_id[CHAT_LOG_MAX];   /* transmute id for tooltip (-1=none) */
+    int   chat_trick_num[CHAT_LOG_MAX];      /* 1-based trick number for tooltip (-1=none) */
 
     /* Chat hover tooltip — set by draw, consumed by update */
     int   chat_hover_tid;       /* transmute_id from hovered chat highlight, -1=none */
     Rectangle chat_hover_rect;  /* bounding rect of hovered highlight */
+    int       chat_hover_trick_num;   /* 1-based trick num from hovered highlight, -1=none */
+    Rectangle chat_hover_trick_rect;  /* bounding rect of hovered trick highlight */
 
     /* Dealer phase UI */
 #define DEALER_DIR_BTN_COUNT 3
@@ -281,6 +296,16 @@ typedef struct RenderState {
         float   anchor_h;      /* card height */
     } transmute_tooltip;
 
+    /* Trick card hover tooltip (chat log "trick N" hover) */
+    struct {
+        int     trick_num;   /* 1-based trick number, -1 = inactive */
+        float   anim_t;      /* 0→1 grow-in, 1→0 shrink-out */
+        bool    active;      /* mouse currently over a trick highlight */
+        Vector2 anchor;      /* top-left of the hovered text */
+        float   anchor_w;    /* text width */
+        float   anchor_h;    /* text height */
+    } trick_tooltip;
+
     /* Settings UI */
     SettingsTab settings_tab;
     UIButton    settings_tab_btns[SETTINGS_TAB_COUNT];
@@ -317,6 +342,10 @@ typedef struct RenderState {
     bool       pile_anim_in_progress;  /* blocks sync_needed during pile collect */
     bool       trick_anim_in_progress; /* blocks sync during online trick animations */
     int        trick_visible_count;   /* caps trick cards shown by sync_hands (flow controls) */
+
+    /* Trick history for tooltip display (cleared each round) */
+    TrickRecord trick_history[MAX_TRICKS_PER_ROUND];
+    int         trick_history_count;  /* 0..13 */
 
     /* Pass animation staging */
     PassStagedCard pass_staged[MAX_PASS_STAGED];
@@ -369,16 +398,27 @@ typedef struct RenderState {
      * Set by turn_flow, read by sync to preserve card state across resync. */
     int staged_rogue_cv_count;                       /* number of staged rogue cards */
     int staged_rogue_cv_indices[MAX_HAND_SIZE];      /* indices into cards[] */
-    int staged_duel_cv_idx;   /* -1 = none */
+    int staged_duel_cv_idx;       /* -1 = none */
+    int staged_duel_own_cv_idx;   /* return card during exchange, -1 = none */
 
     /* Rogue reveal border animation (timer border around revealed cards) */
     bool      rogue_border_active;      /* draw the border? */
     float     rogue_border_progress;    /* 0→1 over reveal duration */
 
+    /* Duel reveal border animation (countdown border around revealed card) */
+    bool      duel_border_active;       /* draw the border? */
+    float     duel_border_progress;     /* 0→1 over duel choose duration */
+    bool      duel_watching;            /* true = non-winner passively watching */
+
     /* Flow-driven sync control */
     bool sync_needed;      /* when true, sync_hands() rebuilds visuals */
     int  anim_play_player; /* player whose last card should animate (-1 = none) */
     int  anim_trick_slot;  /* trick slot to animate (-1 = use last trick visual) */
+
+    /* ELO display (game-over screen) */
+    bool    elo_has_data;               /* true when lobby ELO response received */
+    int32_t elo_prev[NUM_PLAYERS];      /* -1 = AI/unranked */
+    int32_t elo_new[NUM_PLAYERS];       /* -1 = AI/unranked */
 
     /* Deal animation */
     bool deal_complete;      /* set by render_update when all deal animations finish */
@@ -410,7 +450,13 @@ typedef struct RenderState {
     UIButton btn_online_start_game;
     UIButton btn_online_cancel;
     UIButton btn_online_try_again;
+
+    /* Game options arrow selectors (left panel in waiting room) */
+    UIButton btn_opt_timer_prev, btn_opt_timer_next;
+    UIButton btn_opt_points_prev, btn_opt_points_next;
+    UIButton btn_opt_mode_prev, btn_opt_mode_next;
     const struct OnlineUIState *online_ui; /* set by main.c, read by render */
+    FriendPanelState *friend_panel; /* set by main.c, mutable for input */
 
     /* Player display names (usernames or default names) */
     char player_names[NUM_PLAYERS][32];
@@ -431,6 +477,9 @@ typedef struct RenderState {
     bool            leaderboard_loaded;
     bool            leaderboard_loading;
     float           leaderboard_scroll_y;
+
+    /* Help menu */
+    HelpMenuState help_menu;
 } RenderState;
 
 /* ---- Public API ---- */
@@ -531,6 +580,10 @@ void render_chat_log_push_color(RenderState *rs, const char *msg, Color color);
 /* Push a colored message with an underlined highlight and transmutation hover tooltip. */
 void render_chat_log_push_rich(RenderState *rs, const char *msg, Color color,
                                const char *highlight, int transmute_id);
+
+/* Push a colored message with an underlined highlight and trick card hover tooltip. */
+void render_chat_log_push_trick(RenderState *rs, const char *msg, Color color,
+                                const char *highlight, int trick_num);
 
 
 /* Reset render state for returning to main menu mid-game.

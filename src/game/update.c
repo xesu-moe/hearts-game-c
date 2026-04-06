@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "core/input.h"
+#include "game/friend_panel.h"
 #include "net/client_net.h"
 #include "net/lobby_client.h"
 #include "render/render.h"
@@ -118,7 +119,9 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             if (cmd.type == INPUT_CMD_QUIT) {
                 *quit_requested = true;
             }
-            (void)oui;
+            friend_panel_update(&oui->friend_panel, dt);
+            friend_panel_set_can_invite(&oui->friend_panel,
+                oui->subphase == ONLINE_SUB_CONNECTED_WAITING);
             break;
 
         case PHASE_MENU:
@@ -199,6 +202,25 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                     pass_cards[i] = rs->cards[idx].card;
                 }
                 if (!valid) break;
+                /* Set transmutation hints before select_pass for disambiguation */
+                for (int i = 0; i < gs->pass_card_count; i++) {
+                    int vi = rs->selected_indices[i];
+                    gs->pass_selection_hints[0][i] = -1;
+                    if (p2->enabled) {
+                        int hand_idx = -1;
+                        for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                            if (rs->hand_visuals[0][ci] == vi) {
+                                hand_idx = ci;
+                                break;
+                            }
+                        }
+                        if (hand_idx >= 0) {
+                            const HandTransmuteState *hts = &p2->players[0].hand_transmutes;
+                            if (transmute_is_transmuted(hts, hand_idx))
+                                gs->pass_selection_hints[0][i] = hts->slots[hand_idx].transmutation_id;
+                        }
+                    }
+                }
                 game_state_select_pass(gs, 0, pass_cards, gs->pass_card_count);
                 render_clear_selection(rs);
                 pls->pending_transmutation = -1;

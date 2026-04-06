@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "net/protocol.h"
+#include "game/friend_panel.h"
 
 typedef enum OnlineSubphase {
     ONLINE_SUB_MENU = 0,        /* Create / Join / Quick Match / Back */
@@ -59,6 +60,11 @@ typedef struct OnlineUIState {
     /* AI difficulty: 0 = Casual, 1 = Competitive */
     int ai_difficulty;
 
+    /* Game options (arrow selectors in waiting room) */
+    int timer_option;    /* index: 0=Base(+0s), 1=+5s, 2=+10s, 3=+15s, 4=+20s */
+    int point_goal;      /* index: 0=10, 1=50, 2=100 */
+    int gamemode;        /* index: 0=Transmutations, 1=Vanilla(TBI), 2=Dragon Hearts(TBI) */
+
     /* Server connection info (from ROOM_ASSIGNED) */
     char     server_addr[NET_ADDR_LEN];
     uint16_t server_port;
@@ -68,7 +74,23 @@ typedef struct OnlineUIState {
 
     /* Set by main.c from settings; renderer reads to show Reconnect button */
     bool     has_reconnect;
+
+    /* Friend panel */
+    FriendPanelState friend_panel;
 } OnlineUIState;
+
+/* ---- Game option tables ---- */
+
+extern const int    TIMER_BONUS_VALUES[];
+extern const char  *TIMER_LABELS[];
+extern const int    TIMER_OPTION_COUNT;
+
+extern const int    POINT_GOAL_VALUES[];
+extern const char  *POINT_GOAL_LABELS[];
+extern const int    POINT_GOAL_COUNT;
+
+extern const char  *GAMEMODE_LABELS[];
+extern const int    GAMEMODE_COUNT;
 
 /* Initialize online UI state to defaults. */
 void online_ui_init(OnlineUIState *oui);

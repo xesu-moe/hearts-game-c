@@ -14,6 +14,19 @@
 
 #include <raylib.h>
 
+/* ---- Game option tables ---- */
+
+const int    TIMER_BONUS_VALUES[] = { 0, 5, 10, 15, 20 };
+const char  *TIMER_LABELS[]      = { "Base", "+5s", "+10s", "+15s", "+20s" };
+const int    TIMER_OPTION_COUNT  = 5;
+
+const int    POINT_GOAL_VALUES[] = { 10, 50, 100 };
+const char  *POINT_GOAL_LABELS[] = { "10", "50", "100" };
+const int    POINT_GOAL_COUNT    = 3;
+
+const char  *GAMEMODE_LABELS[]   = { "Transmutations", "Vanilla", "Dragon Hearts" };
+const int    GAMEMODE_COUNT      = 3;
+
 /* Room codes use uppercase alphanumeric, excluding ambiguous chars (O/0/I/l).
  * Accept lowercase too and convert to uppercase. */
 static bool is_valid_room_code_char(int ch)
@@ -34,6 +47,8 @@ void online_ui_init(OnlineUIState *oui)
     memset(oui, 0, sizeof(*oui));
     oui->subphase = ONLINE_SUB_MENU;
     snprintf(oui->status_text, sizeof(oui->status_text), "Online");
+    oui->point_goal = 2;  /* default: 100 */
+    friend_panel_init(&oui->friend_panel);
 }
 
 void online_ui_update_text_input(OnlineUIState *oui, float dt)
