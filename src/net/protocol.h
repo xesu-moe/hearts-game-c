@@ -8,14 +8,13 @@
  * This header does NOT include Raylib. It includes only core/card.h
  * and core/input_cmd.h (both Raylib-free) and standard library headers.
  *
- * @deps-exports: NetMsgType (includes NET_MSG_REQUEST_START_GAME, etc),
- *                NetMsg (now includes start_game union member),
- *                NetCard, NetInputCmd (rogue_reveal.suit), NetPlayerView
- *                (last_played_transmuted_card_suit, last_played_transmuted_card_rank), PROTOCOL_VERSION (now 6)
+ * @deps-exports: NetMsgType (NET_MSG_SERVER_ELO_RESULT = 66),
+ *                NetMsgServerEloResult, NetMsgGameOver (has_elo, prev_elo[4], new_elo[4]),
+ *                NetMsg (server_elo_result union member), NetCard, NetInputCmd, NetPlayerView
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS),
  *                 core/input_cmd.h (InputCmd, InputCmdType)
  * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.c, lobby_client.c, lobby_net.c
- * @deps-last-changed: 2026-04-05 — Added last_played_transmuted_card_suit/rank fields to NetPlayerView for Mirror transmutation history
+ * @deps-last-changed: 2026-04-06 — Added NET_MSG_SERVER_ELO_RESULT, NetMsgServerEloResult, and ELO fields to NetMsgGameOver
  * ============================================================ */
 
 #include <stdbool.h>
@@ -107,6 +106,21 @@ typedef enum NetMsgType {
     NET_MSG_LEADERBOARD_REQUEST  = 56,  /* client -> lobby: request top 100 */
     NET_MSG_LEADERBOARD_RESPONSE = 57,  /* lobby -> client: top 100 + rank */
 
+    /* Friend system messages (70-82) */
+    NET_MSG_FRIEND_SEARCH          = 70,
+    NET_MSG_FRIEND_SEARCH_RESULT   = 71,
+    NET_MSG_FRIEND_REQUEST         = 72,
+    NET_MSG_FRIEND_ACCEPT          = 73,
+    NET_MSG_FRIEND_REJECT          = 74,
+    NET_MSG_FRIEND_REMOVE          = 75,
+    NET_MSG_FRIEND_LIST_REQUEST    = 76,
+    NET_MSG_FRIEND_LIST            = 77,
+    NET_MSG_FRIEND_UPDATE          = 78,
+    NET_MSG_FRIEND_REQUEST_NOTIFY  = 79,
+    NET_MSG_ROOM_INVITE            = 80,
+    NET_MSG_ROOM_INVITE_NOTIFY     = 81,
+    NET_MSG_ROOM_INVITE_EXPIRED    = 82,
+
     /* Lobby <-> Game Server messages (60-69) */
     NET_MSG_SERVER_REGISTER    = 60,
     NET_MSG_SERVER_CREATE_ROOM = 61,
@@ -114,6 +128,7 @@ typedef enum NetMsgType {
     NET_MSG_SERVER_HEARTBEAT   = 63,
     NET_MSG_SERVER_ROOM_CREATED   = 64, /* server -> lobby: room creation ACK */
     NET_MSG_SERVER_ROOM_DESTROYED = 65, /* server -> lobby: room was destroyed */
+    NET_MSG_SERVER_ELO_RESULT     = 66, /* lobby -> server: ELO deltas after match */
 
     NET_MSG_TYPE_COUNT
 } NetMsgType;
@@ -221,7 +236,7 @@ typedef struct NetInputCmd {
     uint8_t source_player; /* 0-3 */
     union {
         struct {
-            uint8_t card_index;
+            int8_t card_index;  /* transmutation_id hint (-1 = non-transmuted) */
             NetCard card;
         } card; /* SELECT_CARD, PLAY_CARD */
         struct {
@@ -271,14 +286,29 @@ typedef struct NetMsgGameOver {
     int16_t final_scores[NET_MAX_PLAYERS];
     uint8_t winners[NET_MAX_PLAYERS];
     uint8_t winner_count;
+    /* ELO data (populated when lobby responds) */
+    bool    has_elo;
+    int32_t prev_elo[NET_MAX_PLAYERS];  /* -1 = AI/unranked */
+    int32_t new_elo[NET_MAX_PLAYERS];   /* -1 = AI/unranked */
 } NetMsgGameOver;
 
 typedef struct NetMsgPhaseChange {
     uint8_t new_phase;
 } NetMsgPhaseChange;
 
+/* Game option bounds (shared between client and server) */
+#define GAME_OPT_TIMER_COUNT    5
+#define GAME_OPT_TIMER_MAX      4   /* max valid index */
+#define GAME_OPT_POINT_COUNT    3
+#define GAME_OPT_POINT_MAX      2
+#define GAME_OPT_MODE_COUNT     3
+#define GAME_OPT_MODE_MAX       2
+
 typedef struct NetMsgStartGame {
-    uint8_t ai_difficulty; /* 0=casual, 1=competitive */
+    uint8_t ai_difficulty;  /* 0=casual, 1=competitive */
+    uint8_t timer_option;   /* 0..GAME_OPT_TIMER_MAX */
+    uint8_t point_goal_idx; /* 0..GAME_OPT_POINT_MAX */
+    uint8_t gamemode;       /* 0..GAME_OPT_MODE_MAX */
 } NetMsgStartGame;
 
 /* ================================================================
@@ -425,9 +455,117 @@ typedef struct NetMsgServerRoomDestroyed {
     char room_code[NET_ROOM_CODE_LEN];
 } NetMsgServerRoomDestroyed;
 
+typedef struct NetMsgServerEloResult {
+    char    room_code[NET_ROOM_CODE_LEN];
+    int32_t prev_elo[NET_MAX_PLAYERS];  /* -1 = AI/unranked */
+    int32_t new_elo[NET_MAX_PLAYERS];   /* -1 = AI/unranked */
+} NetMsgServerEloResult;
+
 typedef struct NetMsgPassConfirmed {
     uint8_t seat; /* 0-3: which player just confirmed their pass */
 } NetMsgPassConfirmed;
+
+/* ================================================================
+ * Friend System Messages
+ * ================================================================ */
+
+typedef enum FriendSearchStatus {
+    FRIEND_STATUS_AVAILABLE       = 0,
+    FRIEND_STATUS_ALREADY_FRIEND  = 1,
+    FRIEND_STATUS_PENDING_SENT    = 2,
+    FRIEND_STATUS_PENDING_RECEIVED = 3,
+    FRIEND_STATUS_BLOCKED         = 4,
+    FRIEND_STATUS_SELF            = 5,
+} FriendSearchStatus;
+
+typedef enum FriendPresence {
+    FRIEND_PRESENCE_OFFLINE  = 0,
+    FRIEND_PRESENCE_ONLINE   = 1,
+    FRIEND_PRESENCE_IN_GAME  = 2,
+} FriendPresence;
+
+typedef struct NetMsgFriendSearch {
+    uint8_t auth_token[32];
+    char    query[32];
+} NetMsgFriendSearch;
+
+typedef struct NetFriendSearchEntry {
+    char    username[32];
+    int32_t account_id;
+    uint8_t status;  /* FriendSearchStatus */
+} NetFriendSearchEntry;
+
+typedef struct NetMsgFriendSearchResult {
+    uint8_t              count;
+    NetFriendSearchEntry results[10];
+} NetMsgFriendSearchResult;
+
+typedef struct NetMsgFriendRequest {
+    uint8_t auth_token[32];
+    int32_t target_account_id;
+} NetMsgFriendRequest;
+
+typedef struct NetMsgFriendAccept {
+    uint8_t auth_token[32];
+    int32_t from_account_id;
+} NetMsgFriendAccept;
+
+typedef struct NetMsgFriendReject {
+    uint8_t auth_token[32];
+    int32_t from_account_id;
+} NetMsgFriendReject;
+
+typedef struct NetMsgFriendRemove {
+    uint8_t auth_token[32];
+    int32_t target_account_id;
+} NetMsgFriendRemove;
+
+typedef struct NetMsgFriendListRequest {
+    uint8_t auth_token[32];
+} NetMsgFriendListRequest;
+
+typedef struct NetFriendEntry {
+    char    username[32];
+    int32_t account_id;
+    uint8_t presence;  /* FriendPresence */
+} NetFriendEntry;
+
+typedef struct NetFriendRequestEntry {
+    char    username[32];
+    int32_t account_id;
+} NetFriendRequestEntry;
+
+typedef struct NetMsgFriendList {
+    uint8_t             friend_count;
+    NetFriendEntry      friends[20];
+    uint8_t             request_count;
+    NetFriendRequestEntry incoming_requests[10];
+} NetMsgFriendList;
+
+typedef struct NetMsgFriendUpdate {
+    int32_t account_id;
+    uint8_t presence;   /* FriendPresence — 0xFF = removed */
+} NetMsgFriendUpdate;
+
+typedef struct NetMsgFriendRequestNotify {
+    char    username[32];
+    int32_t account_id;
+} NetMsgFriendRequestNotify;
+
+typedef struct NetMsgRoomInvite {
+    uint8_t auth_token[32];
+    int32_t target_account_id;
+    char    room_code[8];
+} NetMsgRoomInvite;
+
+typedef struct NetMsgRoomInviteNotify {
+    char from_username[32];
+    char room_code[8];
+} NetMsgRoomInviteNotify;
+
+typedef struct NetMsgRoomInviteExpired {
+    char room_code[8];
+} NetMsgRoomInviteExpired;
 
 /* ================================================================
  * NetPlayerView Sub-Structs
@@ -544,6 +682,7 @@ typedef struct NetPlayerView {
     int8_t dealer_seat;          /* -1 if no dealer */
     int8_t current_turn_player;  /* -1 if N/A */
     float  turn_timer;           /* seconds remaining */
+    float  turn_time_limit;     /* configured turn time (30 + bonus) */
 
     /* --- Phase 2 --- */
     bool phase2_enabled;
@@ -606,6 +745,7 @@ typedef struct NetPlayerView {
     int8_t  duel_chosen_card_idx;
     int8_t  duel_chosen_target;
     NetCard duel_revealed_card;   /* actual card for duel peek (private to winner) */
+    int8_t  duel_was_swap;        /* -1=pending, 0=returned, 1=swapped */
 
     /* Round-end transmutation effect tracking */
     int8_t  martyr_flags[NET_MAX_PLAYERS];
@@ -655,8 +795,23 @@ typedef struct NetMsg {
         NetMsgServerHeartbeat   server_heartbeat;
         NetMsgServerRoomCreated   server_room_created;
         NetMsgServerRoomDestroyed server_room_destroyed;
+        NetMsgServerEloResult     server_elo_result;
         NetMsgPassConfirmed       pass_confirmed;
         NetMsgStartGame           start_game;
+        /* Friend system */
+        NetMsgFriendSearch        friend_search;
+        NetMsgFriendSearchResult  friend_search_result;
+        NetMsgFriendRequest       friend_request;
+        NetMsgFriendAccept        friend_accept;
+        NetMsgFriendReject        friend_reject;
+        NetMsgFriendRemove        friend_remove;
+        NetMsgFriendListRequest   friend_list_request;
+        NetMsgFriendList          friend_list;
+        NetMsgFriendUpdate        friend_update;
+        NetMsgFriendRequestNotify friend_request_notify;
+        NetMsgRoomInvite          room_invite;
+        NetMsgRoomInviteNotify    room_invite_notify;
+        NetMsgRoomInviteExpired   room_invite_expired;
     };
 } NetMsg;
 
