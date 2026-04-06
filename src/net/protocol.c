@@ -428,7 +428,7 @@ static int ser_input_cmd(const NetInputCmd *m, uint8_t *buf, size_t len)
     case INPUT_CMD_PLAY_CARD:
         if (len < off + 3)
             return -1;
-        write_u8(buf, &off, m->card.card_index);
+        write_i8(buf, &off, m->card.card_index);
         write_card(buf, &off, m->card.card);
         break;
     case INPUT_CMD_SELECT_CONTRACT:
@@ -496,7 +496,7 @@ static int deser_input_cmd(NetInputCmd *m, const uint8_t *buf, size_t len)
     case INPUT_CMD_PLAY_CARD:
         if (len < off + 3)
             return -1;
-        m->card.card_index = read_u8(buf, &off);
+        m->card.card_index = read_i8(buf, &off);
         m->card.card = read_card(buf, &off);
         break;
     case INPUT_CMD_SELECT_CONTRACT:
@@ -599,27 +599,49 @@ static int deser_trick_result(NetMsgTrickResult *m, const uint8_t *buf,
 
 static int ser_game_over(const NetMsgGameOver *m, uint8_t *buf, size_t len)
 {
-    if (len < 13)
-        return -1;
+    /* base: scores(8) + winners(4) + winner_count(1) + has_elo(1) = 14 */
+    size_t need = NET_MAX_PLAYERS * 2 + NET_MAX_PLAYERS + 1 + 1;
+    if (m->has_elo) need += NET_MAX_PLAYERS * 4 * 2;
+    if (len < need) return -1;
     size_t off = 0;
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         write_i16(buf, &off, m->final_scores[i]);
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         write_u8(buf, &off, m->winners[i]);
     write_u8(buf, &off, m->winner_count);
+    write_u8(buf, &off, m->has_elo ? 1 : 0);
+    if (m->has_elo) {
+        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+            write_u32(buf, &off, (uint32_t)m->prev_elo[i]);
+        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+            write_u32(buf, &off, (uint32_t)m->new_elo[i]);
+    }
     return (int)off;
 }
 
 static int deser_game_over(NetMsgGameOver *m, const uint8_t *buf, size_t len)
 {
-    if (len < 13)
-        return -1;
+    size_t base = NET_MAX_PLAYERS * 2 + NET_MAX_PLAYERS + 1 + 1;
+    if (len < base) return -1;
     size_t off = 0;
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         m->final_scores[i] = read_i16(buf, &off);
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         m->winners[i] = read_u8(buf, &off);
     m->winner_count = read_u8(buf, &off);
+    m->has_elo = read_u8(buf, &off) != 0;
+    if (m->has_elo) {
+        if (len < base + NET_MAX_PLAYERS * 4 * 2) return -1;
+        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+            m->prev_elo[i] = (int32_t)read_u32(buf, &off);
+        for (int i = 0; i < NET_MAX_PLAYERS; i++)
+            m->new_elo[i] = (int32_t)read_u32(buf, &off);
+    } else {
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            m->prev_elo[i] = -1;
+            m->new_elo[i] = -1;
+        }
+    }
     return (int)off;
 }
 
@@ -1218,6 +1240,35 @@ static int deser_server_room_destroyed(NetMsgServerRoomDestroyed *m,
     return (int)off;
 }
 
+static int ser_server_elo_result(const NetMsgServerEloResult *m,
+                                uint8_t *buf, size_t len)
+{
+    size_t need = NET_ROOM_CODE_LEN + NET_MAX_PLAYERS * 4 * 2;
+    if (len < need) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->room_code, NET_ROOM_CODE_LEN);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        write_u32(buf, &off, (uint32_t)m->prev_elo[i]);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        write_u32(buf, &off, (uint32_t)m->new_elo[i]);
+    return (int)off;
+}
+
+static int deser_server_elo_result(NetMsgServerEloResult *m,
+                                   const uint8_t *buf, size_t len)
+{
+    size_t need = NET_ROOM_CODE_LEN + NET_MAX_PLAYERS * 4 * 2;
+    if (len < need) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->room_code, NET_ROOM_CODE_LEN);
+    m->room_code[NET_ROOM_CODE_LEN - 1] = '\0';
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        m->prev_elo[i] = (int32_t)read_u32(buf, &off);
+    for (int i = 0; i < NET_MAX_PLAYERS; i++)
+        m->new_elo[i] = (int32_t)read_u32(buf, &off);
+    return (int)off;
+}
+
 static int ser_pass_confirmed(const NetMsgPassConfirmed *m,
                               uint8_t *buf, size_t len)
 {
@@ -1233,6 +1284,298 @@ static int deser_pass_confirmed(NetMsgPassConfirmed *m,
     if (len < 1) return -1;
     size_t off = 0;
     m->seat = read_u8(buf, &off);
+    return (int)off;
+}
+
+/* ================================================================
+ * Friend System Serialization Helpers
+ * ================================================================ */
+
+static int ser_friend_search(const NetMsgFriendSearch *m, uint8_t *buf,
+                             size_t cap)
+{
+    if (cap < 64) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    write_bytes(buf, &off, m->query, 32);
+    return (int)off;
+}
+static int deser_friend_search(NetMsgFriendSearch *m, const uint8_t *buf,
+                               size_t len)
+{
+    if (len < 64) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    read_bytes(buf, &off, m->query, 32);
+    m->query[31] = '\0';
+    return (int)off;
+}
+
+static int ser_friend_search_result(const NetMsgFriendSearchResult *m,
+                                    uint8_t *buf, size_t cap)
+{
+    size_t need = 1 + (size_t)m->count * 37;
+    if (cap < need) return -1;
+    size_t off = 0;
+    write_u8(buf, &off, m->count);
+    for (int i = 0; i < m->count; i++) {
+        write_bytes(buf, &off, m->results[i].username, 32);
+        write_u32(buf, &off, (uint32_t)m->results[i].account_id);
+        write_u8(buf, &off, m->results[i].status);
+    }
+    return (int)off;
+}
+static int deser_friend_search_result(NetMsgFriendSearchResult *m,
+                                      const uint8_t *buf, size_t len)
+{
+    if (len < 1) return -1;
+    size_t off = 0;
+    m->count = read_u8(buf, &off);
+    if (m->count > 10) m->count = 10;
+    for (int i = 0; i < m->count; i++) {
+        if (off + 37 > len) return -1;
+        read_bytes(buf, &off, m->results[i].username, 32);
+        m->results[i].username[31] = '\0';
+        m->results[i].account_id = (int32_t)read_u32(buf, &off);
+        m->results[i].status = read_u8(buf, &off);
+    }
+    return (int)off;
+}
+
+static int ser_friend_request(const NetMsgFriendRequest *m, uint8_t *buf,
+                              size_t cap)
+{
+    if (cap < 36) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    write_u32(buf, &off, (uint32_t)m->target_account_id);
+    return (int)off;
+}
+static int deser_friend_request(NetMsgFriendRequest *m, const uint8_t *buf,
+                                size_t len)
+{
+    if (len < 36) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    m->target_account_id = (int32_t)read_u32(buf, &off);
+    return (int)off;
+}
+
+static int ser_friend_accept(const NetMsgFriendAccept *m, uint8_t *buf,
+                             size_t cap)
+{
+    if (cap < 36) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    write_u32(buf, &off, (uint32_t)m->from_account_id);
+    return (int)off;
+}
+static int deser_friend_accept(NetMsgFriendAccept *m, const uint8_t *buf,
+                               size_t len)
+{
+    if (len < 36) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    m->from_account_id = (int32_t)read_u32(buf, &off);
+    return (int)off;
+}
+
+static int ser_friend_reject(const NetMsgFriendReject *m, uint8_t *buf,
+                             size_t cap)
+{
+    if (cap < 36) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    write_u32(buf, &off, (uint32_t)m->from_account_id);
+    return (int)off;
+}
+static int deser_friend_reject(NetMsgFriendReject *m, const uint8_t *buf,
+                               size_t len)
+{
+    if (len < 36) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    m->from_account_id = (int32_t)read_u32(buf, &off);
+    return (int)off;
+}
+
+static int ser_friend_remove(const NetMsgFriendRemove *m, uint8_t *buf,
+                             size_t cap)
+{
+    if (cap < 36) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    write_u32(buf, &off, (uint32_t)m->target_account_id);
+    return (int)off;
+}
+static int deser_friend_remove(NetMsgFriendRemove *m, const uint8_t *buf,
+                               size_t len)
+{
+    if (len < 36) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    m->target_account_id = (int32_t)read_u32(buf, &off);
+    return (int)off;
+}
+
+static int ser_friend_list_request(const NetMsgFriendListRequest *m,
+                                   uint8_t *buf, size_t cap)
+{
+    if (cap < 32) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    return (int)off;
+}
+static int deser_friend_list_request(NetMsgFriendListRequest *m,
+                                     const uint8_t *buf, size_t len)
+{
+    if (len < 32) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    return (int)off;
+}
+
+static int ser_friend_list(const NetMsgFriendList *m, uint8_t *buf, size_t cap)
+{
+    size_t need = 1 + (size_t)m->friend_count * 37 +
+                  1 + (size_t)m->request_count * 36;
+    if (cap < need) return -1;
+    size_t off = 0;
+    write_u8(buf, &off, m->friend_count);
+    for (int i = 0; i < m->friend_count; i++) {
+        write_bytes(buf, &off, m->friends[i].username, 32);
+        write_u32(buf, &off, (uint32_t)m->friends[i].account_id);
+        write_u8(buf, &off, m->friends[i].presence);
+    }
+    write_u8(buf, &off, m->request_count);
+    for (int i = 0; i < m->request_count; i++) {
+        write_bytes(buf, &off, m->incoming_requests[i].username, 32);
+        write_u32(buf, &off, (uint32_t)m->incoming_requests[i].account_id);
+    }
+    return (int)off;
+}
+static int deser_friend_list(NetMsgFriendList *m, const uint8_t *buf,
+                             size_t len)
+{
+    if (len < 2) return -1;
+    size_t off = 0;
+    m->friend_count = read_u8(buf, &off);
+    if (m->friend_count > 20) m->friend_count = 20;
+    for (int i = 0; i < m->friend_count; i++) {
+        if (off + 37 > len) return -1;
+        read_bytes(buf, &off, m->friends[i].username, 32);
+        m->friends[i].username[31] = '\0';
+        m->friends[i].account_id = (int32_t)read_u32(buf, &off);
+        m->friends[i].presence = read_u8(buf, &off);
+    }
+    if (off >= len) return -1;
+    m->request_count = read_u8(buf, &off);
+    if (m->request_count > 10) m->request_count = 10;
+    for (int i = 0; i < m->request_count; i++) {
+        if (off + 36 > len) return -1;
+        read_bytes(buf, &off, m->incoming_requests[i].username, 32);
+        m->incoming_requests[i].username[31] = '\0';
+        m->incoming_requests[i].account_id = (int32_t)read_u32(buf, &off);
+    }
+    return (int)off;
+}
+
+static int ser_friend_update(const NetMsgFriendUpdate *m, uint8_t *buf,
+                             size_t cap)
+{
+    if (cap < 5) return -1;
+    size_t off = 0;
+    write_u32(buf, &off, (uint32_t)m->account_id);
+    write_u8(buf, &off, m->presence);
+    return (int)off;
+}
+static int deser_friend_update(NetMsgFriendUpdate *m, const uint8_t *buf,
+                               size_t len)
+{
+    if (len < 5) return -1;
+    size_t off = 0;
+    m->account_id = (int32_t)read_u32(buf, &off);
+    m->presence = read_u8(buf, &off);
+    return (int)off;
+}
+
+static int ser_friend_request_notify(const NetMsgFriendRequestNotify *m,
+                                     uint8_t *buf, size_t cap)
+{
+    if (cap < 36) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->username, 32);
+    write_u32(buf, &off, (uint32_t)m->account_id);
+    return (int)off;
+}
+static int deser_friend_request_notify(NetMsgFriendRequestNotify *m,
+                                       const uint8_t *buf, size_t len)
+{
+    if (len < 36) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->username, 32);
+    m->username[31] = '\0';
+    m->account_id = (int32_t)read_u32(buf, &off);
+    return (int)off;
+}
+
+static int ser_room_invite(const NetMsgRoomInvite *m, uint8_t *buf, size_t cap)
+{
+    if (cap < 44) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->auth_token, 32);
+    write_u32(buf, &off, (uint32_t)m->target_account_id);
+    write_bytes(buf, &off, m->room_code, 8);
+    return (int)off;
+}
+static int deser_room_invite(NetMsgRoomInvite *m, const uint8_t *buf,
+                             size_t len)
+{
+    if (len < 44) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->auth_token, 32);
+    m->target_account_id = (int32_t)read_u32(buf, &off);
+    read_bytes(buf, &off, m->room_code, 8);
+    m->room_code[7] = '\0';
+    return (int)off;
+}
+
+static int ser_room_invite_notify(const NetMsgRoomInviteNotify *m,
+                                  uint8_t *buf, size_t cap)
+{
+    if (cap < 40) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->from_username, 32);
+    write_bytes(buf, &off, m->room_code, 8);
+    return (int)off;
+}
+static int deser_room_invite_notify(NetMsgRoomInviteNotify *m,
+                                    const uint8_t *buf, size_t len)
+{
+    if (len < 40) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->from_username, 32);
+    m->from_username[31] = '\0';
+    read_bytes(buf, &off, m->room_code, 8);
+    m->room_code[7] = '\0';
+    return (int)off;
+}
+
+static int ser_room_invite_expired(const NetMsgRoomInviteExpired *m,
+                                   uint8_t *buf, size_t cap)
+{
+    if (cap < 8) return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->room_code, 8);
+    return (int)off;
+}
+static int deser_room_invite_expired(NetMsgRoomInviteExpired *m,
+                                     const uint8_t *buf, size_t len)
+{
+    if (len < 8) return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->room_code, 8);
+    m->room_code[7] = '\0';
     return (int)off;
 }
 
@@ -1508,6 +1851,7 @@ static int ser_player_view(const NetPlayerView *v, uint8_t *buf, size_t len)
     write_i8(buf, &off, v->dealer_seat);
     write_i8(buf, &off, v->current_turn_player);
     write_f32(buf, &off, v->turn_timer);
+    write_f32(buf, &off, v->turn_time_limit);
 
     /* Phase 2 */
     write_bool(buf, &off, v->phase2_enabled);
@@ -1592,6 +1936,7 @@ static int ser_player_view(const NetPlayerView *v, uint8_t *buf, size_t len)
         write_i8(buf, &off, v->duel_chosen_card_idx);
         write_i8(buf, &off, v->duel_chosen_target);
         write_card(buf, &off, v->duel_revealed_card);
+        write_i8(buf, &off, v->duel_was_swap);
 
         /* Round-end transmutation effect tracking */
         for (int i = 0; i < NET_MAX_PLAYERS; i++)
@@ -1657,6 +2002,7 @@ static int deser_player_view(NetPlayerView *v, const uint8_t *buf, size_t len)
     v->dealer_seat = read_i8(buf, &off);
     v->current_turn_player = read_i8(buf, &off);
     v->turn_timer = read_f32(buf, &off);
+    v->turn_time_limit = read_f32(buf, &off);
 
     if (off >= len)
         return -1;
@@ -1759,6 +2105,7 @@ static int deser_player_view(NetPlayerView *v, const uint8_t *buf, size_t len)
         v->duel_chosen_card_idx = read_i8(buf, &off);
         v->duel_chosen_target = read_i8(buf, &off);
         v->duel_revealed_card = read_card(buf, &off);
+        v->duel_was_swap = read_i8(buf, &off);
 
         /* Round-end transmutation effect tracking */
         for (int i = 0; i < NET_MAX_PLAYERS; i++)
@@ -1823,9 +2170,12 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
         n = 0; /* no payload */
         break;
     case NET_MSG_REQUEST_START_GAME:
-        if (remaining < 1) return -1;
+        if (remaining < 4) return -1;
         payload[0] = msg->start_game.ai_difficulty;
-        n = 1;
+        payload[1] = msg->start_game.timer_option;
+        payload[2] = msg->start_game.point_goal_idx;
+        payload[3] = msg->start_game.gamemode;
+        n = 4;
         break;
 
     /* Game */
@@ -1924,9 +2274,38 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
         n = ser_server_room_destroyed(&msg->server_room_destroyed, payload,
                                       remaining);
         break;
+    case NET_MSG_SERVER_ELO_RESULT:
+        n = ser_server_elo_result(&msg->server_elo_result, payload, remaining);
+        break;
     case NET_MSG_PASS_CONFIRMED:
         n = ser_pass_confirmed(&msg->pass_confirmed, payload, remaining);
         break;
+    case NET_MSG_FRIEND_SEARCH:
+        n = ser_friend_search(&msg->friend_search, payload, remaining); break;
+    case NET_MSG_FRIEND_SEARCH_RESULT:
+        n = ser_friend_search_result(&msg->friend_search_result, payload, remaining); break;
+    case NET_MSG_FRIEND_REQUEST:
+        n = ser_friend_request(&msg->friend_request, payload, remaining); break;
+    case NET_MSG_FRIEND_ACCEPT:
+        n = ser_friend_accept(&msg->friend_accept, payload, remaining); break;
+    case NET_MSG_FRIEND_REJECT:
+        n = ser_friend_reject(&msg->friend_reject, payload, remaining); break;
+    case NET_MSG_FRIEND_REMOVE:
+        n = ser_friend_remove(&msg->friend_remove, payload, remaining); break;
+    case NET_MSG_FRIEND_LIST_REQUEST:
+        n = ser_friend_list_request(&msg->friend_list_request, payload, remaining); break;
+    case NET_MSG_FRIEND_LIST:
+        n = ser_friend_list(&msg->friend_list, payload, remaining); break;
+    case NET_MSG_FRIEND_UPDATE:
+        n = ser_friend_update(&msg->friend_update, payload, remaining); break;
+    case NET_MSG_FRIEND_REQUEST_NOTIFY:
+        n = ser_friend_request_notify(&msg->friend_request_notify, payload, remaining); break;
+    case NET_MSG_ROOM_INVITE:
+        n = ser_room_invite(&msg->room_invite, payload, remaining); break;
+    case NET_MSG_ROOM_INVITE_NOTIFY:
+        n = ser_room_invite_notify(&msg->room_invite_notify, payload, remaining); break;
+    case NET_MSG_ROOM_INVITE_EXPIRED:
+        n = ser_room_invite_expired(&msg->room_invite_expired, payload, remaining); break;
 
     default:
         return -1;
@@ -1985,9 +2364,12 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         n = 0; /* no payload */
         break;
     case NET_MSG_REQUEST_START_GAME:
-        if (remaining < 1) return -1;
-        msg->start_game.ai_difficulty = payload[0];
-        n = 1;
+        if (remaining < 4) return -1;
+        msg->start_game.ai_difficulty  = payload[0];
+        msg->start_game.timer_option   = payload[1];
+        msg->start_game.point_goal_idx = payload[2];
+        msg->start_game.gamemode       = payload[3];
+        n = 4;
         break;
     case NET_MSG_INPUT_CMD:
         n = deser_input_cmd(&msg->input_cmd, payload, remaining);
@@ -2080,9 +2462,39 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         n = deser_server_room_destroyed(&msg->server_room_destroyed, payload,
                                         remaining);
         break;
+    case NET_MSG_SERVER_ELO_RESULT:
+        n = deser_server_elo_result(&msg->server_elo_result, payload,
+                                    remaining);
+        break;
     case NET_MSG_PASS_CONFIRMED:
         n = deser_pass_confirmed(&msg->pass_confirmed, payload, remaining);
         break;
+    case NET_MSG_FRIEND_SEARCH:
+        n = deser_friend_search(&msg->friend_search, payload, remaining); break;
+    case NET_MSG_FRIEND_SEARCH_RESULT:
+        n = deser_friend_search_result(&msg->friend_search_result, payload, remaining); break;
+    case NET_MSG_FRIEND_REQUEST:
+        n = deser_friend_request(&msg->friend_request, payload, remaining); break;
+    case NET_MSG_FRIEND_ACCEPT:
+        n = deser_friend_accept(&msg->friend_accept, payload, remaining); break;
+    case NET_MSG_FRIEND_REJECT:
+        n = deser_friend_reject(&msg->friend_reject, payload, remaining); break;
+    case NET_MSG_FRIEND_REMOVE:
+        n = deser_friend_remove(&msg->friend_remove, payload, remaining); break;
+    case NET_MSG_FRIEND_LIST_REQUEST:
+        n = deser_friend_list_request(&msg->friend_list_request, payload, remaining); break;
+    case NET_MSG_FRIEND_LIST:
+        n = deser_friend_list(&msg->friend_list, payload, remaining); break;
+    case NET_MSG_FRIEND_UPDATE:
+        n = deser_friend_update(&msg->friend_update, payload, remaining); break;
+    case NET_MSG_FRIEND_REQUEST_NOTIFY:
+        n = deser_friend_request_notify(&msg->friend_request_notify, payload, remaining); break;
+    case NET_MSG_ROOM_INVITE:
+        n = deser_room_invite(&msg->room_invite, payload, remaining); break;
+    case NET_MSG_ROOM_INVITE_NOTIFY:
+        n = deser_room_invite_notify(&msg->room_invite_notify, payload, remaining); break;
+    case NET_MSG_ROOM_INVITE_EXPIRED:
+        n = deser_room_invite_expired(&msg->room_invite_expired, payload, remaining); break;
     default:
         return -1;
     }
@@ -2393,14 +2805,16 @@ void net_build_player_view(NetPlayerView *out, const struct GameState *gs,
     out->duel_chosen_target =
         (int8_t)p2->round.transmute_round.duel_chosen_target;
 
-    /* Duel: private peek — only the duel winner sees the card */
+    /* Duel: peek — winner and victim see the card, spectators don't */
     if (p2->round.transmute_round.duel_chosen_card_idx >= 0 &&
-        seat == p2->round.transmute_round.duel_pending_winner) {
+        (seat == p2->round.transmute_round.duel_pending_winner ||
+         seat == p2->round.transmute_round.duel_chosen_target)) {
         out->duel_revealed_card = net_card_from_game(
             p2->round.transmute_round.duel_revealed_card);
     } else {
         out->duel_revealed_card = (NetCard){.suit = -1, .rank = -1};
     }
+    out->duel_was_swap = (int8_t)p2->round.transmute_round.duel_was_swap;
 
     /* Round-end transmutation effect tracking */
     for (int i = 0; i < NET_MAX_PLAYERS; i++) {
@@ -2423,7 +2837,7 @@ void net_input_cmd_to_local(const NetInputCmd *net, InputCmd *out)
     switch (out->type) {
     case INPUT_CMD_SELECT_CARD:
     case INPUT_CMD_PLAY_CARD:
-        out->card.card_index = (int)net->card.card_index;
+        out->card.card_index = (int)(int8_t)net->card.card_index;
         out->card.card = net_card_to_game(net->card.card);
         break;
     case INPUT_CMD_SELECT_CONTRACT:
