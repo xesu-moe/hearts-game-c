@@ -141,4 +141,25 @@ void lobby_client_request_leaderboard(void);
 bool lobby_client_has_stats(PlayerFullStats *out);
 bool lobby_client_has_leaderboard(LeaderboardData *out);
 
+/* ================================================================
+ * Friend System
+ * ================================================================ */
+
+/* Outbound actions */
+void lobby_client_friend_search(const char *query);
+void lobby_client_friend_request(int32_t account_id);
+void lobby_client_friend_accept(int32_t from_account_id);
+void lobby_client_friend_reject(int32_t from_account_id);
+void lobby_client_friend_remove(int32_t account_id);
+void lobby_client_friend_list_request(void);
+void lobby_client_room_invite(int32_t account_id, const char *room_code);
+
+/* Inbound polling — returns true and fills output if a new message arrived */
+bool lobby_client_has_friend_list(NetMsgFriendList *out);
+bool lobby_client_has_friend_search_result(NetMsgFriendSearchResult *out);
+bool lobby_client_has_friend_update(NetMsgFriendUpdate *out);
+bool lobby_client_has_friend_request_notify(NetMsgFriendRequestNotify *out);
+bool lobby_client_has_room_invite_notify(NetMsgRoomInviteNotify *out);
+bool lobby_client_has_room_invite_expired(NetMsgRoomInviteExpired *out);
+
 #endif /* LOBBY_CLIENT_H */

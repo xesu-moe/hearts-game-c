@@ -47,6 +47,26 @@ static bool            g_stats_ready;
 static LeaderboardData g_leaderboard;
 static bool            g_leaderboard_ready;
 
+/* Friend system receive buffers */
+static bool                     g_has_friend_list = false;
+static NetMsgFriendList         g_friend_list;
+static bool                     g_has_search_result = false;
+static NetMsgFriendSearchResult g_search_result;
+
+#define MAX_FRIEND_UPDATES 16
+static NetMsgFriendUpdate       g_friend_updates[MAX_FRIEND_UPDATES];
+static int                      g_friend_update_count = 0;
+
+#define MAX_FRIEND_REQ_NOTIFS 10
+static NetMsgFriendRequestNotify g_friend_req_notifs[MAX_FRIEND_REQ_NOTIFS];
+static int                       g_friend_req_notif_count = 0;
+
+static bool                     g_has_room_invite = false;
+static NetMsgRoomInviteNotify   g_room_invite;
+
+static bool                     g_has_room_invite_expired = false;
+static NetMsgRoomInviteExpired  g_room_invite_expired;
+
 /* ================================================================
  * Internal: Handle incoming messages
  * ================================================================ */
@@ -184,6 +204,36 @@ static void lc_handle_message(const NetMsg *msg, const Identity *id)
         g_leaderboard_ready = true;
         break;
     }
+
+    case NET_MSG_FRIEND_LIST:
+        g_friend_list = msg->friend_list;
+        g_has_friend_list = true;
+        break;
+
+    case NET_MSG_FRIEND_SEARCH_RESULT:
+        g_search_result = msg->friend_search_result;
+        g_has_search_result = true;
+        break;
+
+    case NET_MSG_FRIEND_UPDATE:
+        if (g_friend_update_count < MAX_FRIEND_UPDATES)
+            g_friend_updates[g_friend_update_count++] = msg->friend_update;
+        break;
+
+    case NET_MSG_FRIEND_REQUEST_NOTIFY:
+        if (g_friend_req_notif_count < MAX_FRIEND_REQ_NOTIFS)
+            g_friend_req_notifs[g_friend_req_notif_count++] = msg->friend_request_notify;
+        break;
+
+    case NET_MSG_ROOM_INVITE_NOTIFY:
+        g_room_invite = msg->room_invite_notify;
+        g_has_room_invite = true;
+        break;
+
+    case NET_MSG_ROOM_INVITE_EXPIRED:
+        g_room_invite_expired = msg->room_invite_expired;
+        g_has_room_invite_expired = true;
+        break;
 
     default:
         printf("[lobby-client] Unexpected message type %d\n", msg->type);
@@ -494,5 +544,151 @@ bool lobby_client_has_leaderboard(LeaderboardData *out)
     if (!g_leaderboard_ready) return false;
     *out = g_leaderboard;
     g_leaderboard_ready = false;
+    return true;
+}
+
+/* ================================================================
+ * Friend System — Send Functions
+ * ================================================================ */
+
+void lobby_client_friend_search(const char *query)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_FRIEND_SEARCH;
+    memcpy(msg.friend_search.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    strncpy(msg.friend_search.query, query, sizeof(msg.friend_search.query) - 1);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_friend_request(int32_t account_id)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_FRIEND_REQUEST;
+    memcpy(msg.friend_request.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    msg.friend_request.target_account_id = account_id;
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_friend_accept(int32_t from_account_id)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_FRIEND_ACCEPT;
+    memcpy(msg.friend_accept.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    msg.friend_accept.from_account_id = from_account_id;
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_friend_reject(int32_t from_account_id)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_FRIEND_REJECT;
+    memcpy(msg.friend_reject.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    msg.friend_reject.from_account_id = from_account_id;
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_friend_remove(int32_t account_id)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_FRIEND_REMOVE;
+    memcpy(msg.friend_remove.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    msg.friend_remove.target_account_id = account_id;
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_friend_list_request(void)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_FRIEND_LIST_REQUEST;
+    memcpy(msg.friend_list_request.auth_token, g_info.auth_token,
+           NET_AUTH_TOKEN_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+void lobby_client_room_invite(int32_t account_id, const char *room_code)
+{
+    if (g_state != LOBBY_AUTHENTICATED || g_conn_id < 0) return;
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_ROOM_INVITE;
+    memcpy(msg.room_invite.auth_token, g_info.auth_token, NET_AUTH_TOKEN_LEN);
+    msg.room_invite.target_account_id = account_id;
+    strncpy(msg.room_invite.room_code, room_code,
+            sizeof(msg.room_invite.room_code) - 1);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+}
+
+/* ================================================================
+ * Friend System — Polling Functions
+ * ================================================================ */
+
+bool lobby_client_has_friend_list(NetMsgFriendList *out)
+{
+    if (!g_has_friend_list) return false;
+    *out = g_friend_list;
+    g_has_friend_list = false;
+    return true;
+}
+
+bool lobby_client_has_friend_search_result(NetMsgFriendSearchResult *out)
+{
+    if (!g_has_search_result) return false;
+    *out = g_search_result;
+    g_has_search_result = false;
+    return true;
+}
+
+bool lobby_client_has_friend_update(NetMsgFriendUpdate *out)
+{
+    if (g_friend_update_count <= 0) return false;
+    *out = g_friend_updates[0];
+    for (int i = 1; i < g_friend_update_count; i++)
+        g_friend_updates[i - 1] = g_friend_updates[i];
+    g_friend_update_count--;
+    return true;
+}
+
+bool lobby_client_has_friend_request_notify(NetMsgFriendRequestNotify *out)
+{
+    if (g_friend_req_notif_count <= 0) return false;
+    *out = g_friend_req_notifs[0];
+    for (int i = 1; i < g_friend_req_notif_count; i++)
+        g_friend_req_notifs[i - 1] = g_friend_req_notifs[i];
+    g_friend_req_notif_count--;
+    return true;
+}
+
+bool lobby_client_has_room_invite_notify(NetMsgRoomInviteNotify *out)
+{
+    if (!g_has_room_invite) return false;
+    *out = g_room_invite;
+    g_has_room_invite = false;
+    return true;
+}
+
+bool lobby_client_has_room_invite_expired(NetMsgRoomInviteExpired *out)
+{
+    if (!g_has_room_invite_expired) return false;
+    *out = g_room_invite_expired;
+    g_has_room_invite_expired = false;
     return true;
 }
