@@ -10,17 +10,18 @@
  *
  * @deps-exports: ClientNetState, client_net_init/shutdown/connect/
  *                disconnect/update/state/seat/has_new_state/peek_state/
- *                consume_state/ping_ms/reject_reason/send_add_ai/
+ *                consume_state/ping_ms/reject_reason/has_game_over/
+ *                get_game_over/clear_game_over/send_add_ai/
  *                send_remove_ai/send_start_game(int ai_difficulty)/
  *                send_cmd/is_reconnecting/reconnect_attempt/
  *                reconnect_time_remaining/has_room_status/
  *                consume_room_status/set_username/get_reconnect_info()
- * @deps-requires: net/protocol.h (NetPlayerView, NetRejectReason,
+ * @deps-requires: net/protocol.h (NetPlayerView, NetMsgGameOver, NetRejectReason,
  *                 PROTOCOL_VERSION, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN),
  *                 net/reconnect.h (ReconnectState, reconnect_*),
  *                 core/input_cmd.h (InputCmd)
  * @deps-used-by: main.c, state_recv.c
- * @deps-last-changed: 2026-04-02 — Changed client_net_send_start_game() signature to accept int ai_difficulty
+ * @deps-last-changed: 2026-04-06 — Added client_net_has_game_over(), get_game_over(), clear_game_over() for ELO display
  * ============================================================ */
 
 #include <stdbool.h>
@@ -169,12 +170,19 @@ int client_net_send_remove_ai(void);
 
 /* Send a request to start the game (room creator only).
  * ai_difficulty: 0=casual, 1=competitive.
+ * timer_option/point_goal_idx/gamemode: game option indices.
  * Returns 0 on success, -1 on error (not connected). */
-int client_net_send_start_game(int ai_difficulty);
+int client_net_send_start_game(int ai_difficulty, int timer_option,
+                               int point_goal_idx, int gamemode);
 
 /* Serialize and send an InputCmd to the server. Client-only commands
  * (hover, drag, settings) are silently filtered out.
  * Returns 0 on success, -1 on error (not connected, buffer full). */
 int client_net_send_cmd(const InputCmd *cmd);
+
+/* Game-over ELO data (received from server after lobby responds) */
+bool client_net_has_game_over(void);
+const NetMsgGameOver *client_net_get_game_over(void);
+void client_net_clear_game_over(void);
 
 #endif /* CLIENT_NET_H */

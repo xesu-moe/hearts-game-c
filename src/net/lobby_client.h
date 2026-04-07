@@ -80,6 +80,10 @@ void lobby_client_register(const char *username, const Identity *id);
 /* Initiate login (sends NET_MSG_LOGIN with username). */
 void lobby_client_login(const char *username);
 
+/* Initiate login by public key (sends NET_MSG_LOGIN_BY_KEY).
+ * Used after identity import when no username is available. */
+void lobby_client_login_by_key(const Identity *id);
+
 /* Change username on lobby server (sends NET_MSG_CHANGE_USERNAME). */
 void lobby_client_change_username(const char *new_username);
 

@@ -52,6 +52,7 @@ static int32_t        g_ping_rtt_ms;
 /* Reconnect (Step 11) */
 static ReconnectState g_reconnect;
 static char           g_last_ip[NET_ADDR_LEN];
+static char           g_last_hostname[NET_ADDR_LEN]; /* original (pre-resolve) */
 static uint16_t       g_last_port;
 static uint8_t        g_session_token[NET_AUTH_TOKEN_LEN];
 
@@ -68,6 +69,10 @@ static bool           g_has_error;
 #define PASS_CONFIRM_QUEUE_MAX 4
 static uint8_t g_pass_confirm_queue[PASS_CONFIRM_QUEUE_MAX];
 static int     g_pass_confirm_count;
+
+/* Game-over ELO data */
+static NetMsgGameOver g_game_over;
+static bool           g_has_game_over;
 
 /* Chat/system message queue */
 #define CLIENT_CHAT_QUEUE_MAX 8
@@ -100,6 +105,7 @@ static void reset_state(void)
     g_ping_rtt_ms   = -1;
     memset(g_room_code, 0, sizeof(g_room_code));
     memset(g_session_token, 0, sizeof(g_session_token));
+    memset(g_last_hostname, 0, sizeof(g_last_hostname));
     reconnect_init(&g_reconnect);
     g_has_room_status = false;
     memset(&g_room_status, 0, sizeof(g_room_status));
@@ -108,6 +114,8 @@ static void reset_state(void)
     g_chat_head = 0;
     g_chat_count = 0;
     g_pass_confirm_count = 0;
+    g_has_game_over = false;
+    memset(&g_game_over, 0, sizeof(g_game_over));
 }
 
 void client_net_set_auth_token(const uint8_t token[NET_AUTH_TOKEN_LEN])
@@ -237,6 +245,11 @@ static void handle_message(const NetMsg *msg)
         break;
     }
 
+    case NET_MSG_GAME_OVER:
+        memcpy(&g_game_over, &msg->game_over, sizeof(NetMsgGameOver));
+        g_has_game_over = true;
+        break;
+
     case NET_MSG_DISCONNECT:
         printf("[client_net] Server disconnected\n");
         net_socket_close(&g_net, g_conn_id);
@@ -304,16 +317,25 @@ void client_net_connect(const char *ip, uint16_t port, const char *room_code)
     memcpy(g_session_token, saved_token, NET_AUTH_TOKEN_LEN);
     memcpy(g_username, saved_username, NET_MAX_NAME_LEN);
 
-    /* Store connection params for potential reconnect */
+    /* Store original hostname for re-resolution on reconnect */
+    if (ip)
+        strncpy(g_last_hostname, ip, NET_ADDR_LEN - 1);
+    g_last_port = port;
+
+    /* Resolve hostname to numeric IP */
     if (ip)
         strncpy(g_last_ip, ip, NET_ADDR_LEN - 1);
-    g_last_port = port;
+    if (net_resolve_hostname(g_last_ip, sizeof(g_last_ip)) != 0) {
+        fprintf(stderr, "[client_net] Failed to resolve %s\n", ip);
+        g_state = CLIENT_NET_ERROR;
+        return;
+    }
 
     /* Store room code */
     if (room_code)
         strncpy(g_room_code, room_code, NET_ROOM_CODE_LEN - 1);
 
-    g_conn_id = net_socket_connect(&g_net, ip, port);
+    g_conn_id = net_socket_connect(&g_net, g_last_ip, port);
     if (g_conn_id < 0) {
         fprintf(stderr, "[client_net] Failed to initiate connection to %s:%d\n",
                 ip, port);
@@ -397,9 +419,15 @@ void client_net_update(float dt)
                 return;
             }
             if (reconnect_update(&g_reconnect, dt)) {
-                printf("[client_net] Reconnect attempt %d/%d\n",
+                /* Re-resolve hostname in case DNS changed */
+                if (g_last_hostname[0]) {
+                    strncpy(g_last_ip, g_last_hostname, NET_ADDR_LEN - 1);
+                    if (net_resolve_hostname(g_last_ip, sizeof(g_last_ip)) != 0)
+                        fprintf(stderr, "[client_net] DNS resolve failed, retrying with cached IP\n");
+                }
+                printf("[client_net] Reconnect attempt %d/%d to %s:%d\n",
                        reconnect_attempt(&g_reconnect),
-                       RECONNECT_MAX_ATTEMPTS);
+                       RECONNECT_MAX_ATTEMPTS, g_last_ip, g_last_port);
                 g_conn_id = net_socket_connect(&g_net, g_last_ip,
                                                 g_last_port);
                 /* if connect fails, g_conn_id stays -1, will retry */
@@ -674,7 +702,8 @@ int client_net_send_remove_ai(void)
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }
 
-int client_net_send_start_game(int ai_difficulty)
+int client_net_send_start_game(int ai_difficulty, int timer_option,
+                               int point_goal_idx, int gamemode)
 {
     if (g_state != CLIENT_NET_CONNECTED || g_conn_id < 0)
         return -1;
@@ -682,7 +711,10 @@ int client_net_send_start_game(int ai_difficulty)
     NetMsg msg;
     memset(&msg, 0, sizeof(msg));
     msg.type = NET_MSG_REQUEST_START_GAME;
-    msg.start_game.ai_difficulty = (uint8_t)ai_difficulty;
+    msg.start_game.ai_difficulty  = (uint8_t)ai_difficulty;
+    msg.start_game.timer_option   = (uint8_t)timer_option;
+    msg.start_game.point_goal_idx = (uint8_t)point_goal_idx;
+    msg.start_game.gamemode       = (uint8_t)gamemode;
 
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }
@@ -702,3 +734,7 @@ int client_net_send_cmd(const InputCmd *cmd)
 
     return net_socket_send_msg(&g_net, g_conn_id, &msg);
 }
+
+bool client_net_has_game_over(void) { return g_has_game_over; }
+const NetMsgGameOver *client_net_get_game_over(void) { return &g_game_over; }
+void client_net_clear_game_over(void) { g_has_game_over = false; }

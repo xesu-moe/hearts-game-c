@@ -40,13 +40,19 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
     Hand *hand = &gs->players[player_id].hand;
     HandTransmuteState *hts = &p2->players[player_id].hand_transmutes;
 
-    /* Use hint index if valid, otherwise fall back to first match.
-     * This disambiguates duplicate suit/rank (transmuted vs regular). */
+    /* hint_idx carries transmutation_id (-1 = non-transmuted).
+     * Match by suit+rank+transmutation state for order-independent disambiguation. */
+    int hint_tid = hint_idx;  /* repurposed: transmutation_id, not position */
     int hand_idx = -1;
-    if (hint_idx >= 0 && hint_idx < hand->count &&
-        card_equals(hand->cards[hint_idx], card)) {
-        hand_idx = hint_idx;
-    } else {
+    for (int i = 0; i < hand->count; i++) {
+        if (card_equals(hand->cards[i], card) &&
+            hts->slots[i].transmutation_id == hint_tid) {
+            hand_idx = i;
+            break;
+        }
+    }
+    /* Fallback: if exact tid match fails, take first suit+rank match */
+    if (hand_idx < 0) {
         for (int i = 0; i < hand->count; i++) {
             if (card_equals(hand->cards[i], card)) {
                 hand_idx = i;
@@ -55,11 +61,13 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
         }
     }
 
+
+    if (hand_idx < 0) return false;  /* Card not in hand */
+
     /* Record transmutation ID into trick info */
     int trick_slot = gs->current_trick.num_played;
     int tid = -1;
-    bool is_transmuted = (hand_idx >= 0 &&
-                          transmute_is_transmuted(hts, hand_idx));
+    bool is_transmuted = transmute_is_transmuted(hts, hand_idx);
     if (is_transmuted) {
         tid = hts->slots[hand_idx].transmutation_id;
     }
@@ -77,8 +85,6 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
                 hand, card, p2->anchor_force_suit[player_id]))
             return false;
     }
-
-    if (hand_idx < 0) return false;  /* Card not in hand */
 
     if (gs->phase != PHASE_PLAYING) return false;
     if (game_state_current_player(gs) != player_id) return false;

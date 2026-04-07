@@ -364,7 +364,10 @@ int room_start(int room_index)
                 sizeof(room->game.player_names[i]) - 1);
         room->game.player_names[i][sizeof(room->game.player_names[i]) - 1] = '\0';
     }
-    room->game.ai_difficulty = room->ai_difficulty;
+    room->game.ai_difficulty  = room->ai_difficulty;
+    room->game.timer_option   = room->timer_option;
+    room->game.point_goal_idx = room->point_goal_idx;
+    room->game.gamemode       = room->gamemode;
     server_game_start(&room->game);
     for (int i = 0; i < NET_MAX_PLAYERS; i++) {
         room->game.gs.players[i].is_human =

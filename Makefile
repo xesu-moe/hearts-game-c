@@ -138,7 +138,8 @@ embed:
 $(RAYLIB_A_LINUX):
 	mkdir -p vendor/raylib/build-linux
 	cd $(RAYLIB_DIR) && $(MAKE) clean && \
-		$(MAKE) PLATFORM=PLATFORM_DESKTOP RAYLIB_BUILD_MODE=RELEASE
+		$(MAKE) PLATFORM=PLATFORM_DESKTOP RAYLIB_BUILD_MODE=RELEASE \
+		GLFW_LINUX_ENABLE_X11=TRUE GLFW_LINUX_ENABLE_WAYLAND=TRUE
 	cp $(RAYLIB_DIR)/libraylib.a $(RAYLIB_A_LINUX)
 
 # ---- Build raylib static (Windows/MinGW) ----
@@ -161,7 +162,8 @@ dist-linux: embed $(RAYLIB_A_LINUX)
 	$(MAKE) hollow-hearts-dist
 
 hollow-hearts-dist: $(DIST_OBJ) $(DIST_EMBED_O)
-	$(CC) $^ -o hollow-hearts $(RAYLIB_A_LINUX) -lm -lGL -lpthread -ldl -lrt -lX11
+	$(CC) $^ -o hollow-hearts -s $(RAYLIB_A_LINUX) -lm -lGL -lpthread -ldl -lrt -lX11 \
+		$(shell pkg-config wayland-client wayland-cursor wayland-egl xkbcommon --libs)
 	@echo "==> Built: hollow-hearts (Linux distribution, $(shell du -h hollow-hearts | cut -f1))"
 
 # ---- Windows distribution binary ----
@@ -171,7 +173,7 @@ dist-windows: embed $(RAYLIB_A_WIN)
 	$(MAKE) hollow-hearts-win CC=x86_64-w64-mingw32-gcc DIST_CFLAGS="$(DIST_CFLAGS_BASE)"
 
 hollow-hearts-win: $(DIST_OBJ) $(DIST_EMBED_O)
-	$(CC) $^ -o hollow-hearts.exe -static $(RAYLIB_A_WIN) -lopengl32 -lgdi32 -lwinmm -lws2_32 -lbcrypt -lm
+	$(CC) $^ -o hollow-hearts.exe -s -static -mwindows $(RAYLIB_A_WIN) -lopengl32 -lgdi32 -lwinmm -lws2_32 -lbcrypt -lshell32 -lm
 	@echo "==> Built: hollow-hearts.exe (Windows distribution, $(shell du -h hollow-hearts.exe | cut -f1))"
 
 .PHONY: all server lobby debug debug-server debug-all clean clean-dist embed dist-linux dist-windows

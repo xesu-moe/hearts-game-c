@@ -130,6 +130,24 @@ static void ll_handle_message(const NetMsg *msg)
         }
         break;
     }
+    case NET_MSG_SERVER_ELO_RESULT: {
+        const NetMsgServerEloResult *elo = &msg->server_elo_result;
+        printf("[lobby-link] ELO result for room '%.8s'\n", elo->room_code);
+        int ri = room_find_by_code(elo->room_code);
+        if (ri < 0) {
+            printf("[lobby-link] Room not found for ELO result\n");
+            break;
+        }
+        Room *room = room_get(ri);
+        if (!room) break;
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            room->elo_prev[i] = elo->prev_elo[i];
+            room->elo_new[i]  = elo->new_elo[i];
+        }
+        room->elo_received = true;
+        room->force_broadcast = true;
+        break;
+    }
     case NET_MSG_ERROR:
         printf("[lobby-link] Error from lobby: %s\n", msg->error.message);
         break;

@@ -1,5 +1,5 @@
 /* ============================================================
- * @deps-exports: Room (now includes ai_difficulty field), PlayerSlot,
+ * @deps-exports: Room (elo_received, elo_prev[4], elo_new[4]), PlayerSlot,
  *                ConnSlotInfo, SlotStatus, RoomStatus,
  *                room_manager_init(), room_create(), room_destroy(),
  *                room_join(), room_leave(), room_find_by_code(),
@@ -11,7 +11,7 @@
  *                 server_game_start, server_game_tick, server_game_is_over),
  *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)
  * @deps-used-by: room.c, lobby_link.c, server_net.c
- * @deps-last-changed: 2026-04-02 — Added ai_difficulty (uint8_t) field to Room struct
+ * @deps-last-changed: 2026-04-06 — Added elo_received (bool), elo_prev[4] (int32_t), elo_new[4] (int32_t) for ELO results
  * ============================================================ */
 
 #ifndef ROOM_H
@@ -77,12 +77,20 @@ typedef struct Room {
     ServerGame  game;
     int         connected_count; /* number of SLOT_CONNECTED players */
     uint8_t     ai_difficulty;   /* 0=casual, 1=competitive */
+    uint8_t     timer_option;   /* index into TIMER_BONUS_VALUES */
+    uint8_t     point_goal_idx; /* index into POINT_GOAL_VALUES */
+    uint8_t     gamemode;       /* 0=Transmutations, 1=Vanilla, 2=Dragon Hearts */
     /* Broadcast change detection — skip sending when nothing changed */
     struct {
         int phase, num_played, tricks_played, round_number;
         int hand_counts[NET_MAX_PLAYERS];
     } last_broadcast;
     bool force_broadcast;
+    /* ELO data from lobby (populated asynchronously after game over) */
+    bool    elo_received;
+    float   elo_wait_timer;             /* seconds waiting for lobby ELO response */
+    int32_t elo_prev[NET_MAX_PLAYERS];  /* -1 = AI/unranked */
+    int32_t elo_new[NET_MAX_PLAYERS];   /* -1 = AI/unranked */
 } Room;
 
 /* ================================================================

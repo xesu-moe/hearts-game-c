@@ -3,14 +3,15 @@
  * @deps-requires: core/clock.h, core/game_state.h (GameState, GamePhase, PHASE_SETTINGS),
  *                 core/input.h, core/settings.h (g_settings),
  *                 render/anim.h, render/layout.h, render/render.h (deal_anim),
- *                 render/card_render.h, audio/audio.h, phase2/phase2_defs.h,
+ *                 render/card_render.h, render/todo_panel.h (TodoPanelState, todo_panel_init),
+ *                 audio/audio.h, phase2/phase2_defs.h,
  *                 phase2/contract_logic.h, phase2/transmutation_logic.h,
  *                 game/play_phase.h, game/pass_phase.h, game/turn_flow.h,
  *                 game/process_input.h, game/update.h, game/settings_ui.h,
  *                 game/info_sync.h, game/phase_transitions.h, game/online_ui.h,
  *                 game/login_ui.h, net/client_net.h, net/protocol.h,
  *                 net/state_recv.h, net/lobby_client.h, net/identity.h, raylib.h
- * @deps-last-changed: 2026-04-01
+ * @deps-last-changed: 2026-04-06 — Added TodoPanelState local variable initialization and assignment to RenderState
  * ============================================================ */
 
 #include <stdbool.h>
@@ -45,6 +46,7 @@
 #include "game/phase_transitions.h"
 #include "net/client_net.h"
 #include "net/identity.h"
+#include "net/socket.h"
 #include "net/lobby_client.h"
 #include "net/protocol.h"
 #include "net/state_recv.h"
@@ -55,24 +57,11 @@
 #define WINDOW_TITLE  "Hollow Hearts"
 #define TARGET_FPS    60
 
-#define DEFAULT_LOBBY_ADDR "127.0.0.1"
+#define DEFAULT_LOBBY_ADDR "hearts.xesu.moe"
 #define DEFAULT_LOBBY_PORT 7778
 
-/* ---- DNS resolution ---- */
-/* Resolves hostname in-place to dotted-decimal IP. Returns 0 on success. */
-static int resolve_hostname(char *host_buf, size_t buf_len)
-{
-    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host_buf, NULL, &hints, &res) != 0 || !res) {
-        if (res) freeaddrinfo(res);
-        return -1;
-    }
-    struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
-    inet_ntop(AF_INET, &addr->sin_addr, host_buf, (socklen_t)buf_len);
-    freeaddrinfo(res);
-    return 0;
-}
+/* DNS resolution — delegate to shared net utility */
+#define resolve_hostname(buf, len) net_resolve_hostname((buf), (len))
 
 /* ---- CLI arg parsing ---- */
 static void parse_args(int argc, char **argv,
@@ -157,12 +146,17 @@ int main(int argc, char **argv)
     contract_state_init(&p2);
     p2.enabled = true;
 
+    TodoPanelState todo_panel;
+    todo_panel_init(&todo_panel);
+
 
     RenderState rs;
     render_init(&rs);
     rs.login_ui = &lui;
     rs.online_ui = &oui;
     rs.friend_panel = &oui.friend_panel;
+    rs.todo_panel = &todo_panel;
+    rs.backup_exists = identity_backup_exists();
 
     /* Apply loaded settings (fullscreen, fps, layout) */
     settings_apply(&g_settings);
@@ -219,7 +213,13 @@ int main(int argc, char **argv)
             LobbyClientState lcs = lobby_client_state();
 
             if (lcs == LOBBY_CONNECTED && !lui.awaiting_response) {
-                if (lui.has_stored_username) {
+                if (lui.login_by_key) {
+                    /* Imported identity — login with public key */
+                    snprintf(lui.status_text, sizeof(lui.status_text),
+                             "Logging in...");
+                    lobby_client_login_by_key(&identity);
+                    lui.awaiting_response = true;
+                } else if (lui.has_stored_username) {
                     /* Auto-login with stored username */
                     snprintf(lui.status_text, sizeof(lui.status_text),
                              "Logging in...");
@@ -231,7 +231,16 @@ int main(int argc, char **argv)
                     lui.error_text[0] = '\0';
                 }
             } else if (lcs == LOBBY_AUTHENTICATED) {
-                if (lui.username_len >= 3)
+                /* If key-based login, get username from server */
+                const LobbyClientInfo *lci = lobby_client_info();
+                if (lui.login_by_key && lci && lci->username[0]) {
+                    strncpy(lui.username_buf, lci->username,
+                            sizeof(lui.username_buf) - 1);
+                    lui.username_buf[sizeof(lui.username_buf) - 1] = '\0';
+                    lui.username_len = (int)strlen(lui.username_buf);
+                    lui.login_by_key = false;
+                }
+                if (lui.username_len >= 4)
                     identity_save_username(lui.username_buf);
                 gs.phase = PHASE_MENU;
                 rs.sync_needed = true;
@@ -248,7 +257,7 @@ int main(int argc, char **argv)
 
             /* Handle Enter key as submit in username input */
             if (lui.show_username_input && !lui.awaiting_response &&
-                IsKeyPressed(KEY_ENTER) && lui.username_len >= 3) {
+                IsKeyPressed(KEY_ENTER) && lui.username_len >= 4) {
                 input_cmd_push((InputCmd){
                     .type = INPUT_CMD_LOGIN_SUBMIT,
                     .source_player = 0,
@@ -683,9 +692,9 @@ int main(int argc, char **argv)
             int passthru_count = 0;
             while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
                 if (cmd.type == INPUT_CMD_LOGIN_SUBMIT) {
-                    if (lui.username_len < 3) {
+                    if (lui.username_len < 4) {
                         snprintf(lui.error_text, sizeof(lui.error_text),
-                                 "Username must be at least 3 characters");
+                                 "Username must be at least 4 characters");
                     } else if (lui.has_stored_username) {
                         lobby_client_login(lui.username_buf);
                         lui.awaiting_response = true;
@@ -705,6 +714,22 @@ int main(int argc, char **argv)
                              "Connecting...");
                     lobby_client_disconnect();
                     lobby_client_connect(lobby_addr, lobby_port);
+                } else if (cmd.type == INPUT_CMD_IDENTITY_REFRESH) {
+                    rs.backup_exists = identity_backup_exists();
+                } else if (cmd.type == INPUT_CMD_IDENTITY_IMPORT) {
+                    if (identity_import(&identity)) {
+                        /* Re-handshake with new identity */
+                        lobby_client_disconnect();
+                        lobby_client_connect(lobby_addr, lobby_port);
+                        lui.awaiting_response = false;
+                        lui.show_username_input = false;
+                        lui.login_by_key = true;
+                        snprintf(lui.status_text, sizeof(lui.status_text),
+                                 "Identity imported — logging in...");
+                    } else {
+                        snprintf(lui.error_text, sizeof(lui.error_text),
+                                 "Import failed — check backup file");
+                    }
                 } else {
                     /* Re-push unrecognized commands for game_update */
                     if (passthru_count < INPUT_CMD_QUEUE_CAPACITY)
@@ -808,6 +833,64 @@ int main(int argc, char **argv)
                     quit_requested = true;
                 } else {
                     /* Re-push unrecognized commands for game_update */
+                    if (passthru_count < INPUT_CMD_QUEUE_CAPACITY)
+                        passthru[passthru_count++] = cmd;
+                }
+            }
+            for (int i = 0; i < passthru_count; i++)
+                input_cmd_push(passthru[i]);
+        }
+
+        /* Process identity commands in settings (need Identity in scope) */
+        if (gs.phase == PHASE_SETTINGS) {
+            InputCmd cmd;
+            InputCmd passthru[INPUT_CMD_QUEUE_CAPACITY];
+            int passthru_count = 0;
+            while ((cmd = input_cmd_pop()).type != INPUT_CMD_NONE) {
+                if (cmd.type == INPUT_CMD_IDENTITY_EXPORT) {
+                    if (identity_export()) {
+                        snprintf(rs.account_status_text,
+                                 sizeof(rs.account_status_text),
+                                 "Exported to ~/hollow-hearts-identity.bak");
+                        rs.backup_exists = true;
+                    } else {
+                        snprintf(rs.account_status_text,
+                                 sizeof(rs.account_status_text),
+                                 "Export failed");
+                    }
+                    rs.account_status_timer = 3.0f;
+                } else if (cmd.type == INPUT_CMD_IDENTITY_IMPORT) {
+                    if (identity.loaded) {
+                        rs.account_confirm_active = true;
+                    } else {
+                        if (identity_import(&identity)) {
+                            snprintf(rs.account_status_text,
+                                     sizeof(rs.account_status_text),
+                                     "Identity imported successfully");
+                        } else {
+                            snprintf(rs.account_status_text,
+                                     sizeof(rs.account_status_text),
+                                     "Import failed — check backup file");
+                        }
+                        rs.account_status_timer = 3.0f;
+                    }
+                } else if (cmd.type == INPUT_CMD_IDENTITY_IMPORT_CONFIRM) {
+                    rs.account_confirm_active = false;
+                    if (identity_import(&identity)) {
+                        snprintf(rs.account_status_text,
+                                 sizeof(rs.account_status_text),
+                                 "Identity imported — restart to use new account");
+                    } else {
+                        snprintf(rs.account_status_text,
+                                 sizeof(rs.account_status_text),
+                                 "Import failed — check backup file");
+                    }
+                    rs.account_status_timer = 3.0f;
+                } else if (cmd.type == INPUT_CMD_IDENTITY_IMPORT_CANCEL) {
+                    rs.account_confirm_active = false;
+                } else if (cmd.type == INPUT_CMD_IDENTITY_REFRESH) {
+                    rs.backup_exists = identity_backup_exists();
+                } else {
                     if (passthru_count < INPUT_CMD_QUEUE_CAPACITY)
                         passthru[passthru_count++] = cmd;
                 }

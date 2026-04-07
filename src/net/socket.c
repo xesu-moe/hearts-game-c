@@ -277,6 +277,33 @@ int net_socket_accept(NetSocket *ns)
 }
 
 /* ================================================================
+ * DNS Resolution
+ * ================================================================ */
+
+int net_resolve_hostname(char *host_buf, size_t buf_len)
+{
+    /* Already a numeric IPv4? Skip DNS. */
+    struct in_addr tmp;
+    if (inet_pton(AF_INET, host_buf, &tmp) == 1)
+        return 0;
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host_buf, NULL, &hints, &res) != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return -1;
+    }
+    struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
+    inet_ntop(AF_INET, &addr->sin_addr, host_buf, (socklen_t)buf_len);
+    freeaddrinfo(res);
+    return 0;
+}
+
+/* ================================================================
  * Client
  * ================================================================ */
 

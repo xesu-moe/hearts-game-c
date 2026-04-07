@@ -3,11 +3,12 @@
 
 /* ============================================================
  * @deps-exports: struct DragState, struct RenderState (elo_has_data,
- *                elo_prev[4], elo_new[4])
- * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/game_state.h
+ *                elo_prev[4], elo_new[4], todo_panel)
+ * @deps-requires: raylib.h, anim.h (CardVisual), layout.h, core/game_state.h,
+ *                todo_panel.h (TodoPanelState)
  * @deps-used-by: render.c, game/process_input.c, game/update.c, game/info_sync.c,
  *                game/play_phase.c, game/phase_transitions.c, main.c
- * @deps-last-changed: 2026-04-06 — Added elo_has_data (bool), elo_prev[4], elo_new[4] fields for ELO result display
+ * @deps-last-changed: 2026-04-06 — Added const TodoPanelState *todo_panel field to RenderState; added todo_panel.h dependency
  * ============================================================ */
 
 #include <stdbool.h>
@@ -26,6 +27,7 @@
 struct Phase2State;
 
 #include "game/friend_panel.h"
+#include "todo_panel.h"
 #include "net/lobby_client.h"
 
 /* Stats screen tabs */
@@ -75,12 +77,13 @@ typedef struct UIButton {
 
 #define SETTINGS_ROW_COUNT     8  /* 3 display + 2 gameplay + 3 audio */
 #define SETTINGS_ACTIVE_COUNT  8
-#define SETTINGS_TAB_COUNT     3
+#define SETTINGS_TAB_COUNT     4
 
 typedef enum SettingsTab {
     SETTINGS_TAB_DISPLAY  = 0,
     SETTINGS_TAB_GAMEPLAY = 1,
     SETTINGS_TAB_AUDIO    = 2,
+    SETTINGS_TAB_ACCOUNT  = 3,
 } SettingsTab;
 
 /* ---- Pause state ---- */
@@ -427,16 +430,29 @@ typedef struct RenderState {
     /* Particle effects */
     ParticleSystem particles;
 
-    /* Custom fonts (multiple sizes for crisp rendering) */
-#define FONT_SIZE_COUNT 4
-    Font fonts[FONT_SIZE_COUNT];     /* 16, 32, 48, 96 */
+    /* Custom fonts (one per used size for crisp rendering) */
+#define FONT_SIZE_COUNT 13
+    Font fonts[FONT_SIZE_COUNT];     /* 14,16,18,20,22,24,26,28,30,32,36,40,48 */
     int  font_base_sizes[FONT_SIZE_COUNT];
     bool font_loaded;
 
     /* Login UI (Step 19) */
     UIButton btn_login_submit;
     UIButton btn_login_retry;
+    UIButton btn_login_import;
+    UIButton btn_login_refresh;         /* re-check if backup file exists */
     const struct LoginUIState *login_ui; /* set by main.c, read by render */
+
+    /* Account tab (identity export/import) */
+    UIButton btn_account_export;
+    UIButton btn_account_import;
+    UIButton btn_account_refresh;
+    UIButton btn_account_confirm_yes;
+    UIButton btn_account_confirm_no;
+    bool     account_confirm_active;    /* true = showing overwrite confirmation */
+    bool     backup_exists;             /* cached identity_backup_exists() result */
+    char     account_status_text[128];  /* "Exported!", "Import failed", etc. */
+    float    account_status_timer;      /* fade-out timer for status text */
 
     /* Online menu UI (Step 20) */
 #define ONLINE_BTN_MAX 5 /* Reconnect + Create Room + Join Room + Quick Match + Back */
@@ -457,6 +473,7 @@ typedef struct RenderState {
     UIButton btn_opt_mode_prev, btn_opt_mode_next;
     const struct OnlineUIState *online_ui; /* set by main.c, read by render */
     FriendPanelState *friend_panel; /* set by main.c, mutable for input */
+    const TodoPanelState *todo_panel; /* set by main.c, read-only */
 
     /* Player display names (usernames or default names) */
     char player_names[NUM_PLAYERS][32];

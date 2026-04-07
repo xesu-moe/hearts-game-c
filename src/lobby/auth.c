@@ -53,7 +53,7 @@ static bool auth_validate_username(const char *username, size_t max_len)
         }
         len = i + 1;
     }
-    return len >= 3 && len <= 31;
+    return len >= 4 && len <= 31;
 }
 
 /* ================================================================
@@ -131,6 +131,30 @@ AuthResult auth_find_account(LobbyDB *ldb,
     } else {
         fprintf(stderr, "[auth] Corrupt public_key for user '%s'\n", username);
         return AUTH_ERR_DB_ERROR;
+    }
+
+    return AUTH_OK;
+}
+
+AuthResult auth_find_account_by_key(LobbyDB *ldb,
+                                    const uint8_t public_key[AUTH_PK_LEN],
+                                    int32_t *account_id_out,
+                                    char *username_out, size_t username_buflen)
+{
+    sqlite3_stmt *stmt = lobbydb_stmt(ldb, LOBBY_STMT_FIND_BY_PUBKEY);
+    if (!stmt) return AUTH_ERR_DB_ERROR;
+    sqlite3_bind_blob(stmt, 1, public_key, AUTH_PK_LEN, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        return AUTH_ERR_UNKNOWN_USER;
+    }
+
+    *account_id_out = sqlite3_column_int(stmt, 0);
+    const char *name = (const char *)sqlite3_column_text(stmt, 1);
+    if (name) {
+        snprintf(username_out, username_buflen, "%s", name);
+    } else {
+        username_out[0] = '\0';
     }
 
     return AUTH_OK;

@@ -237,7 +237,7 @@ static const char *LOBBY_STMT_SQL[LOBBY_STMT__COUNT] = {
     [LOBBY_STMT_FIND_BY_USERNAME] =
         "SELECT id, public_key FROM accounts WHERE username = ? COLLATE NOCASE",
     [LOBBY_STMT_FIND_BY_PUBKEY] =
-        "SELECT id FROM accounts WHERE public_key = ?",
+        "SELECT id, username FROM accounts WHERE public_key = ?",
     [LOBBY_STMT_UPDATE_LAST_LOGIN] =
         "UPDATE accounts SET last_login = strftime('%s','now') WHERE id = ?",
     [LOBBY_STMT_CREATE_SESSION] =

@@ -104,6 +104,11 @@ int net_socket_accept(NetSocket *ns);
  * Client
  * ================================================================ */
 
+/* Resolve a hostname (or numeric IP) in-place to dotted-decimal.
+ * If host_buf is already a valid IPv4 address, returns 0 immediately.
+ * Returns 0 on success, -1 on failure. Blocking call (uses getaddrinfo). */
+int net_resolve_hostname(char *host_buf, size_t buf_len);
+
 /* Non-blocking connect to ip:port (IP address only, no DNS).
  * State transitions to CONNECTING. Returns conn index or -1. */
 int net_socket_connect(NetSocket *ns, const char *ip, uint16_t port);

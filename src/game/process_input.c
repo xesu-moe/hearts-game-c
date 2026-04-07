@@ -14,6 +14,7 @@
 #include "core/input.h"
 #include "game/online_ui.h"
 #include "phase2/phase2_defs.h"
+#include "phase2/transmutation_logic.h"
 #include "render/render.h"
 #include "render/layout.h"
 
@@ -170,15 +171,23 @@ void process_input(GameState *gs, RenderState *rs,
                      * reorder shifts both hand[] and hand_visuals[] */
                     render_commit_hand_reorder(gs, rs, p2);
 
-                    /* Resolve visual index -> hand index so the server
-                     * can distinguish duplicate suit/rank (e.g. transmuted
-                     * card vs regular card with same suit+rank). */
+                    /* Resolve visual index -> hand index so we can
+                     * look up transmutation state for disambiguation. */
                     int hand_idx = -1;
                     for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
                         if (rs->hand_visuals[0][ci] == dvi) {
                             hand_idx = ci;
                             break;
                         }
+                    }
+
+                    /* Send transmutation_id as card_index for order-independent
+                     * disambiguation (-1 = non-transmuted). */
+                    int hint_tid = -1;
+                    if (hand_idx >= 0) {
+                        const HandTransmuteState *hts = &p2->players[0].hand_transmutes;
+                        if (transmute_is_transmuted(hts, hand_idx))
+                            hint_tid = hts->slots[hand_idx].transmutation_id;
                     }
 
                     rs->drag.release_pos = rs->drag.current_pos;
@@ -190,7 +199,7 @@ void process_input(GameState *gs, RenderState *rs,
                         .type = INPUT_CMD_PLAY_CARD,
                         .source_player = 0,
                         .card = {
-                            .card_index = hand_idx,
+                            .card_index = hint_tid,
                             .card = play_card,
                         },
                     });
@@ -204,8 +213,82 @@ void process_input(GameState *gs, RenderState *rs,
                     rs->drag.active = false;
                 }
             } else {
-                /* Non-play drag (rearrange only) */
-                if (drag_dist < TOSS_CLICK_DIST && gs->phase == PHASE_PASSING &&
+                /* Non-play drag — check if it became playable during the drag
+                 * (e.g., grabbed before our turn, released during our turn). */
+                if (gs->phase == PHASE_PLAYING &&
+                    flow_step == FLOW_WAITING_FOR_HUMAN &&
+                    game_state_current_player(gs) == 0) {
+                    /* Commit reorder first so hand_idx resolves correctly */
+                    render_commit_hand_reorder(gs, rs, p2);
+
+                    int hand_idx = -1;
+                    for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                        if (rs->hand_visuals[0][ci] == dvi) {
+                            hand_idx = ci;
+                            break;
+                        }
+                    }
+
+                    /* Toss classification (same as play-drag path) */
+                    float speed = sqrtf(rs->drag.velocity.x * rs->drag.velocity.x +
+                                        rs->drag.velocity.y * rs->drag.velocity.y);
+                    Vector2 board_center = layout_trick_position(POS_BOTTOM, &rs->layout);
+                    float bx = rs->drag.current_pos.x - board_center.x;
+                    float by = rs->drag.current_pos.y - board_center.y;
+                    float board_dist = sqrtf(bx*bx + by*by);
+                    float upward_ratio = (speed > 0.0f) ? (-rs->drag.velocity.y / speed) : 0.0f;
+
+                    int mode;
+                    if (drag_dist < TOSS_CLICK_DIST)       mode = TOSS_CLICK;
+                    else if (speed >= TOSS_MIN_SPEED && upward_ratio >= TOSS_MIN_UPWARD)
+                                                            mode = TOSS_FLICK;
+                    else if (board_dist < TOSS_DROP_RADIUS) mode = TOSS_DROP;
+                    else                                    mode = TOSS_CANCEL;
+
+                    /* Only play if card is valid and toss wasn't cancelled */
+                    bool can_play = (mode != TOSS_CANCEL && hand_idx >= 0 &&
+                                     rs->card_playable[hand_idx]);
+
+                    /* Validate card identity */
+                    if (can_play) {
+                        Card play_card = rs->cards[dvi].card;
+                        if ((int)play_card.suit < 0 || (int)play_card.suit >= SUIT_COUNT ||
+                            (int)play_card.rank < 0 || (int)play_card.rank >= RANK_COUNT ||
+                            !hand_contains(&gs->players[0].hand, play_card)) {
+                            can_play = false;
+                            rs->sync_needed = true;
+                        }
+                    }
+
+                    if (can_play) {
+                        Card play_card = rs->cards[dvi].card;
+                        int hint_tid = -1;
+                        if (hand_idx >= 0) {
+                            const HandTransmuteState *hts = &p2->players[0].hand_transmutes;
+                            if (transmute_is_transmuted(hts, hand_idx))
+                                hint_tid = hts->slots[hand_idx].transmutation_id;
+                        }
+                        rs->drag.release_pos = rs->drag.current_pos;
+                        rs->drag.has_release_pos = true;
+                        rs->drag.release_mode = mode;
+                        rs->drag.active = false;
+                        input_cmd_push((InputCmd){
+                            .type = INPUT_CMD_PLAY_CARD,
+                            .source_player = 0,
+                            .card = {
+                                .card_index = hint_tid,
+                                .card = play_card,
+                            },
+                        });
+                        rs->drag.card_visual_idx = -1;
+                    } else {
+                        /* Can't play — snap back */
+                        render_update_snap_target(rs);
+                        render_snap_all_hand_cards(rs);
+                        rs->drag.snap_back = true;
+                        rs->drag.active = false;
+                    }
+                } else if (drag_dist < TOSS_CLICK_DIST && gs->phase == PHASE_PASSING &&
                     pps->subphase == PASS_SUB_CARD_PASS) {
                     /* Short click in passing phase: commit any reorder, then toggle */
                     render_commit_hand_reorder(gs, rs, p2);
@@ -214,11 +297,28 @@ void process_input(GameState *gs, RenderState *rs,
                     rs->drag.active = false;
                     rs->drag.snap_back = true;
                     render_toggle_card_selection(rs, dvi);
+
+                    /* Resolve transmutation hint for disambiguation */
+                    int hint_tid = -1;
+                    {
+                        int hand_idx = -1;
+                        for (int ci = 0; ci < rs->hand_visual_counts[0]; ci++) {
+                            if (rs->hand_visuals[0][ci] == dvi) {
+                                hand_idx = ci;
+                                break;
+                            }
+                        }
+                        if (hand_idx >= 0) {
+                            const HandTransmuteState *hts = &p2->players[0].hand_transmutes;
+                            if (transmute_is_transmuted(hts, hand_idx))
+                                hint_tid = hts->slots[hand_idx].transmutation_id;
+                        }
+                    }
                     input_cmd_push((InputCmd){
                         .type = INPUT_CMD_SELECT_CARD,
                         .source_player = 0,
                         .card = {
-                            .card_index = -1,
+                            .card_index = hint_tid,
                             .card = rs->cards[dvi].card,
                         },
                     });
@@ -351,6 +451,16 @@ void process_input(GameState *gs, RenderState *rs,
                     .type = INPUT_CMD_LOGIN_RETRY,
                     .source_player = 0,
                 });
+            } else if (render_hit_test_button(&rs->btn_login_import, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_IMPORT,
+                    .source_player = 0,
+                });
+            } else if (render_hit_test_button(&rs->btn_login_refresh, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_REFRESH,
+                    .source_player = 0,
+                });
             }
             break;
 
@@ -394,6 +504,24 @@ void process_input(GameState *gs, RenderState *rs,
                 render_hit_test_button(&rs->btn_online_ai_diff_next, mouse)) {
                 OnlineUIState *oui = (OnlineUIState *)rs->online_ui;
                 if (oui) oui->ai_difficulty = !oui->ai_difficulty;
+            }
+            /* Game option arrows */
+            {
+                OnlineUIState *oui = (OnlineUIState *)rs->online_ui;
+                if (oui) {
+                    if (render_hit_test_button(&rs->btn_opt_timer_prev, mouse))
+                        oui->timer_option = (oui->timer_option - 1 + TIMER_OPTION_COUNT) % TIMER_OPTION_COUNT;
+                    if (render_hit_test_button(&rs->btn_opt_timer_next, mouse))
+                        oui->timer_option = (oui->timer_option + 1) % TIMER_OPTION_COUNT;
+                    if (render_hit_test_button(&rs->btn_opt_points_prev, mouse))
+                        oui->point_goal = (oui->point_goal - 1 + POINT_GOAL_COUNT) % POINT_GOAL_COUNT;
+                    if (render_hit_test_button(&rs->btn_opt_points_next, mouse))
+                        oui->point_goal = (oui->point_goal + 1) % POINT_GOAL_COUNT;
+                    if (render_hit_test_button(&rs->btn_opt_mode_prev, mouse))
+                        oui->gamemode = (oui->gamemode - 1 + GAMEMODE_COUNT) % GAMEMODE_COUNT;
+                    if (render_hit_test_button(&rs->btn_opt_mode_next, mouse))
+                        oui->gamemode = (oui->gamemode + 1) % GAMEMODE_COUNT;
+                }
             }
             /* Add AI to waiting room */
             if (render_hit_test_button(&rs->btn_online_add_ai, mouse)) {
@@ -602,8 +730,8 @@ void process_input(GameState *gs, RenderState *rs,
                 }
                 break;
             }
-            /* Duel pick own card or return: intercept clicks */
-            if (flow_step == FLOW_DUEL_PICK_OWN) {
+            /* Duel pick own card or return: intercept clicks (not when watching) */
+            if (flow_step == FLOW_DUEL_PICK_OWN && !rs->duel_watching) {
                 /* Check own hand cards first */
                 int hit = render_hit_test_card(rs, mouse);
                 if (hit >= 0) {
@@ -760,6 +888,33 @@ void process_input(GameState *gs, RenderState *rs,
                     });
                     break;
                 }
+            }
+            /* Account tab buttons */
+            if (render_hit_test_button(&rs->btn_account_export, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_EXPORT,
+                    .source_player = 0,
+                });
+            } else if (render_hit_test_button(&rs->btn_account_import, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_IMPORT,
+                    .source_player = 0,
+                });
+            } else if (render_hit_test_button(&rs->btn_account_refresh, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_REFRESH,
+                    .source_player = 0,
+                });
+            } else if (render_hit_test_button(&rs->btn_account_confirm_yes, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_IMPORT_CONFIRM,
+                    .source_player = 0,
+                });
+            } else if (render_hit_test_button(&rs->btn_account_confirm_no, mouse)) {
+                input_cmd_push((InputCmd){
+                    .type = INPUT_CMD_IDENTITY_IMPORT_CANCEL,
+                    .source_player = 0,
+                });
             }
             break;
         }

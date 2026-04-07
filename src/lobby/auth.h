@@ -14,6 +14,7 @@
 #define LOBBY_AUTH_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "db.h"
@@ -55,6 +56,14 @@ AuthResult auth_find_account(LobbyDB *ldb,
                              const char *username,
                              int32_t *account_id_out,
                              uint8_t pk_out[AUTH_PK_LEN]);
+
+/* Look up account by public key.
+ * On success: sets *account_id_out and copies username to username_out.
+ * Returns AUTH_OK or AUTH_ERR_UNKNOWN_USER. */
+AuthResult auth_find_account_by_key(LobbyDB *ldb,
+                                    const uint8_t public_key[AUTH_PK_LEN],
+                                    int32_t *account_id_out,
+                                    char *username_out, size_t username_buflen);
 
 /* Generate a random 32-byte challenge nonce. Returns false on RNG failure. */
 bool auth_generate_challenge(uint8_t nonce_out[AUTH_CHALLENGE_LEN]);

@@ -51,6 +51,7 @@ typedef struct LobbyConnInfo {
     uint8_t        challenge_nonce[AUTH_CHALLENGE_LEN]; /* valid when CHALLENGE_SENT */
     uint8_t        pending_pk[AUTH_PK_LEN];            /* stored pk for verification */
     uint8_t        session_token[AUTH_TOKEN_LEN];      /* valid when AUTHENTICATED */
+    char           pending_username[32];               /* username for login_ack */
 } LobbyConnInfo;
 
 /* ================================================================
@@ -80,6 +81,7 @@ static void lby_cleanup_connection(int conn_id);
 /* Auth handlers */
 static void lby_handle_register(int conn_id, const NetMsgRegister *reg);
 static void lby_handle_login(int conn_id, const NetMsgLogin *login);
+static void lby_handle_login_by_key(int conn_id, const NetMsgLoginByKey *msg);
 static void lby_handle_login_response(int conn_id, const NetMsgLoginResponse *resp);
 static void lby_handle_logout(int conn_id);
 
@@ -262,6 +264,9 @@ static void lby_handle_message(int conn_id, const NetMsg *msg)
         break;
     case NET_MSG_LOGIN_RESPONSE:
         lby_handle_login_response(conn_id, &msg->login_response);
+        break;
+    case NET_MSG_LOGIN_BY_KEY:
+        lby_handle_login_by_key(conn_id, &msg->login_by_key);
         break;
     case NET_MSG_LOGOUT:
         lby_handle_logout(conn_id);
@@ -454,7 +459,7 @@ static void lby_handle_register(int conn_id, const NetMsgRegister *reg)
         lby_send_error(conn_id, 2, "Public key already registered");
         break;
     case AUTH_ERR_INVALID_INPUT:
-        lby_send_error(conn_id, 3, "Invalid username (3-31 chars, alphanumeric + underscore)");
+        lby_send_error(conn_id, 3, "Invalid username (4-31 chars, alphanumeric + underscore)");
         break;
     default:
         lby_send_error(conn_id, 10, "Registration failed (internal error)");
@@ -493,6 +498,8 @@ static void lby_handle_login(int conn_id, const NetMsgLogin *login)
     /* Store state for challenge verification */
     info->account_id = account_id;
     memcpy(info->pending_pk, pk, AUTH_PK_LEN);
+    snprintf(info->pending_username, sizeof(info->pending_username),
+             "%s", login->username);
     if (!auth_generate_challenge(info->challenge_nonce)) {
         fprintf(stderr, "[lobby-net] RNG failure generating challenge for conn %d\n",
                 conn_id);
@@ -515,6 +522,51 @@ static void lby_handle_login(int conn_id, const NetMsgLogin *login)
 
     printf("[lobby-net] Sent login challenge to conn %d (user='%.32s')\n",
            conn_id, login->username);
+}
+
+static void lby_handle_login_by_key(int conn_id, const NetMsgLoginByKey *msg)
+{
+    LobbyConnInfo *info = g_net.conns[conn_id].user_data;
+    if (!info) return;
+    info->type = LOBBY_CONN_CLIENT;
+
+    if (info->auth_state == LOBBY_AUTH_CHALLENGE_SENT) {
+        lby_send_error(conn_id, 7, "Login already in progress");
+        return;
+    }
+
+    /* Look up account by public key */
+    int32_t account_id;
+    char username[32];
+    AuthResult r = auth_find_account_by_key(g_db, msg->public_key,
+                                            &account_id, username, sizeof(username));
+    if (r != AUTH_OK) {
+        printf("[lobby-net] Login-by-key failed for conn %d: unknown key\n", conn_id);
+        lby_send_error(conn_id, 4, "No account for this key");
+        return;
+    }
+
+    /* Store state for challenge verification */
+    info->account_id = account_id;
+    memcpy(info->pending_pk, msg->public_key, AUTH_PK_LEN);
+    snprintf(info->pending_username, sizeof(info->pending_username),
+             "%s", username);
+    if (!auth_generate_challenge(info->challenge_nonce)) {
+        fprintf(stderr, "[lobby-net] RNG failure for conn %d\n", conn_id);
+        lby_send_error(conn_id, 10, "Internal server error");
+        return;
+    }
+    info->auth_state = LOBBY_AUTH_CHALLENGE_SENT;
+
+    /* Send challenge */
+    NetMsg reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.type = NET_MSG_LOGIN_CHALLENGE;
+    memcpy(reply.login_challenge.nonce, info->challenge_nonce, AUTH_CHALLENGE_LEN);
+    net_socket_send_msg(&g_net, conn_id, &reply);
+
+    printf("[lobby-net] Sent login challenge to conn %d (key-login, user='%s')\n",
+           conn_id, username);
 }
 
 static void lby_handle_login_response(int conn_id, const NetMsgLoginResponse *resp)
@@ -548,6 +600,8 @@ static void lby_handle_login_response(int conn_id, const NetMsgLoginResponse *re
     reply.login_ack.elo_rating = acct_info.elo_rating;
     reply.login_ack.games_played = acct_info.games_played;
     reply.login_ack.games_won = acct_info.games_won;
+    strncpy(reply.login_ack.username, info->pending_username,
+            NET_MAX_NAME_LEN - 1);
     net_socket_send_msg(&g_net, conn_id, &reply);
     friends_on_player_authenticated(conn_id, info->account_id, g_db);
 
@@ -611,7 +665,7 @@ static void lby_handle_change_username(int conn_id,
         break;
     case AUTH_ERR_INVALID_INPUT:
         lby_send_error(conn_id, 3,
-                       "Invalid username (3-31 chars, alphanumeric + underscore)");
+                       "Invalid username (4-31 chars, alphanumeric + underscore)");
         break;
     default:
         lby_send_error(conn_id, 10, "Username change failed");

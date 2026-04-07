@@ -229,10 +229,51 @@ bool transmute_is_always_lose(const HandTransmuteState *hts, int idx)
     return td && td->special == TRANSMUTE_ALWAYS_LOSE;
 }
 
+/* Resolve Mirror card identity for trick winner purposes.
+ * Returns true if morphed, writing suit/rank to out params.
+ * Returns false if card should keep its physical identity (not Mirror,
+ * not morphing, morphing Fog, or source lookup failed). */
+static bool resolve_mirror_card_identity(const TrickTransmuteInfo *tti, int idx,
+                                         Suit *out_suit, Rank *out_rank)
+{
+    if (!tti || tti->transmutation_ids[idx] < 0) return false;
+    const TransmutationDef *td = phase2_get_transmutation(tti->transmutation_ids[idx]);
+    if (!td || td->effect != TEFFECT_MIRROR) return false;
+
+    TransmuteEffect resolved = tti->resolved_effects[idx];
+    if (resolved == TEFFECT_NONE || resolved == TEFFECT_FOG_HIDDEN) return false;
+
+    int source_id = phase2_find_transmute_by_effect(resolved);
+    if (source_id < 0) return false;
+    const TransmutationDef *source = phase2_get_transmutation(source_id);
+    if (!source) return false;
+
+    *out_suit = source->result_suit;
+    *out_rank = source->result_rank;
+    return true;
+}
+
 int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti,
                                const Phase2State *p2)
 {
     if (!trick_is_complete(trick)) return -1;
+
+    /* Mirror card identity resolution: create local copy with morphed cards.
+     * For any Mirror that morphed (resolved effect is not NONE/FOG), replace
+     * its suit/rank with the source transmutation's result_suit/result_rank.
+     * If Mirror is the lead card, also update lead_suit. */
+    Trick resolved_trick = *trick;
+    if (tti) {
+        for (int i = 0; i < CARDS_PER_TRICK; i++) {
+            Suit s;
+            Rank r;
+            if (resolve_mirror_card_identity(tti, i, &s, &r)) {
+                resolved_trick.cards[i].suit = s;
+                resolved_trick.cards[i].rank = r;
+                if (i == 0) resolved_trick.lead_suit = s;
+            }
+        }
+    }
 
     /* Check for ALWAYS_WIN / ALWAYS_LOSE / Roulette / Binding / Crown / Joker */
     bool has_special = false;
@@ -257,7 +298,7 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     /* Binding: check if any player in the trick has auto-win active */
     if (!has_special && p2) {
         for (int i = 0; i < CARDS_PER_TRICK; i++) {
-            int pid = trick->player_ids[i];
+            int pid = resolved_trick.player_ids[i];
             if (pid >= 0 && pid < NUM_PLAYERS && p2->binding_auto_win[pid]) {
                 has_special = true;
                 break;
@@ -266,25 +307,25 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     }
 
     if (!has_special) {
-        return trick_get_winner(trick);
+        return trick_get_winner(&resolved_trick);
     }
 
     /* If only Binding triggered has_special (no tti), resolve Binding then fallback */
     if (!tti) {
         if (p2) {
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                int pid = trick->player_ids[i];
+                int pid = resolved_trick.player_ids[i];
                 if (pid >= 0 && pid < NUM_PLAYERS && p2->binding_auto_win[pid])
                     return pid;
             }
         }
-        return trick_get_winner(trick);
+        return trick_get_winner(&resolved_trick);
     }
 
     /* Leading Joker: absolute priority — beats everything including ALWAYS_WIN.
      * Only the lead card (index 0) can trigger this. */
     if (tti->resolved_effects[0] == TEFFECT_JOKER_LEAD_WIN) {
-        return trick->player_ids[0];
+        return resolved_trick.player_ids[0];
     }
 
     /* Find the ALWAYS_WIN card (last one wins if multiple) — highest priority */
@@ -300,14 +341,14 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     }
 
     if (always_win_idx >= 0) {
-        return trick->player_ids[always_win_idx];
+        return resolved_trick.player_ids[always_win_idx];
     }
 
     /* Binding: auto-win (weaker than jokers, stronger than Roulette).
      * Non-leading Joker overrides Binding — that player still loses. */
     if (p2) {
         for (int i = 0; i < CARDS_PER_TRICK; i++) {
-            int pid = trick->player_ids[i];
+            int pid = resolved_trick.player_ids[i];
             if (pid >= 0 && pid < NUM_PLAYERS && p2->binding_auto_win[pid]) {
                 /* Skip if this player's card is a non-leading Joker */
                 if (i > 0 && tti->resolved_effects[i] == TEFFECT_JOKER_LEAD_WIN)
@@ -335,7 +376,7 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
             }
             if (num_candidates > 0) {
                 int pick = (rand() % num_candidates);
-                return trick->player_ids[candidates[pick]];
+                return resolved_trick.player_ids[candidates[pick]];
             }
             break; /* All excluded — fall through to normal */
         }
@@ -356,12 +397,12 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
                 /* Non-leading Joker: excluded (always loses) */
                 if (j > 0 && tti->resolved_effects[j] == TEFFECT_JOKER_LEAD_WIN)
                     continue;
-                if (best_idx < 0 || trick->cards[j].rank > best_rank) {
+                if (best_idx < 0 || resolved_trick.cards[j].rank > best_rank) {
                     best_idx = j;
-                    best_rank = trick->cards[j].rank;
+                    best_rank = resolved_trick.cards[j].rank;
                 }
             }
-            if (best_idx >= 0) return trick->player_ids[best_idx];
+            if (best_idx >= 0) return resolved_trick.player_ids[best_idx];
             break;
         }
     }
@@ -381,22 +422,22 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
         if (i > 0 && tti->resolved_effects[i] == TEFFECT_JOKER_LEAD_WIN)
             continue;
 
-        if (trick->cards[i].suit == trick->lead_suit) {
-            if (best_idx < 0 || trick->cards[i].rank > best_rank) {
+        if (resolved_trick.cards[i].suit == resolved_trick.lead_suit) {
+            if (best_idx < 0 || resolved_trick.cards[i].rank > best_rank) {
                 best_idx = i;
-                best_rank = trick->cards[i].rank;
+                best_rank = resolved_trick.cards[i].rank;
             }
         }
     }
 
     if (best_idx >= 0) {
-        return trick->player_ids[best_idx];
+        return resolved_trick.player_ids[best_idx];
     }
 
     /* All lead-suit cards are ALWAYS_LOSE or non-leading Jokers.
      * Cannot happen for Joker alone: index 0 (leading) is always caught
      * at the leading-Joker check above. Fallback to standard resolution. */
-    return trick_get_winner(trick);
+    return trick_get_winner(&resolved_trick);
 }
 
 int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti,
@@ -686,6 +727,7 @@ void transmute_round_state_init(TransmuteRoundState *trs)
     trs->duel_chosen_card_idx = -1;
     trs->duel_chosen_target = -1;
     trs->duel_revealed_card = (Card){-1, -1};
+    trs->duel_was_swap = -1;
 }
 
 void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,

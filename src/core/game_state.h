@@ -3,10 +3,10 @@
 
 /* ============================================================
  * @deps-exports: enum GamePhase, enum PassDirection, enum PassSubphase,
- *                struct GameState (moon_shot, moon_shooter fields)
+ *                struct GameState (pass_selection_hints field added)
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: render.h, render.c, game/update.c, turn_flow.c, server_game.h, contract_logic.h
- * @deps-last-changed: 2026-03-30 — Added moon_shot (bool) and moon_shooter (int) fields
+ * @deps-used-by: render.h, render.c, server_game.c, core/game_state.c
+ * @deps-last-changed: 2026-04-05 — Added pass_selection_hints[NUM_PLAYERS][MAX_PASS_CARD_COUNT]
  * ============================================================ */
 
 #include <stdbool.h>
@@ -81,8 +81,12 @@ typedef struct GameState {
 
     /* Passing state */
     Card          pass_selections[NUM_PLAYERS][MAX_PASS_CARD_COUNT];
+    int           pass_selection_hints[NUM_PLAYERS][MAX_PASS_CARD_COUNT]; /* transmutation_id hint per selection, -1 = normal */
     bool          pass_ready[NUM_PLAYERS];
     bool          skip_human_pass_sort; /* when true, don't sort human hand after pass */
+
+    /* Runtime game options (0 = use compiled defaults) */
+    int           score_limit;    /* game over when any player >= this; 0 = GAME_OVER_SCORE */
 } GameState;
 
 /* Initialize game: set up 4 players (player 0 = human), phase = PHASE_MENU */

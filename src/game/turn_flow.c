@@ -21,6 +21,7 @@
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
+
 /* Select a valid card for timeout auto-play (no mutation). */
 static bool select_valid_card(const GameState *gs, const Phase2State *p2,
                               int player_id, Card *out)
@@ -82,6 +83,18 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
         winner = transmute_trick_get_winner(trick, tti, p2);
     } else {
         winner = trick_get_winner(trick);
+    }
+
+    /* Save trick to history for chat tooltip */
+    if (winner >= 0 && rs->trick_history_count < MAX_TRICKS_PER_ROUND) {
+        TrickRecord *rec = &rs->trick_history[rs->trick_history_count++];
+        for (int i = 0; i < CARDS_PER_TRICK; i++) {
+            rec->cards[i] = trick->cards[i];
+            rec->player_ids[i] = trick->player_ids[i];
+            rec->transmute_ids[i] = tti->transmutation_ids[i];
+        }
+        rec->winner = winner;
+        rec->num_played = trick->num_played;
     }
 
     if (winner >= 0 && rs->trick_visual_count > 0) {
@@ -322,6 +335,7 @@ static bool try_start_rogue(TurnFlow *flow, GameState *gs, RenderState *rs,
 static bool try_start_duel(TurnFlow *flow, GameState *gs, RenderState *rs,
                            Phase2State *p2, GameSettings *settings)
 {
+    (void)settings;
     if (!p2->enabled || gs->phase != PHASE_PLAYING ||
         p2->round.transmute_round.duel_pending_winner < 0)
         return false;
@@ -344,6 +358,7 @@ static bool try_start_duel(TurnFlow *flow, GameState *gs, RenderState *rs,
     flow->duel_staged_cv_idx = -1;
     flow->duel_own_cv_idx = -1;
     flow->duel_ai_decided = false;
+    flow->duel_watching = false;
 
     if (dw == 0) {
         /* Human winner: wait for click with hover */
@@ -352,15 +367,12 @@ static bool try_start_duel(TurnFlow *flow, GameState *gs, RenderState *rs,
         rs->opponent_hover_active = true;
         rs->opponent_hover_player = -1;
         rs->opponent_border_t = 0.0f;
-        render_chat_log_push(rs, "Duel: Choose an opponent's card to take!");
         rs->sync_needed = true;
     } else {
-        /* Non-human winner: server handles AI duel choices.
-         * Skip to between-tricks on the client side. */
-        flow->duel_winner = -1;
-        flow->step = FLOW_BETWEEN_TRICKS;
-        flow->timer = FLOW_BETWEEN_TRICKS_TIME *
-                      settings_anim_multiplier(settings->anim_speed);
+        /* Non-winner: watch the duel animation passively.
+         * Skip PICK_OPPONENT — go straight to WAITING for server state. */
+        flow->duel_watching = true;
+        flow->step = FLOW_DUEL_WAITING;
     }
     return true;
 }
@@ -369,7 +381,8 @@ void flow_init(TurnFlow *flow)
 {
     flow->step = FLOW_IDLE;
     flow->timer = 0.0f;
-    flow->turn_timer = FLOW_TURN_TIME_LIMIT;
+    flow->turn_time_limit = FLOW_TURN_TIME_LIMIT;
+    flow->turn_timer = flow->turn_time_limit;
     flow->animating_player = -1;
     flow->prev_trick_count = 0;
     flow->hearts_broken_at_trick_start = false;
@@ -386,6 +399,8 @@ void flow_init(TurnFlow *flow)
     flow->duel_staged_cv_idx = -1;
     flow->duel_own_cv_idx = -1;
     flow->duel_ai_decided = false;
+    flow->duel_watching = false;
+    flow->duel_just_ended = false;
     flow->has_saved_trick = false;
 }
 
@@ -455,7 +470,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             if (current == 0) {
                 flow->step = FLOW_WAITING_FOR_HUMAN;
                 flow->prev_trick_count = gs->current_trick.num_played;
-                flow->turn_timer = FLOW_TURN_TIME_LIMIT;
+                flow->turn_timer = flow->turn_time_limit;
 
             }
         }
@@ -523,9 +538,11 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 flow->timer = FLOW_TRICK_DISPLAY_TIME *
                               settings_anim_multiplier(settings->anim_speed);
                 rs->last_trick_winner = -1;
-                /* Clear stale winner so pile animation waits for
-                 * the server's authoritative winner for THIS trick */
-                pps->server_trick_winner = -1;
+                /* NOTE: Do NOT clear server_trick_winner here.
+                 * State updates are deferred during trick animations
+                 * (would_defer in main.c), so the value set before
+                 * entering FLOW_CARD_ANIMATING is the correct one
+                 * for this trick and won't be re-sent. */
 
             } else {
                 rs->trick_anim_in_progress = false;
@@ -755,39 +772,55 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
         break;
     }
 
-    case FLOW_DUEL_PICK_OPPONENT:
+    case FLOW_DUEL_PICK_OPPONENT: {
         /* Opponent selection handled by process_input + inline routing.
          * Transitions to FLOW_DUEL_WAITING when player picks opponent. */
+        if (flow->timer <= 0.0f) {
+            /* Timed out — server auto-picks opponent. Transition to WAITING
+             * so the client can receive the server's chosen target/card. */
+            rs->opponent_hover_active = false;
+            rs->opponent_hover_player = -1;
+            flow->step = FLOW_DUEL_WAITING;
+            /* No timer needed — WAITING polls for server state */
+        }
         break;
+    }
 
     case FLOW_DUEL_WAITING: {
         int chosen = p2->round.transmute_round.duel_chosen_card_idx;
         int target = flow->duel_target_player;
-        if (chosen >= 0 && target > 0) {
+        /* If target is unset (-1), use the server's auto-picked target.
+         * This happens on PICK_OPPONENT timeout and for watchers. */
+        if (target < 0 && p2->round.transmute_round.duel_chosen_target >= 0) {
+            target = p2->round.transmute_round.duel_chosen_target;
+            flow->duel_target_player = target;
+        }
+        if (chosen >= 0 && target >= 0) {
             float anim_m = settings_anim_multiplier(settings->anim_speed);
             flow->duel_target_card_idx = chosen;
             p2->round.transmute_round.duel_chosen_card_idx = -1;
             p2->round.transmute_round.duel_chosen_target = -1;
-            /* Animate opponent's card to center */
+            /* Animate opponent's card to center (same scale/position as rogue) */
             if (chosen < rs->hand_visual_counts[target]) {
                 int cv_idx = rs->hand_visuals[target][chosen];
                 if (cv_idx >= 0 && cv_idx < rs->card_count) {
-                    rs->cards[cv_idx].card =
-                        p2->round.transmute_round.duel_revealed_card;
-                    rs->cards[cv_idx].revealed_to =
-                        (uint8_t)((1 << flow->duel_winner) | (1 << target));
+                    Card revealed = p2->round.transmute_round.duel_revealed_card;
+                    /* Only winner (seat 0) or victim (target==0) see the face.
+                     * Spectators always get card back, regardless of revealed data. */
+                    bool can_see = (flow->duel_winner == 0 || target == 0) &&
+                                   (revealed.suit >= 0 && revealed.rank >= 0);
+                    if (can_see)
+                        rs->cards[cv_idx].card = revealed;
+                    rs->cards[cv_idx].face_up = can_see;
                     rs->cards[cv_idx].z_order = 200;
-                    anim_start(&rs->cards[cv_idx],
-                               layout_board_center(&rs->layout), 0.0f,
-                               ANIM_EFFECT_FLIGHT_DURATION * anim_m,
-                               EASE_IN_OUT_QUAD);
+                    Vector2 center = layout_board_center(&rs->layout);
+                    center.y -= rs->layout.card_height * 0.3f;
+                    anim_start_scaled(&rs->cards[cv_idx], center, 0.0f,
+                                      1.4f, ANIM_EFFECT_FLIGHT_DURATION * anim_m,
+                                      EASE_IN_OUT_QUAD);
                     flow->duel_staged_cv_idx = cv_idx;
                     rs->staged_duel_cv_idx = cv_idx;
                 }
-                char msg[CHAT_MSG_LEN];
-                snprintf(msg, sizeof(msg), "Duel: You peek at %s's card!",
-                         p2_player_name(target));
-                render_chat_log_push(rs, msg);
             }
             flow->step = FLOW_DUEL_ANIM_TO_CENTER;
             flow->timer = ANIM_EFFECT_FLIGHT_DURATION * anim_m;
@@ -848,16 +881,150 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 render_chat_log_push(rs, msg);
                 flow->step = FLOW_DUEL_ANIM_EXCHANGE;
                 flow->timer = ANIM_DUEL_EXCHANGE_DURATION * anim_m;
+            } else if (flow->duel_watching) {
+                /* Non-winner: wait passively for server to resolve */
+                flow->step = FLOW_DUEL_PICK_OWN;
+                flow->timer = 999.0f; /* won't time out — server resolves */
             } else {
-                /* Human: pick own card */
+                /* Human winner: pick own card */
                 flow->step = FLOW_DUEL_PICK_OWN;
                 flow->timer = FLOW_DUEL_CHOOSE_TIME;
+                rs->duel_border_active = true;
+                rs->duel_border_progress = 0.0f;
             }
         }
         break;
 
     case FLOW_DUEL_PICK_OWN: {
         float anim_m = settings_anim_multiplier(settings->anim_speed);
+        /* Non-winner watching: wait for server to resolve */
+        if (flow->duel_watching) {
+            if (p2->round.transmute_round.duel_pending_winner < 0) {
+                bool was_swap = (p2->round.transmute_round.duel_was_swap > 0);
+                if (was_swap && flow->duel_staged_cv_idx >= 0 &&
+                    flow->duel_staged_cv_idx < rs->card_count) {
+                    /* Swap: animate staged card → winner's hand */
+                    int dw = flow->duel_winner;
+                    int dp = flow->duel_target_player;
+                    {
+                        Vector2 positions[MAX_HAND_SIZE];
+                        float rotations[MAX_HAND_SIZE];
+                        int count = 0;
+                        layout_hand_positions(pos_map[dw],
+                                              rs->hand_visual_counts[dw],
+                                              &rs->layout, positions, rotations,
+                                              &count);
+                        Vector2 dest = (count > 0) ? positions[count / 2]
+                                                   : layout_board_center(&rs->layout);
+                        float rot = (count > 0) ? rotations[count / 2] : 0.0f;
+                        anim_start(&rs->cards[flow->duel_staged_cv_idx], dest, rot,
+                                   ANIM_DUEL_EXCHANGE_DURATION * anim_m,
+                                   EASE_IN_OUT_QUAD);
+                    }
+                    /* Also animate a card from winner's hand → victim */
+                    {
+                        int mid = rs->hand_visual_counts[dw] / 2;
+                        if (mid >= 0 && mid < rs->hand_visual_counts[dw]) {
+                            int own_cv = rs->hand_visuals[dw][mid];
+                            if (own_cv >= 0 && own_cv < rs->card_count &&
+                                own_cv != flow->duel_staged_cv_idx) {
+                                rs->cards[own_cv].z_order = 200;
+                                rs->cards[own_cv].face_up = false;
+                                Vector2 dest;
+                                float rot = 0.0f;
+                                if (dp == 0) {
+                                    /* Victim: fly to pass preview staging area */
+                                    Vector2 preview[1];
+                                    layout_pass_preview_positions(1, &rs->layout, preview);
+                                    dest = preview[0];
+                                } else {
+                                    /* Spectator: fly to victim's hand center */
+                                    Vector2 positions[MAX_HAND_SIZE];
+                                    float rotations[MAX_HAND_SIZE];
+                                    int count = 0;
+                                    layout_hand_positions(pos_map[dp],
+                                                          rs->hand_visual_counts[dp],
+                                                          &rs->layout, positions, rotations,
+                                                          &count);
+                                    dest = (count > 0) ? positions[count / 2]
+                                                       : layout_board_center(&rs->layout);
+                                    rot = (count > 0) ? rotations[count / 2] : 0.0f;
+                                }
+                                anim_start(&rs->cards[own_cv], dest, rot,
+                                           ANIM_DUEL_EXCHANGE_DURATION * anim_m,
+                                           EASE_IN_OUT_QUAD);
+                                flow->duel_own_cv_idx = own_cv;
+                                rs->staged_duel_own_cv_idx = own_cv;
+                            }
+                        }
+                    }
+                    flow->step = FLOW_DUEL_ANIM_EXCHANGE;
+                    flow->timer = ANIM_DUEL_EXCHANGE_DURATION * anim_m;
+                } else {
+                    /* Return: animate staged card → back to opponent hand */
+                    int dp = flow->duel_target_player;
+                    int di = flow->duel_target_card_idx;
+                    if (flow->duel_staged_cv_idx >= 0 &&
+                        flow->duel_staged_cv_idx < rs->card_count) {
+                        Vector2 positions[MAX_HAND_SIZE];
+                        float rotations[MAX_HAND_SIZE];
+                        int count = 0;
+                        if (dp >= 0)
+                            layout_hand_positions(pos_map[dp],
+                                                  rs->hand_visual_counts[dp],
+                                                  &rs->layout, positions, rotations,
+                                                  &count);
+                        Vector2 dest = (di >= 0 && di < count)
+                            ? positions[di]
+                            : rs->cards[flow->duel_staged_cv_idx].position;
+                        float rot = (di >= 0 && di < count) ? rotations[di] : 0.0f;
+                        anim_start(&rs->cards[flow->duel_staged_cv_idx], dest, rot,
+                                   ANIM_EFFECT_FLIGHT_DURATION * anim_m,
+                                   EASE_IN_OUT_QUAD);
+                    }
+                    flow->step = FLOW_DUEL_ANIM_RETURN;
+                    flow->timer = ANIM_EFFECT_FLIGHT_DURATION * anim_m;
+                }
+                p2->round.transmute_round.duel_was_swap = -1;
+            }
+            break;
+        }
+        /* Drive border progress: 0→1 over FLOW_DUEL_CHOOSE_TIME */
+        if (rs->duel_border_active) {
+            rs->duel_border_progress =
+                1.0f - (flow->timer / FLOW_DUEL_CHOOSE_TIME);
+            if (rs->duel_border_progress > 1.0f)
+                rs->duel_border_progress = 1.0f;
+            if (rs->duel_border_progress < 0.0f)
+                rs->duel_border_progress = 0.0f;
+        }
+        if (flow->timer <= 0.0f && !flow->duel_returned && flow->duel_own_card_idx < 0) {
+            /* Timed out — animate card back to opponent's hand (same as manual return) */
+            rs->duel_border_active = false;
+            int dp = flow->duel_target_player;
+            int di = flow->duel_target_card_idx;
+            if (flow->duel_staged_cv_idx >= 0 &&
+                flow->duel_staged_cv_idx < rs->card_count) {
+                Vector2 positions[MAX_HAND_SIZE];
+                float rotations[MAX_HAND_SIZE];
+                int count = 0;
+                if (dp >= 0)
+                    layout_hand_positions(pos_map[dp],
+                                          rs->hand_visual_counts[dp],
+                                          &rs->layout, positions, rotations,
+                                          &count);
+                Vector2 dest = (di >= 0 && di < count)
+                    ? positions[di]
+                    : rs->cards[flow->duel_staged_cv_idx].position;
+                float rot = (di >= 0 && di < count) ? rotations[di] : 0.0f;
+                anim_start(&rs->cards[flow->duel_staged_cv_idx], dest, rot,
+                           ANIM_EFFECT_FLIGHT_DURATION * anim_m,
+                           EASE_IN_OUT_QUAD);
+            }
+            flow->step = FLOW_DUEL_ANIM_RETURN;
+            flow->timer = ANIM_EFFECT_FLIGHT_DURATION * anim_m;
+            break;
+        }
         if (flow->duel_returned) {
             /* Winner chose to return the card — animate back to hand */
             int dp = flow->duel_target_player;
@@ -881,7 +1048,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                            ANIM_EFFECT_FLIGHT_DURATION * anim_m,
                            EASE_IN_OUT_QUAD);
             }
-            render_chat_log_push(rs, "Duel: Card returned.");
+            rs->duel_border_active = false;
             flow->step = FLOW_DUEL_ANIM_RETURN;
             flow->timer = ANIM_EFFECT_FLIGHT_DURATION * anim_m;
         } else if (flow->duel_own_card_idx >= 0) {
@@ -927,7 +1094,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                     flow->duel_own_cv_idx = own_cv;
                 }
             }
-            render_chat_log_push(rs, "Duel: Cards exchanged!");
+            rs->duel_border_active = false;
             flow->step = FLOW_DUEL_ANIM_EXCHANGE;
             flow->timer = ANIM_DUEL_EXCHANGE_DURATION * anim_m;
         }
@@ -937,22 +1104,54 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
     case FLOW_DUEL_ANIM_EXCHANGE: {
         float anim_m = settings_anim_multiplier(settings->anim_speed);
         if (flow->timer <= 0.0f) {
-            /* Clear revealed_to on staged card */
+            /* Clear face_up on staged card */
             if (flow->duel_staged_cv_idx >= 0 &&
                 flow->duel_staged_cv_idx < rs->card_count)
-                rs->cards[flow->duel_staged_cv_idx].revealed_to = 0;
-            /* Server-authoritative: the swap was already executed on the
-             * server and will arrive in the next state update.  Do NOT
-             * call transmute_swap_between_players on the client — the
-             * client doesn't have real card identities for opponents. */
+                rs->cards[flow->duel_staged_cv_idx].face_up = false;
+
+            /* Victim receive: staged card done, now reveal the incoming card */
+            if (flow->duel_watching && flow->duel_target_player == 0 &&
+                flow->duel_own_cv_idx >= 0 && flow->duel_own_cv_idx < rs->card_count &&
+                flow->duel_target_card_idx >= 0 &&
+                flow->duel_target_card_idx < gs->players[0].hand.count) {
+                /* Clean up staged card (stolen card reached winner) */
+                if (flow->duel_staged_cv_idx >= 0 &&
+                    flow->duel_staged_cv_idx < rs->card_count)
+                    rs->cards[flow->duel_staged_cv_idx].z_order = 0;
+                flow->duel_staged_cv_idx = -1;
+                rs->staged_duel_cv_idx = -1;
+
+                /* Reveal the new card at staging position */
+                CardVisual *cv = &rs->cards[flow->duel_own_cv_idx];
+                Card new_card = gs->players[0].hand.cards[flow->duel_target_card_idx];
+                cv->card = new_card;
+                cv->face_up = true;
+                /* Scale-reveal in place (like pass_start_reveal) */
+                Vector2 preview[1];
+                layout_pass_preview_positions(1, &rs->layout, preview);
+                float human_scale = rs->layout.scale;
+                float cw_s = rs->layout.card_width;
+                float ch_s = rs->layout.card_height;
+                cv->origin = (Vector2){cw_s * 0.5f, ch_s};
+                anim_start_scaled(cv, preview[0], 0.0f,
+                                  human_scale, ANIM_PASS_REVEAL_FLY_DURATION,
+                                  EASE_OUT_BACK);
+                flow->step = FLOW_DUEL_RECEIVE_REVEAL;
+                flow->timer = 1.0f * anim_m;
+                break;
+            }
+
+            /* Normal cleanup (winner, spectator, return) */
             rs->sync_needed = true;
-            /* Reset z_orders */
+            /* Reset z_orders and face_up */
             if (flow->duel_staged_cv_idx >= 0 &&
                 flow->duel_staged_cv_idx < rs->card_count)
                 rs->cards[flow->duel_staged_cv_idx].z_order = 0;
             if (flow->duel_own_cv_idx >= 0 &&
-                flow->duel_own_cv_idx < rs->card_count)
+                flow->duel_own_cv_idx < rs->card_count) {
                 rs->cards[flow->duel_own_cv_idx].z_order = 0;
+                rs->cards[flow->duel_own_cv_idx].face_up = false;
+            }
             /* Clear fields */
             flow->duel_winner = -1;
             flow->duel_target_player = -1;
@@ -961,10 +1160,13 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             flow->duel_returned = false;
             flow->duel_staged_cv_idx = -1;
             rs->staged_duel_cv_idx = -1;
+            rs->staged_duel_own_cv_idx = -1;
             flow->duel_own_cv_idx = -1;
             flow->duel_ai_decided = false;
+            flow->duel_watching = false;
+            flow->duel_just_ended = true;
             flow->step = FLOW_BETWEEN_TRICKS;
-            flow->timer = FLOW_BETWEEN_TRICKS_TIME * anim_m;
+            flow->timer = (FLOW_BETWEEN_TRICKS_TIME + 1.5f) * anim_m;
         }
         break;
     }
@@ -972,10 +1174,10 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
     case FLOW_DUEL_ANIM_RETURN: {
         float anim_m = settings_anim_multiplier(settings->anim_speed);
         if (flow->timer <= 0.0f) {
-            /* Clear revealed_to */
+            /* Clear face_up */
             if (flow->duel_staged_cv_idx >= 0 &&
                 flow->duel_staged_cv_idx < rs->card_count) {
-                rs->cards[flow->duel_staged_cv_idx].revealed_to = 0;
+                rs->cards[flow->duel_staged_cv_idx].face_up = false;
                 rs->cards[flow->duel_staged_cv_idx].z_order = 0;
             }
             /* Clear fields */
@@ -986,10 +1188,70 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             flow->duel_returned = false;
             flow->duel_staged_cv_idx = -1;
             rs->staged_duel_cv_idx = -1;
+            rs->staged_duel_own_cv_idx = -1;
             flow->duel_own_cv_idx = -1;
             flow->duel_ai_decided = false;
+            flow->duel_watching = false;
+            flow->duel_just_ended = true;
             flow->step = FLOW_BETWEEN_TRICKS;
-            flow->timer = FLOW_BETWEEN_TRICKS_TIME * anim_m;
+            flow->timer = (FLOW_BETWEEN_TRICKS_TIME + 1.5f) * anim_m;
+        }
+        break;
+    }
+
+    case FLOW_DUEL_RECEIVE_REVEAL: {
+        /* Victim: card revealed at staging, hold for viewing */
+        float anim_m = settings_anim_multiplier(settings->anim_speed);
+        if (flow->timer <= 0.0f) {
+            /* Animate card into hand slot */
+            if (flow->duel_own_cv_idx >= 0 &&
+                flow->duel_own_cv_idx < rs->card_count) {
+                int slot = flow->duel_target_card_idx;
+                Vector2 positions[MAX_HAND_SIZE];
+                float rotations[MAX_HAND_SIZE];
+                int count = 0;
+                layout_hand_positions(POS_BOTTOM,
+                                      gs->players[0].hand.count,
+                                      &rs->layout, positions, rotations,
+                                      &count);
+                Vector2 dest = (slot >= 0 && slot < count)
+                    ? positions[slot] : positions[count / 2];
+                float rot = (slot >= 0 && slot < count)
+                    ? rotations[slot] : rotations[count / 2];
+                anim_start(&rs->cards[flow->duel_own_cv_idx], dest, rot,
+                           ANIM_PASS_RECEIVE_DURATION, EASE_OUT_BACK);
+            }
+            flow->step = FLOW_DUEL_RECEIVE;
+            flow->timer = ANIM_PASS_RECEIVE_DURATION * anim_m;
+        }
+        break;
+    }
+
+    case FLOW_DUEL_RECEIVE: {
+        /* Victim: card landed in hand, cleanup */
+        float anim_m = settings_anim_multiplier(settings->anim_speed);
+        if (flow->timer <= 0.0f) {
+            if (flow->duel_own_cv_idx >= 0 &&
+                flow->duel_own_cv_idx < rs->card_count) {
+                rs->cards[flow->duel_own_cv_idx].z_order = 0;
+                rs->cards[flow->duel_own_cv_idx].face_up = false;
+            }
+            rs->sync_needed = true;
+            /* Clear all duel fields */
+            flow->duel_winner = -1;
+            flow->duel_target_player = -1;
+            flow->duel_target_card_idx = -1;
+            flow->duel_own_card_idx = -1;
+            flow->duel_returned = false;
+            flow->duel_staged_cv_idx = -1;
+            rs->staged_duel_cv_idx = -1;
+            rs->staged_duel_own_cv_idx = -1;
+            flow->duel_own_cv_idx = -1;
+            flow->duel_ai_decided = false;
+            flow->duel_watching = false;
+            flow->duel_just_ended = true;
+            flow->step = FLOW_BETWEEN_TRICKS;
+            flow->timer = (FLOW_BETWEEN_TRICKS_TIME + 1.5f) * anim_m;
         }
         break;
     }
@@ -998,11 +1260,14 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
         if (flow->timer <= 0.0f) {
             rs->trick_anim_in_progress = false;
             flow->has_saved_trick = false;
-            /* Set to current num_played (not 0) to avoid re-detecting
-             * stale trick cards left over from deferred state updates.
-             * The regression detector (above) handles the reset when
-             * fresh state arrives with a lower num_played. */
-            flow->prev_trick_count = gs->current_trick.num_played;
+            /* After a duel, reset to 0 so IDLE re-detects all cards in the
+             * new trick and animates them (state was consumed during duel). */
+            if (flow->duel_just_ended) {
+                flow->prev_trick_count = 0;
+                flow->duel_just_ended = false;
+            } else {
+                flow->prev_trick_count = gs->current_trick.num_played;
+            }
             rs->trick_visible_count = 0; /* reset cap — sync shows current state */
             rs->sync_needed = true; /* Re-sync now that trick data is unprotected */
             flow->rogue_effect_handled = false;

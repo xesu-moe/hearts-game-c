@@ -193,22 +193,24 @@ void friend_panel_update(FriendPanelState *state, float dt) {
         }
     }
 
-    /* Poll friend search results */
+    /* Poll friend search results — discard if search text dropped below 4 chars */
     {
         NetMsgFriendSearchResult sr;
         if (lobby_client_has_friend_search_result(&sr)) {
-            int count = (sr.count < 10) ? (int)sr.count : 10;
-            state->search_result_count = count;
-            for (int i = 0; i < count; i++) {
-                memset(&state->search_results[i], 0,
-                       sizeof(state->search_results[i]));
-                memcpy(state->search_results[i].username,
-                       sr.results[i].username,
-                       sizeof(state->search_results[i].username) - 1);
-                state->search_results[i].account_id = sr.results[i].account_id;
-                state->search_results[i].status     = sr.results[i].status;
+            if (state->search_len >= 4) {
+                int count = (sr.count < 10) ? (int)sr.count : 10;
+                state->search_result_count = count;
+                for (int i = 0; i < count; i++) {
+                    memset(&state->search_results[i], 0,
+                           sizeof(state->search_results[i]));
+                    memcpy(state->search_results[i].username,
+                           sr.results[i].username,
+                           sizeof(state->search_results[i].username) - 1);
+                    state->search_results[i].account_id = sr.results[i].account_id;
+                    state->search_results[i].status     = sr.results[i].status;
+                }
+                state->search_results_visible = true;
             }
-            state->search_results_visible = true;
         }
     }
 

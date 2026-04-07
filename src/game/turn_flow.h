@@ -43,6 +43,8 @@ typedef enum FlowStep {
     FLOW_DUEL_PICK_OWN,
     FLOW_DUEL_ANIM_EXCHANGE,
     FLOW_DUEL_ANIM_RETURN,
+    FLOW_DUEL_RECEIVE_REVEAL,  /* victim: card at staging, revealed face-up */
+    FLOW_DUEL_RECEIVE,         /* victim: card flying into hand slot */
     FLOW_BETWEEN_TRICKS,
 } FlowStep;
 
@@ -70,8 +72,11 @@ typedef struct TurnFlow {
     int      duel_staged_cv_idx;   /* opponent's card visual at center, -1 = none */
     int      duel_own_cv_idx;      /* winner's card visual being exchanged, -1 = none */
     bool     duel_ai_decided;      /* true = AI pre-decided, skip PICK_OWN */
+    bool     duel_watching;        /* true = non-winner passively watching duel */
+    bool     duel_just_ended;     /* true = post-duel BETWEEN_TRICKS needs special handling */
     bool     rogue_effect_handled; /* true = rogue already processed this trick */
     bool     duel_effect_handled;  /* true = duel already processed this trick */
+    float    turn_time_limit;     /* configurable, defaults to FLOW_TURN_TIME_LIMIT */
 } TurnFlow;
 
 #define FLOW_TURN_TIME_LIMIT   30.0f
@@ -86,7 +91,7 @@ typedef struct TurnFlow {
 #define FLOW_ROGUE_SUIT_CHOOSE_TIME  10.0f
 #define FLOW_ROGUE_REVEAL_TIME        3.0f  /* cards face-up at center */
 #define FLOW_ROGUE_NO_CARDS_TIME      2.0f  /* "no cards" message duration */
-#define FLOW_DUEL_CHOOSE_TIME  10.0f
+#define FLOW_DUEL_CHOOSE_TIME  8.0f
 
 void flow_init(TurnFlow *flow);
 

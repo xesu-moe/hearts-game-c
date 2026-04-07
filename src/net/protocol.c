@@ -747,7 +747,7 @@ static int deser_login_response(NetMsgLoginResponse *m, const uint8_t *buf, size
 
 static int ser_login_ack(const NetMsgLoginAck *m, uint8_t *buf, size_t len)
 {
-    size_t need = NET_AUTH_TOKEN_LEN + 4 + 4 + 4;
+    size_t need = NET_AUTH_TOKEN_LEN + 4 + 4 + 4 + NET_MAX_NAME_LEN;
     if (len < need)
         return -1;
     size_t off = 0;
@@ -755,6 +755,7 @@ static int ser_login_ack(const NetMsgLoginAck *m, uint8_t *buf, size_t len)
     write_u32(buf, &off, (uint32_t)m->elo_rating);
     write_u32(buf, &off, m->games_played);
     write_u32(buf, &off, m->games_won);
+    write_bytes(buf, &off, (const uint8_t *)m->username, NET_MAX_NAME_LEN);
     return (int)off;
 }
 
@@ -768,6 +769,31 @@ static int deser_login_ack(NetMsgLoginAck *m, const uint8_t *buf, size_t len)
     m->elo_rating = (int32_t)read_u32(buf, &off);
     m->games_played = read_u32(buf, &off);
     m->games_won = read_u32(buf, &off);
+    /* username field added later — backwards-compatible: old servers won't send it */
+    if (len >= need + NET_MAX_NAME_LEN) {
+        read_bytes(buf, &off, (uint8_t *)m->username, NET_MAX_NAME_LEN);
+        m->username[NET_MAX_NAME_LEN - 1] = '\0';
+    } else {
+        m->username[0] = '\0';
+    }
+    return (int)off;
+}
+
+static int ser_login_by_key(const NetMsgLoginByKey *m, uint8_t *buf, size_t len)
+{
+    if (len < NET_ED25519_PK_LEN)
+        return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->public_key, NET_ED25519_PK_LEN);
+    return (int)off;
+}
+
+static int deser_login_by_key(NetMsgLoginByKey *m, const uint8_t *buf, size_t len)
+{
+    if (len < NET_ED25519_PK_LEN)
+        return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->public_key, NET_ED25519_PK_LEN);
     return (int)off;
 }
 
@@ -2214,6 +2240,9 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
     case NET_MSG_LOGIN_RESPONSE:
         n = ser_login_response(&msg->login_response, payload, remaining);
         break;
+    case NET_MSG_LOGIN_BY_KEY:
+        n = ser_login_by_key(&msg->login_by_key, payload, remaining);
+        break;
     case NET_MSG_LOGOUT:
     case NET_MSG_QUEUE_CANCEL:
     case NET_MSG_REGISTER_ACK:
@@ -2404,6 +2433,9 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
     case NET_MSG_LOGIN_RESPONSE:
         n = deser_login_response(&msg->login_response, payload, remaining);
         break;
+    case NET_MSG_LOGIN_BY_KEY:
+        n = deser_login_by_key(&msg->login_by_key, payload, remaining);
+        break;
     case NET_MSG_LOGOUT:
     case NET_MSG_QUEUE_CANCEL:
     case NET_MSG_REGISTER_ACK:
@@ -2558,6 +2590,15 @@ static const bool INPUT_RELEVANT[INPUT_CMD_COUNT] = {
     [INPUT_CMD_ONLINE_JOIN]          = false, /* client-only */
     [INPUT_CMD_ONLINE_QUICKMATCH]    = false, /* client-only */
     [INPUT_CMD_ONLINE_CANCEL]        = false, /* client-only */
+    [INPUT_CMD_ONLINE_RECONNECT]     = false, /* client-only */
+    [INPUT_CMD_ONLINE_ADD_AI]        = false, /* client-only */
+    [INPUT_CMD_ONLINE_REMOVE_AI]     = false, /* client-only */
+    [INPUT_CMD_ONLINE_START]         = false, /* client-only */
+    [INPUT_CMD_IDENTITY_EXPORT]      = false, /* client-only */
+    [INPUT_CMD_IDENTITY_IMPORT]      = false, /* client-only */
+    [INPUT_CMD_IDENTITY_IMPORT_CONFIRM] = false, /* client-only */
+    [INPUT_CMD_IDENTITY_IMPORT_CANCEL]  = false, /* client-only */
+    [INPUT_CMD_IDENTITY_REFRESH]        = false, /* client-only */
     [INPUT_CMD_OPEN_STATS]           = false, /* client-only */
 };
 _Static_assert(sizeof(INPUT_RELEVANT) / sizeof(INPUT_RELEVANT[0]) == INPUT_CMD_COUNT,

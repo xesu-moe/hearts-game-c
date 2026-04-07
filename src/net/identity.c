@@ -28,28 +28,18 @@
  * Path helpers
  * ================================================================ */
 
-#define IDENTITY_DIR   ".hollow-hearts"
 #define IDENTITY_FILE  "identity.key"
 #define USERNAME_FILE  "username.txt"
 
-/* Build full path: ~/.hollow-hearts/identity.key
- * Returns true on success. */
+/* Build full path: <config_dir>/identity.key */
 static bool identity_build_path(char *buf, size_t buflen)
 {
-    const char *home = getenv("HOME");
-    if (!home || !home[0]) {
-        fprintf(stderr, "[identity] HOME not set\n");
+    char dir[512];
+    if (!net_config_dir(dir, sizeof(dir))) {
+        fprintf(stderr, "[identity] Cannot determine config directory\n");
         return false;
     }
-    int n = snprintf(buf, buflen, "%s/%s/%s", home, IDENTITY_DIR, IDENTITY_FILE);
-    return n > 0 && (size_t)n < buflen;
-}
-
-static bool identity_build_dir(char *buf, size_t buflen)
-{
-    const char *home = getenv("HOME");
-    if (!home || !home[0]) return false;
-    int n = snprintf(buf, buflen, "%s/%s", home, IDENTITY_DIR);
+    int n = snprintf(buf, buflen, "%s/%s", dir, IDENTITY_FILE);
     return n > 0 && (size_t)n < buflen;
 }
 
@@ -86,11 +76,9 @@ bool identity_load_or_create(Identity *id)
         return false;
     }
 
-    /* Create directory */
-    char dir[512];
-    if (!identity_build_dir(dir, sizeof(dir))) return false;
-    if (net_mkdir(dir, 0700) != 0 && errno != EEXIST) {
-        fprintf(stderr, "[identity] mkdir '%s' failed: %s\n", dir, strerror(errno));
+    /* Ensure config directory exists */
+    if (!net_ensure_config_dir()) {
+        fprintf(stderr, "[identity] Cannot create config directory\n");
         return false;
     }
 
@@ -159,9 +147,9 @@ bool identity_sign(const Identity *id,
 
 static bool username_build_path(char *buf, size_t buflen)
 {
-    const char *home = getenv("HOME");
-    if (!home || !home[0]) return false;
-    int n = snprintf(buf, buflen, "%s/%s/%s", home, IDENTITY_DIR, USERNAME_FILE);
+    char dir[512];
+    if (!net_config_dir(dir, sizeof(dir))) return false;
+    int n = snprintf(buf, buflen, "%s/%s", dir, USERNAME_FILE);
     return n > 0 && (size_t)n < buflen;
 }
 
@@ -196,9 +184,7 @@ bool identity_save_username(const char *username)
     if (!username_build_path(path, sizeof(path))) return false;
 
     /* Ensure directory exists */
-    char dir[512];
-    if (!identity_build_dir(dir, sizeof(dir))) return false;
-    if (net_mkdir(dir, 0700) != 0 && errno != EEXIST) return false;
+    if (!net_ensure_config_dir()) return false;
 
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -211,4 +197,156 @@ bool identity_save_username(const char *username)
 
     printf("[identity] Saved username: '%s'\n", username);
     return true;
+}
+
+/* ================================================================
+ * Backup export / import
+ * ================================================================ */
+
+#define BACKUP_FILE "hollow-hearts-identity.bak"
+
+static bool backup_build_path(char *buf, size_t buflen)
+{
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) {
+        fprintf(stderr, "[identity] HOME not set\n");
+        return false;
+    }
+    int n = snprintf(buf, buflen, "%s/%s", home, BACKUP_FILE);
+    return n > 0 && (size_t)n < buflen;
+}
+
+bool identity_export(void)
+{
+    char src[512], dst[512];
+    if (!identity_build_path(src, sizeof(src))) return false;
+    if (!backup_build_path(dst, sizeof(dst))) return false;
+
+    FILE *fin = fopen(src, "rb");
+    if (!fin) {
+        fprintf(stderr, "[identity] Export failed: cannot read '%s': %s\n",
+                src, strerror(errno));
+        return false;
+    }
+
+    uint8_t key[IDENTITY_SK_LEN];
+    size_t nread = fread(key, 1, IDENTITY_SK_LEN, fin);
+    fclose(fin);
+    if (nread != IDENTITY_SK_LEN) {
+        fprintf(stderr, "[identity] Export failed: key file corrupt\n");
+        return false;
+    }
+
+#ifdef _WIN32
+    FILE *fout = fopen(dst, "wb");
+    if (!fout) {
+        fprintf(stderr, "[identity] Export failed: cannot write '%s': %s\n",
+                dst, strerror(errno));
+        return false;
+    }
+#else
+    int fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "[identity] Export failed: cannot write '%s': %s\n",
+                dst, strerror(errno));
+        return false;
+    }
+    FILE *fout = fdopen(fd, "wb");
+    if (!fout) {
+        close(fd);
+        fprintf(stderr, "[identity] Export failed: fdopen '%s': %s\n",
+                dst, strerror(errno));
+        return false;
+    }
+#endif
+    size_t nwritten = fwrite(key, 1, IDENTITY_SK_LEN, fout);
+    fclose(fout);
+    if (nwritten != IDENTITY_SK_LEN) {
+        fprintf(stderr, "[identity] Export failed: incomplete write\n");
+        return false;
+    }
+
+    printf("[identity] Exported key to %s\n", dst);
+    return true;
+}
+
+bool identity_import(Identity *id)
+{
+    char src[512], dst[512];
+    if (!backup_build_path(src, sizeof(src))) return false;
+    if (!identity_build_path(dst, sizeof(dst))) return false;
+
+    FILE *fin = fopen(src, "rb");
+    if (!fin) {
+        fprintf(stderr, "[identity] Import failed: cannot read '%s': %s\n",
+                src, strerror(errno));
+        return false;
+    }
+
+    uint8_t key[IDENTITY_SK_LEN];
+    size_t nread = fread(key, 1, IDENTITY_SK_LEN, fin);
+    fclose(fin);
+    if (nread != IDENTITY_SK_LEN) {
+        fprintf(stderr, "[identity] Import failed: backup file corrupt\n");
+        return false;
+    }
+
+    /* Ensure directory exists */
+    if (!net_ensure_config_dir()) {
+        fprintf(stderr, "[identity] Import failed: cannot create config directory\n");
+        return false;
+    }
+
+    /* Write key file */
+#ifdef _WIN32
+    FILE *fout = fopen(dst, "wb");
+    if (!fout) {
+        fprintf(stderr, "[identity] Import failed: cannot write '%s': %s\n",
+                dst, strerror(errno));
+        return false;
+    }
+#else
+    int fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "[identity] Import failed: cannot write '%s': %s\n",
+                dst, strerror(errno));
+        return false;
+    }
+    FILE *fout = fdopen(fd, "wb");
+    if (!fout) {
+        close(fd);
+        fprintf(stderr, "[identity] Import failed: fdopen '%s': %s\n",
+                dst, strerror(errno));
+        return false;
+    }
+#endif
+    size_t nwritten = fwrite(key, 1, IDENTITY_SK_LEN, fout);
+    fclose(fout);
+    if (nwritten != IDENTITY_SK_LEN) {
+        fprintf(stderr, "[identity] Import failed: incomplete write\n");
+        return false;
+    }
+
+    /* Reload into Identity struct */
+    memcpy(id->secret_key, key, IDENTITY_SK_LEN);
+    memcpy(id->public_key, id->secret_key + 32, IDENTITY_PK_LEN);
+    id->loaded = true;
+
+    printf("[identity] Imported key from %s\n", src);
+    return true;
+}
+
+bool identity_backup_exists(void)
+{
+    char path[512];
+    if (!backup_build_path(path, sizeof(path))) return false;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+
+    /* Verify it's the right size */
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fclose(f);
+    return sz == (long)IDENTITY_SK_LEN;
 }

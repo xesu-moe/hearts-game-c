@@ -1,0 +1,147 @@
+{
+    "hollow_hearts": {
+        "Basics": {
+            "Objective": "Avoid taking penalty cards. The player with the lowest score when someone reaches 100 points wins.",
+            "Suits": {
+                "Clubs": "No penalty points. The 2 of Clubs always leads the first trick of each round.",
+                "Diamonds": "No penalty points. A safe suit for dumping when you can't follow.",
+                "Spades": "Contains the Queen of Spades, worth 13 penalty points. Be careful when following suit.",
+                "Hearts": "Every Heart is worth 1 penalty point. Hearts cannot be led until 'broken' — a Heart is played on another suit's trick."
+            },
+            "First Trick": "The player holding the 2 of Clubs leads the first trick. No penalty cards (Hearts or Queen of Spades) may be played on the first trick unless you have no other option.",
+            "Following Suit": "You must play a card of the led suit if you have one. If you have none, you may play any card — including penalty cards."
+        },
+        "Winning a Trick": {
+            "Standard Rule": "The highest card of the led suit wins the trick. Cards of other suits cannot win, regardless of rank. Aces are high, 2s are low.",
+            "Jokers": {
+                "Red Joker": {
+                    "description": "Counts as Hearts or Diamonds. Always wins the trick regardless of rank or suit.",
+                    "sprite_id": 0
+                },
+                "Black Joker": {
+                    "description": "Counts as Spades or Clubs. Always wins the trick regardless of rank or suit.",
+                    "sprite_id": 1
+                },
+                "The Joker": {
+                    "description": "When leading, always wins the trick — beats everything, including other Jokers. When not leading, always loses. Counts as any suit, so it can be played anytime.",
+                    "sprite_id": 21
+                }
+            },
+            "The Crown": {
+                "description": "The highest rank card played in the trick wins, regardless of suit. Overrides the normal lead-suit rule.",
+                "sprite_id": 16
+            },
+            "The Roulette": {
+                "description": "The trick winner is chosen randomly among the players.",
+                "sprite_id": 10
+            },
+            "The Binding": {
+                "description": "Forces the trick winner to also win the next trick. Only a Joker can override this.",
+                "sprite_id": 20
+            }
+        },
+        "Passing & Dealer": {
+            "The Dealer": "The player who scored the least points in the previous round becomes the dealer. The dealer chooses the pass direction and how many cards to pass.",
+            "Direction": "The dealer picks one: Left, Right, Across, or No Passing.",
+            "Card Count": "The dealer picks how many cards each player passes: 2, 3, or 4. If No Passing is chosen, the round skips straight to the contract draft.",
+            "Strategy": "Pass high-risk cards like the Queen of Spades or high Hearts. Keep low cards for safe following."
+        },
+        "Contracts & Draft": {
+            "What Are Contracts": "Contracts are secret missions for the round. Each contract has a specific goal to achieve during play. Completing your contract earns you a Transmutation card as a reward. Failing has no extra penalty.",
+            "The Draft": "Before each round, players draft contracts in a 3-pick snake draft. You pick one contract from the available options, then the remaining contracts pass to the next player. This repeats 3 times.",
+            "Contract Tiers": {
+                "Easy (Tier 0)": "Simple goals like avoiding hearts, winning tricks, or collecting suits. Examples: Heartless, Trick Master, Clean Hands.",
+                "Medium (Tier 1)": "Harder goals involving timing or passed cards. Examples: Fast Start, Return to Sender, Bookends.",
+                "Hard (Tier 2)": "High-risk, high-reward goals. Examples: Shoot the Moon, Moon Guard, Trailblazer, Alchemist's Strike."
+            },
+            "Rewards": "Each contract is paired with a random Transmutation card. Complete the contract to add that Transmutation to your inventory."
+        },
+        "Transmutations": {
+            "How to Use": "Drag a Transmutation card from your inventory onto a card in your hand to transform it. The transmuted card keeps its suit-following behavior but gains a special effect. The 2 of Clubs and Queen of Spades cannot be transmuted.",
+            "Persistence": "Transmutation cards persist in your inventory across rounds until used. Build your collection by completing contracts each round.",
+            "Jokers": {
+                "Red Joker": {
+                    "description": "Counts as Hearts or Diamonds. Always wins the trick. Worth 0 points.",
+                    "sprite_id": 0
+                },
+                "Black Joker": {
+                    "description": "Counts as Spades or Clubs. Always wins the trick. Worth 0 points.",
+                    "sprite_id": 1
+                },
+                "The Joker": {
+                    "description": "When leading, beats everything including other Jokers. When not leading, always loses. Counts as any suit. Worth 0 points.",
+                    "sprite_id": 21
+                }
+            },
+            "Point Modifiers": {
+                "Shadow Queen": {
+                    "description": "Transforms a card into a second Queen of Spades — worth 13 penalty points.",
+                    "sprite_id": 2
+                },
+                "The Pendulum": {
+                    "description": "The transmuted card scores -1 instead of its normal point value. Reduces the trick winner's score.",
+                    "sprite_id": 6
+                },
+                "The Gatherer": {
+                    "description": "The trick winner reduces their round score by 3 points. Applied at the end of the round.",
+                    "sprite_id": 4
+                },
+                "The Trap": {
+                    "description": "If played in the same trick as the Queen of Spades, the Queen's penalty is doubled from 13 to 26 points.",
+                    "sprite_id": 12
+                },
+                "The Inversion": {
+                    "description": "All penalty points in this trick become negative (reduce score). Score-reducing effects like Gatherer and Pendulum become additions instead.",
+                    "sprite_id": 19
+                }
+            },
+            "Trick Effects": {
+                "The Curse": {
+                    "description": "The trick winner must lead the next trick with Hearts, even if Hearts haven't been broken yet.",
+                    "sprite_id": 14
+                },
+                "The Anchor": {
+                    "description": "The lead suit of this trick becomes the forced lead suit for the next trick.",
+                    "sprite_id": 15
+                },
+                "The Rogue": {
+                    "description": "The trick winner reveals one of an opponent's hand cards to all players.",
+                    "sprite_id": 5
+                },
+                "The Shield": {
+                    "description": "The trick winner scores 0 points for the next 3 tricks.",
+                    "sprite_id": 13
+                },
+                "The Martyr": {
+                    "description": "The trick winner's round score is doubled at the end of the round. Multiple Martyrs stack: 2 = x4, 3 = x8.",
+                    "sprite_id": 3
+                }
+            },
+            "Redirectors": {
+                "The Parasite": {
+                    "description": "All penalty points from this trick go to the player who played the Parasite, not the trick winner.",
+                    "sprite_id": 17
+                },
+                "The Bounty": {
+                    "description": "If the Queen of Spades is in this trick, the player who played her takes the 13 points — not the trick winner.",
+                    "sprite_id": 18
+                }
+            },
+            "Special": {
+                "The Fog": {
+                    "description": "The transmuted card is hidden — no player can see what it is until it's played. The card's rules and effects still apply normally.",
+                    "sprite_id": 8
+                },
+                "The Mirror": {
+                    "description": "Copies the effect of the last transmutation card played in any previous trick this round.",
+                    "sprite_id": 9
+                }
+            }
+        },
+        "Scoring": {
+            "Points": "Each Heart = 1 point. Queen of Spades = 13 points. All other cards = 0. The goal is to have the lowest score.",
+            "Shooting the Moon": "If one player collects ALL penalty cards (every Heart and the Queen of Spades), they score 0 for the round and every other player receives 26 points instead. Transmutations can change individual point values, but the moon is about collecting all the penalty cards.",
+            "Game Over": "The game ends when any player reaches 100 total points. The player with the lowest score wins."
+        }
+    }
+}

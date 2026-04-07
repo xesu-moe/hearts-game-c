@@ -1,0 +1,14 @@
+services:
+  hearts-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+      - "7778:7778"
+    environment:
+      - PUBLIC_ADDR=hearts.xesu.moe
+    volumes:
+      - lobby-data:/data
+
+volumes:
+  lobby-data:

@@ -7,7 +7,10 @@
 #ifndef NET_PLATFORM_H
 #define NET_PLATFORM_H
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 
@@ -44,6 +47,7 @@
 #undef Rectangle
 #endif
 
+#include <errno.h>
 #include <io.h>
 #include <direct.h>
 
@@ -93,6 +97,25 @@ static inline uint32_t net_get_monotonic_ms(void)
 /* Directory creation */
 #define net_mkdir(path, mode) _mkdir(path)
 
+/* Config directory: %APPDATA%\hollow-hearts on Windows.
+ * Writes path to buf, returns true on success. */
+static inline bool net_config_dir(char *buf, size_t buflen)
+{
+    const char *appdata = getenv("APPDATA");
+    if (!appdata || !appdata[0]) return false;
+    int n = snprintf(buf, buflen, "%s\\hollow-hearts", appdata);
+    return n > 0 && (size_t)n < buflen;
+}
+
+/* Ensure the config directory exists. Returns true on success. */
+static inline bool net_ensure_config_dir(void)
+{
+    char dir[512];
+    if (!net_config_dir(dir, sizeof(dir))) return false;
+    if (_mkdir(dir) != 0 && errno != EEXIST) return false;
+    return true;
+}
+
 /* WSA init/cleanup */
 static inline int net_platform_init(void)
 {
@@ -114,6 +137,7 @@ static inline void net_platform_cleanup(void)
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -144,6 +168,33 @@ static inline uint32_t net_get_monotonic_ms(void)
 }
 
 #define net_mkdir(path, mode) mkdir(path, mode)
+
+/* Config directory: $HOME/.config/hollow-hearts on POSIX.
+ * Writes path to buf, returns true on success. */
+static inline bool net_config_dir(char *buf, size_t buflen)
+{
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) return false;
+    int n = snprintf(buf, buflen, "%s/.config/hollow-hearts", home);
+    return n > 0 && (size_t)n < buflen;
+}
+
+/* Ensure the config directory exists (creates ~/.config/ then ~/.config/hollow-hearts/).
+ * Returns true on success. */
+static inline bool net_ensure_config_dir(void)
+{
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) return false;
+
+    char parent[512];
+    snprintf(parent, sizeof(parent), "%s/.config", home);
+    if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
+
+    char dir[512];
+    if (!net_config_dir(dir, sizeof(dir))) return false;
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) return false;
+    return true;
+}
 
 static inline int net_platform_init(void) { return 0; }
 static inline void net_platform_cleanup(void) { (void)0; }

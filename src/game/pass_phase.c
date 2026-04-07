@@ -285,17 +285,25 @@ void pass_start_toss_anim_batched(PassPhaseState *pps, GameState *gs,
         float   ai_start_rot = 0.0f;
 
         if (p == 0) {
-            /* Human: each card starts from its own hand position */
+            /* Human: each card starts from its own hand position.
+             * Match using pass_selection_hints to disambiguate same
+             * suit+rank cards (normal vs transmuted). */
+            bool claimed[MAX_HAND_SIZE] = {false};
             for (int j = 0; j < gs->pass_card_count; j++) {
                 human_starts[j] = layout_board_center(cfg);
                 human_rots[j] = 0.0f;
+                int hint = gs->pass_selection_hints[0][j];
+                /* First pass: exact match (card + hint) */
                 for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+                    if (claimed[i]) continue;
                     int vi = rs->hand_visuals[0][i];
                     if (vi >= 0 && vi < rs->card_count &&
                         card_equals(rs->cards[vi].card,
-                                    gs->pass_selections[0][j])) {
+                                    gs->pass_selections[0][j]) &&
+                        rs->hand_transmute_ids[i] == hint) {
                         human_starts[j] = rs->cards[vi].position;
                         human_rots[j] = rs->cards[vi].rotation;
+                        claimed[i] = true;
                         break;
                     }
                 }
@@ -371,14 +379,23 @@ void pass_start_toss_anim_batched(PassPhaseState *pps, GameState *gs,
         }
     }
 
-    /* Remove tossed cards from hand visuals (human only — we know the cards) */
-    for (int j = 0; j < gs->pass_card_count; j++) {
-        Card pass_card = gs->pass_selections[0][j];
-        for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
-            int idx = rs->hand_visuals[0][i];
-            if (card_equals(rs->cards[idx].card, pass_card)) {
-                rs->cards[idx].opacity = 0.0f;
-                break;
+    /* Remove tossed cards from hand visuals (human only — we know the cards).
+     * Match using pass_selection_hints to hide the correct visual
+     * when two cards share suit+rank (normal + transmuted). */
+    {
+        bool hide_claimed[MAX_HAND_SIZE] = {false};
+        for (int j = 0; j < gs->pass_card_count; j++) {
+            Card pass_card = gs->pass_selections[0][j];
+            int hint = gs->pass_selection_hints[0][j];
+            for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+                if (hide_claimed[i]) continue;
+                int idx = rs->hand_visuals[0][i];
+                if (card_equals(rs->cards[idx].card, pass_card) &&
+                    rs->hand_transmute_ids[i] == hint) {
+                    rs->cards[idx].opacity = 0.0f;
+                    hide_claimed[i] = true;
+                    break;
+                }
             }
         }
     }
@@ -446,17 +463,24 @@ void pass_start_single_toss(PassPhaseState *pps, GameState *gs,
     float   rots[MAX_PASS_CARD_COUNT];
 
     if (seat == 0) {
-        /* Human: each card starts from its own hand visual position */
+        /* Human: each card starts from its own hand visual position.
+         * Match using pass_selection_hints to disambiguate same
+         * suit+rank cards (normal vs transmuted). */
+        bool claimed[MAX_HAND_SIZE] = {false};
         for (int j = 0; j < gs->pass_card_count; j++) {
             starts[j] = layout_board_center(cfg);
             rots[j] = 0.0f;
+            int hint = gs->pass_selection_hints[0][j];
             for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+                if (claimed[i]) continue;
                 int vi = rs->hand_visuals[0][i];
                 if (vi >= 0 && vi < rs->card_count &&
                     card_equals(rs->cards[vi].card,
-                                gs->pass_selections[0][j])) {
+                                gs->pass_selections[0][j]) &&
+                    rs->hand_transmute_ids[i] == hint) {
                     starts[j] = rs->cards[vi].position;
                     rots[j] = rs->cards[vi].rotation;
+                    claimed[i] = true;
                     break;
                 }
             }
@@ -528,14 +552,21 @@ void pass_start_single_toss(PassPhaseState *pps, GameState *gs,
         rs->pass_staged_count++;
     }
 
-    /* Remove tossed cards from hand visuals */
+    /* Remove tossed cards from hand visuals.
+     * Match using pass_selection_hints to hide the correct visual
+     * when two cards share suit+rank (normal + transmuted). */
     if (seat == 0) {
+        bool hide_claimed[MAX_HAND_SIZE] = {false};
         for (int j = 0; j < gs->pass_card_count; j++) {
             Card pass_card = gs->pass_selections[0][j];
+            int hint = gs->pass_selection_hints[0][j];
             for (int i = 0; i < rs->hand_visual_counts[0]; i++) {
+                if (hide_claimed[i]) continue;
                 int vi = rs->hand_visuals[0][i];
-                if (card_equals(rs->cards[vi].card, pass_card)) {
+                if (card_equals(rs->cards[vi].card, pass_card) &&
+                    rs->hand_transmute_ids[i] == hint) {
                     rs->cards[vi].opacity = 0.0f;
+                    hide_claimed[i] = true;
                     break;
                 }
             }
@@ -892,10 +923,19 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
         int count = gs->pass_card_count;
         if (count > MAX_PASS_CARD_COUNT) count = MAX_PASS_CARD_COUNT;
         for (int i = 0; i < count && i < gs->players[0].hand.count; i++) {
+            int hint_tid = -1;
+            if (p2->enabled) {
+                const HandTransmuteState *hts = &p2->players[0].hand_transmutes;
+                if (transmute_is_transmuted(hts, i))
+                    hint_tid = hts->slots[i].transmutation_id;
+            }
             input_cmd_push((InputCmd){
                 .type = INPUT_CMD_SELECT_CARD,
                 .source_player = 0,
-                .card = { .card = gs->players[0].hand.cards[i] },
+                .card = {
+                    .card_index = hint_tid,
+                    .card = gs->players[0].hand.cards[i],
+                },
             });
         }
         input_cmd_push((InputCmd){ .type = INPUT_CMD_CONFIRM, .source_player = 0 });

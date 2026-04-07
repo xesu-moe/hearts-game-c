@@ -48,6 +48,17 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
         }
     }
 
+    /* Update friend panel for all pre-game phases */
+    {
+        bool pregame = (gs->phase == PHASE_MENU ||
+                        gs->phase == PHASE_ONLINE_MENU ||
+                        gs->phase == PHASE_STATS ||
+                        gs->phase == PHASE_SETTINGS);
+        if (pregame) {
+            friend_panel_update(&oui->friend_panel, dt);
+        }
+    }
+
     InputCmd cmd;
     for (int n = 0; n < INPUT_CMD_QUEUE_CAPACITY &&
                     (cmd = input_cmd_pop()).type != INPUT_CMD_NONE; n++) {
@@ -119,7 +130,6 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             if (cmd.type == INPUT_CMD_QUIT) {
                 *quit_requested = true;
             }
-            friend_panel_update(&oui->friend_panel, dt);
             friend_panel_set_can_invite(&oui->friend_panel,
                 oui->subphase == ONLINE_SUB_CONNECTED_WAITING);
             if (oui->subphase == ONLINE_SUB_CONNECTED_WAITING) {

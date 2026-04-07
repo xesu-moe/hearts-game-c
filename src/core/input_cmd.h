@@ -79,6 +79,13 @@ typedef enum InputCmdType {
     INPUT_CMD_ONLINE_REMOVE_AI,  /* remove last AI player from waiting room */
     INPUT_CMD_ONLINE_START,      /* start game (room creator only) */
 
+    /* Identity management */
+    INPUT_CMD_IDENTITY_EXPORT,         /* export identity to backup file */
+    INPUT_CMD_IDENTITY_IMPORT,         /* request import (may trigger confirm) */
+    INPUT_CMD_IDENTITY_IMPORT_CONFIRM, /* user confirmed overwrite */
+    INPUT_CMD_IDENTITY_IMPORT_CANCEL,  /* user cancelled overwrite */
+    INPUT_CMD_IDENTITY_REFRESH,        /* re-check if backup file exists */
+
     /* Stats screen */
     INPUT_CMD_OPEN_STATS,        /* menu → stats screen */
 

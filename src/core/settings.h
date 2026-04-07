@@ -39,8 +39,8 @@ typedef struct Resolution {
     int height;
 } Resolution;
 
-#define RESOLUTION_COUNT 5
-#define FPS_OPTION_COUNT 5
+#define RESOLUTION_COUNT 6
+#define FPS_OPTION_COUNT 8
 
 extern const Resolution RESOLUTIONS[RESOLUTION_COUNT];
 extern const int FPS_OPTIONS[FPS_OPTION_COUNT];

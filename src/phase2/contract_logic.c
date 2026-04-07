@@ -177,7 +177,7 @@ void draft_generate_pool(DraftState *draft)
 
     /* --- Select 16 random transmutations (no duplication) --- */
     /* Excluded IDs: transmutations not yet ready for the draft pool */
-    static const int EXCLUDED_TMUTE_IDS[] = { 11 /* The Echo */ };
+    static const int EXCLUDED_TMUTE_IDS[] = { 11 /* The Echo */, 7 /* The Duel */ };
     static const int NUM_EXCLUDED = sizeof(EXCLUDED_TMUTE_IDS) / sizeof(EXCLUDED_TMUTE_IDS[0]);
 
     int all_transmutes[MAX_TRANSMUTATION_DEFS];

@@ -176,6 +176,7 @@ void phase_transition_update(GameState *gs, RenderState *rs,
     /* Clear piles when entering dealing phase (new round) */
     if (gs->phase == PHASE_DEALING && *prev_phase != PHASE_DEALING) {
         render_clear_piles(rs);
+        rs->trick_history_count = 0;
     }
 
     /* Deal animation complete — advance to passing phase */
@@ -191,6 +192,7 @@ void phase_transition_update(GameState *gs, RenderState *rs,
     if (gs->phase == PHASE_PLAYING && *prev_phase != PHASE_PLAYING) {
         flow_init(flow);
         render_clear_piles(rs);
+        rs->trick_history_count = 0;
         rs->sync_needed = true;
         for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
             pls->current_tti.transmutation_ids[ti] = -1;

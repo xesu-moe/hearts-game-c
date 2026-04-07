@@ -122,6 +122,7 @@ typedef struct TransmuteRoundState {
     int duel_chosen_card_idx;   /* server-chosen card for duel pick, -1 = none */
     int duel_chosen_target;     /* server-chosen target player for duel, -1 = none */
     Card duel_revealed_card;    /* actual card for duel peek */
+    int duel_was_swap;          /* -1=pending, 0=returned, 1=swapped */
 } TransmuteRoundState;
 
 #endif /* TRANSMUTATION_H */

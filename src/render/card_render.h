@@ -38,9 +38,6 @@ void card_render_face(Card card, Vector2 pos, float scale,
 void card_render_back(Vector2 pos, float scale, float opacity,
                       float rotation_deg, Vector2 origin);
 
-/* Set the custom font for procedural card rendering.
- * If not called, falls back to Raylib's default font. */
-void card_render_set_font(Font font);
 
 /* Set texture filter for card textures (e.g., TEXTURE_FILTER_BILINEAR for
  * downscaled cards, TEXTURE_FILTER_POINT for full-size crisp rendering). */

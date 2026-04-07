@@ -3,8 +3,9 @@
  * @deps-requires: render.h (mirror_source_tid), online_ui.h, particle.h, anim.h, layout.h,
  *                 card_render.h, phase2/phase2_defs.h, net/lobby_client.h,
  *                 core/game_state.h (PHASE_STATS, PHASE_ONLINE_MENU),
- *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-04-04 — Initializes mirror_source_tid field in render_state_init()
+ *                 core/card.h, core/settings.h, todo_panel.h (todo_panel_height, todo_panel_draw),
+ *                 raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-04-06 — Added todo_panel rendering in PHASE_MENU; calls todo_panel_height() and todo_panel_draw()
  * ============================================================ */
 
 #include "render.h"
@@ -12,6 +13,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/resource.h"
@@ -22,6 +24,7 @@
 #include "game/login_ui.h"
 #include "game/online_ui.h"
 #include "friend_panel_render.h"
+#include "todo_panel.h"
 #include "phase2/phase2_state.h"
 #include "phase2/phase2_defs.h"
 #include "rlgl.h"
@@ -501,7 +504,7 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
 
         rs->btn_login_submit.bounds = (Rectangle){
             screen_cx - btn_w * 0.5f,
-            screen_cy + 30.0f * s,
+            screen_cy + 5.0f * s,
             btn_w, btn_h
         };
         rs->btn_login_submit.label = "Register";
@@ -519,9 +522,37 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         rs->btn_login_retry.visible =
             rs->login_ui && rs->login_ui->error_text[0];
         rs->btn_login_retry.disabled = false;
+
+        float refresh_w = 80.0f * s;
+        float refresh_h = 28.0f * s;
+        bool show_import = rs->login_ui &&
+            rs->login_ui->show_username_input &&
+            !rs->login_ui->awaiting_response;
+
+        rs->btn_login_import.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 135.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_login_import.label = "Import Identity";
+        rs->btn_login_import.subtitle = NULL;
+        rs->btn_login_import.visible = show_import;
+        rs->btn_login_import.disabled = !rs->backup_exists;
+
+        rs->btn_login_refresh.bounds = (Rectangle){
+            screen_cx + btn_w * 0.5f + 6.0f * s,
+            screen_cy + 135.0f * s + (btn_h - refresh_h) * 0.5f,
+            refresh_w, refresh_h
+        };
+        rs->btn_login_refresh.label = "Re-check";
+        rs->btn_login_refresh.subtitle = NULL;
+        rs->btn_login_refresh.visible = show_import;
+        rs->btn_login_refresh.disabled = false;
     } else {
         rs->btn_login_submit.visible = false;
         rs->btn_login_retry.visible = false;
+        rs->btn_login_import.visible = false;
+        rs->btn_login_refresh.visible = false;
     }
 
     /* ---- Online menu buttons ---- */
@@ -584,7 +615,7 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             float opt_w = 160.0f * s;
             float opt_x = screen_cx - 160.0f * s - opt_w;
             float opt_y = screen_cy - 60.0f * s;
-            float opt_row_h = 40.0f * s;
+            float opt_row_h = 52.0f * s;
             float opt_arrow_sz = 22.0f * s;
             bool opt_vis = (sub == ONLINE_SUB_CREATE_WAITING);
 
@@ -885,7 +916,7 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         float cx = scx;
 
         /* Tab bar layout */
-        static const char *tab_labels[] = {"Display", "Gameplay", "Audio"};
+        static const char *tab_labels[] = {"Display", "Gameplay", "Audio", "Account"};
         float tab_w = 140.0f * s;
         float tab_h = 36.0f * s;
         float tab_gap = 8.0f * s;
@@ -902,9 +933,9 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->settings_tab_btns[t].subtitle = NULL;
         }
 
-        /* Row ranges per tab: Display=0..2, Gameplay=3..5, Audio=6..8 */
-        static const int tab_row_start[] = {0, 3, 5};
-        static const int tab_row_end[]   = {3, 5, 8}; /* exclusive */
+        /* Row ranges per tab: Display=0..2, Gameplay=3..4, Audio=5..7, Account=none */
+        static const int tab_row_start[] = {0, 3, 5, 8};
+        static const int tab_row_end[]   = {3, 5, 8, 8}; /* exclusive; Account has no rows */
         int rstart = tab_row_start[rs->settings_tab];
         int rend   = tab_row_end[rs->settings_tab];
 
@@ -961,6 +992,78 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->btn_settings_apply.subtitle = NULL;
         } else {
             rs->btn_settings_apply.visible = false;
+        }
+
+        /* Account tab buttons */
+        if (rs->settings_tab == SETTINGS_TAB_ACCOUNT) {
+            float abtn_w = 240.0f * s;
+            float abtn_h = 45.0f * s;
+            float abtn_x = scx - abtn_w * 0.5f;
+
+            if (!rs->account_confirm_active) {
+                float arefresh_w = 80.0f * s;
+                float arefresh_h = 28.0f * s;
+                float import_y = content_y + abtn_h + 15.0f * s;
+
+                rs->btn_account_export.bounds = (Rectangle){
+                    abtn_x, content_y, abtn_w, abtn_h};
+                rs->btn_account_export.label = "Export Identity";
+                rs->btn_account_export.subtitle = "~/hollow-hearts-identity.bak";
+                rs->btn_account_export.visible = true;
+                rs->btn_account_export.disabled = false;
+
+                rs->btn_account_import.bounds = (Rectangle){
+                    abtn_x, import_y, abtn_w, abtn_h};
+                rs->btn_account_import.label = "Import Identity";
+                rs->btn_account_import.subtitle = NULL;
+                rs->btn_account_import.visible = true;
+                rs->btn_account_import.disabled = !rs->backup_exists;
+
+                rs->btn_account_refresh.bounds = (Rectangle){
+                    abtn_x + abtn_w + 6.0f * s,
+                    import_y + (abtn_h - arefresh_h) * 0.5f,
+                    arefresh_w, arefresh_h};
+                rs->btn_account_refresh.label = "Re-check";
+                rs->btn_account_refresh.subtitle = NULL;
+                rs->btn_account_refresh.visible = true;
+                rs->btn_account_refresh.disabled = false;
+
+                rs->btn_account_confirm_yes.visible = false;
+                rs->btn_account_confirm_no.visible = false;
+            } else {
+                /* Confirmation dialog */
+                rs->btn_account_export.visible = false;
+                rs->btn_account_import.visible = false;
+                rs->btn_account_refresh.visible = false;
+
+                float cbtn_w = 120.0f * s;
+                float cbtn_h = 40.0f * s;
+                float cbtn_gap = 20.0f * s;
+                float cbtn_y = content_y + 50.0f * s;
+
+                rs->btn_account_confirm_yes.bounds = (Rectangle){
+                    scx - cbtn_w - cbtn_gap * 0.5f, cbtn_y, cbtn_w, cbtn_h};
+                rs->btn_account_confirm_yes.label = "Yes";
+                rs->btn_account_confirm_yes.subtitle = NULL;
+                rs->btn_account_confirm_yes.visible = true;
+                rs->btn_account_confirm_yes.disabled = false;
+
+                rs->btn_account_confirm_no.bounds = (Rectangle){
+                    scx + cbtn_gap * 0.5f, cbtn_y, cbtn_w, cbtn_h};
+                rs->btn_account_confirm_no.label = "Cancel";
+                rs->btn_account_confirm_no.subtitle = NULL;
+                rs->btn_account_confirm_no.visible = true;
+                rs->btn_account_confirm_no.disabled = false;
+            }
+
+            /* Override after_rows_y for Back button positioning */
+            after_rows_y = content_y + 2.0f * (abtn_h + 15.0f * s);
+        } else {
+            rs->btn_account_export.visible = false;
+            rs->btn_account_import.visible = false;
+            rs->btn_account_refresh.visible = false;
+            rs->btn_account_confirm_yes.visible = false;
+            rs->btn_account_confirm_no.visible = false;
         }
 
         /* Back button — always below content area */
@@ -1150,8 +1253,10 @@ void render_init(RenderState *rs)
     for (int i = 0; i < MAX_HAND_SIZE; i++) rs->hand_fog_mode[i] = 0;
     for (int i = 0; i < CARDS_PER_TRICK; i++) rs->trick_fog_mode[i] = 0;
 
-    /* Custom fonts — load at multiple sizes for crisp rendering */
-    static const int base_sizes[FONT_SIZE_COUNT] = {16, 32, 48, 96};
+    /* Custom fonts — one per used size for crisp rendering */
+    static const int base_sizes[FONT_SIZE_COUNT] = {
+        14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 36, 40, 48
+    };
     rs->font_loaded = true;
     for (int i = 0; i < FONT_SIZE_COUNT; i++) {
         rs->font_base_sizes[i] = base_sizes[i];
@@ -1163,9 +1268,6 @@ void render_init(RenderState *rs)
             SetTextureFilter(rs->fonts[i].texture, TEXTURE_FILTER_BILINEAR);
         }
     }
-    if (rs->font_loaded) {
-        card_render_set_font(rs->fonts[1]); /* medium (32) for card text */
-    }
 
     /* Default player names */
     for (int i = 0; i < NUM_PLAYERS; i++)
@@ -1173,7 +1275,7 @@ void render_init(RenderState *rs)
                  s_default_names[i]);
 
     /* Help menu */
-    help_menu_load(&rs->help_menu, "assets/defs/help-menu.json");
+    help_menu_load(&rs->help_menu, "assets/defs/help-menu.json", "hollow_hearts");
 }
 
 /* ---- Font-aware text helpers ---- */
@@ -1182,11 +1284,16 @@ void render_init(RenderState *rs)
  * Falls back to the largest font if all are smaller. */
 static Font pick_font(const RenderState *rs, int font_size)
 {
-    for (int i = 0; i < FONT_SIZE_COUNT; i++) {
-        if (rs->font_base_sizes[i] >= font_size)
-            return rs->fonts[i];
+    int best = 0;
+    int best_diff = abs(rs->font_base_sizes[0] - font_size);
+    for (int i = 1; i < FONT_SIZE_COUNT; i++) {
+        int diff = abs(rs->font_base_sizes[i] - font_size);
+        if (diff < best_diff) {
+            best = i;
+            best_diff = diff;
+        }
     }
-    return rs->fonts[FONT_SIZE_COUNT - 1];
+    return rs->fonts[best];
 }
 
 void hh_draw_text(const RenderState *rs, const char *text, int x, int y,
@@ -1195,7 +1302,7 @@ void hh_draw_text(const RenderState *rs, const char *text, int x, int y,
     if (rs->font_loaded) {
         Font f = pick_font(rs, font_size);
         DrawTextEx(f, text, (Vector2){(float)x, (float)y},
-                   (float)font_size, 1.0f, color);
+                   (float)f.baseSize, 1.0f, color);
     } else {
         DrawText(text, x, y, font_size, color);
     }
@@ -1205,7 +1312,7 @@ int hh_measure_text(const RenderState *rs, const char *text, int font_size)
 {
     if (rs->font_loaded) {
         Font f = pick_font(rs, font_size);
-        Vector2 size = MeasureTextEx(f, text, (float)font_size, 1.0f);
+        Vector2 size = MeasureTextEx(f, text, (float)f.baseSize, 1.0f);
         return (int)size.x;
     }
     return MeasureText(text, font_size);
@@ -1240,6 +1347,10 @@ void render_reset_to_menu(RenderState *rs)
 
 void render_update(const GameState *gs, RenderState *rs, float dt)
 {
+    /* Account status text fade-out */
+    if (rs->account_status_timer > 0.0f)
+        rs->account_status_timer -= dt;
+
     rs->pass_card_limit = gs->pass_card_count;
 
     /* Sync player names from online UI (usernames replace cardinal dirs) */
@@ -2041,6 +2152,13 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         rs->btn_login_retry.hovered =
             rs->btn_login_retry.visible &&
             CheckCollisionPointRec(mouse, rs->btn_login_retry.bounds);
+        rs->btn_login_import.hovered =
+            rs->btn_login_import.visible &&
+            !rs->btn_login_import.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_login_import.bounds);
+        rs->btn_login_refresh.hovered =
+            rs->btn_login_refresh.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_login_refresh.bounds);
     }
 
     /* Update menu item hover state */
@@ -2079,6 +2197,23 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                 !rs->settings_rows_next[i].disabled &&
                 CheckCollisionPointRec(mouse, rs->settings_rows_next[i].bounds);
         }
+        /* Account tab buttons */
+        rs->btn_account_export.hovered =
+            rs->btn_account_export.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_export.bounds);
+        rs->btn_account_import.hovered =
+            rs->btn_account_import.visible &&
+            !rs->btn_account_import.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_account_import.bounds);
+        rs->btn_account_refresh.hovered =
+            rs->btn_account_refresh.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_refresh.bounds);
+        rs->btn_account_confirm_yes.hovered =
+            rs->btn_account_confirm_yes.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_confirm_yes.bounds);
+        rs->btn_account_confirm_no.hovered =
+            rs->btn_account_confirm_no.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_confirm_no.bounds);
     }
 
     sync_buttons(gs, rs);
@@ -2452,7 +2587,7 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
         if (!card_render_has_transmute_sprite(cv->transmute_id)) {
             char id_buf[8];
             snprintf(id_buf, sizeof(id_buf), "%d", cv->transmute_id);
-            int badge_fs = (int)(12.0f * ui_scale);
+            int badge_fs = (int)(14.0f * ui_scale);
             int tw = hh_measure_text(rs, id_buf, badge_fs);
             int bx = (int)(cw - (float)tw - 4.0f * ui_scale);
             int by = (int)(3.0f * ui_scale);
@@ -2545,6 +2680,9 @@ static void draw_button(const RenderState *rs, const UIButton *btn,
     DrawRectangleRoundedLines(btn->bounds, 0.3f, 4, border_col);
 
     int font_size = (int)(24.0f * ui_scale);
+    /* Shrink font for short buttons so text fits */
+    if (font_size > (int)(btn->bounds.height * 0.7f))
+        font_size = (int)(btn->bounds.height * 0.7f);
     int tw = hh_measure_text(rs, btn->label, font_size);
 
     if (btn->subtitle != NULL) {
@@ -2604,7 +2742,7 @@ static void draw_phase_login(const GameState *gs, const RenderState *rs)
 
     /* Title */
     const char *title = "HOLLOW HEARTS";
-    int title_size = (int)(50.0f * s);
+    int title_size = (int)(48.0f * s);
     int tw = hh_measure_text(rs, title, title_size);
     hh_draw_text(rs, title, (int)(cx - (float)tw * 0.5f),
              (int)(cy - 160.0f * s), title_size, RAYWHITE);
@@ -2612,17 +2750,17 @@ static void draw_phase_login(const GameState *gs, const RenderState *rs)
     if (!lui) return;
 
     if (lui->show_username_input && !lui->awaiting_response) {
-        /* Username text field */
-        const char *prompt = "Choose a username:";
+        /* --- Section 1: Register --- */
+        const char *prompt = "Choose a username to register:";
         int prompt_size = (int)(22.0f * s);
         int pw = hh_measure_text(rs, prompt, prompt_size);
         hh_draw_text(rs, prompt, (int)(cx - (float)pw * 0.5f),
-                 (int)(cy - 60.0f * s), prompt_size, LIGHTGRAY);
+                 (int)(cy - 80.0f * s), prompt_size, LIGHTGRAY);
 
         float field_w = 300.0f * s;
         float field_h = 40.0f * s;
         float field_x = cx - field_w * 0.5f;
-        float field_y = cy - 20.0f * s;
+        float field_y = cy - 45.0f * s;
         DrawRectangle((int)field_x, (int)field_y,
                       (int)field_w, (int)field_h,
                       (Color){40, 40, 50, 255});
@@ -2646,11 +2784,28 @@ static void draw_phase_login(const GameState *gs, const RenderState *rs)
         draw_button(rs, &rs->btn_login_submit, s);
 
         /* Username rules hint */
-        const char *hint = "3-31 characters, letters/numbers/underscore";
+        const char *hint = "4-31 characters, letters/numbers/underscore";
         int hint_size = (int)(14.0f * s);
         int hw = hh_measure_text(rs, hint, hint_size);
         hh_draw_text(rs, hint, (int)(cx - (float)hw * 0.5f),
-                 (int)(cy + 80.0f * s), hint_size, GRAY);
+                 (int)(cy + 55.0f * s), hint_size, GRAY);
+
+        /* --- Section 2: Import --- */
+        const char *or_text = "Or import an existing identity:";
+        int or_size = (int)(22.0f * s);
+        int ow = hh_measure_text(rs, or_text, or_size);
+        hh_draw_text(rs, or_text, (int)(cx - (float)ow * 0.5f),
+                 (int)(cy + 90.0f * s), or_size, LIGHTGRAY);
+
+        const char *path_hint = "Reads from ~/hollow-hearts-identity.bak";
+        int ph_size = (int)(14.0f * s);
+        int phw = hh_measure_text(rs, path_hint, ph_size);
+        hh_draw_text(rs, path_hint, (int)(cx - (float)phw * 0.5f),
+                 (int)(cy + 116.0f * s), ph_size, GRAY);
+
+        /* Import identity button + refresh check button */
+        draw_button(rs, &rs->btn_login_import, s);
+        draw_button(rs, &rs->btn_login_refresh, s);
     } else if (lui->error_text[0]) {
         /* Error display */
         int err_size = (int)(20.0f * s);
@@ -2707,10 +2862,10 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         hh_draw_text(rs, code_label, (int)(cx - (float)lw * 0.5f),
                  (int)(cy - 80.0f * s), label_size, LIGHTGRAY);
 
-        int code_size = (int)(50.0f * s);
+        int code_size = (int)(48.0f * s);
         int cw = hh_measure_text(rs, oui->created_room_code, code_size);
         hh_draw_text(rs, oui->created_room_code, (int)(cx - (float)cw * 0.5f),
-                 (int)(cy - 50.0f * s), code_size, GOLD);
+                 (int)(cy - 48.0f * s), code_size, GOLD);
 
         /* Player slots */
         int name_size = (int)(18.0f * s);
@@ -2766,7 +2921,7 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
                     (int)(_acx - (float)_lw * 0.5f), \
                     (int)((prev_btn).bounds.y - (float)_lfs - 4.0f * s), \
                     _lfs, LIGHTGRAY); \
-                int _vfs = (int)(15.0f * s); \
+                int _vfs = (int)(14.0f * s); \
                 int _vw = hh_measure_text(rs, (val_str), _vfs); \
                 float _al = (prev_btn).bounds.x + (prev_btn).bounds.width; \
                 float _ar = (next_btn).bounds.x; \
@@ -2843,7 +2998,7 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
                      lbl_fs, LIGHTGRAY);
 
             /* Value text centered between arrows */
-            int vfs = (int)(15.0f * s);
+            int vfs = (int)(14.0f * s);
             int vw = hh_measure_text(rs, diff_val, vfs);
             float al = rs->btn_online_ai_diff_prev.bounds.x +
                        rs->btn_online_ai_diff_prev.bounds.width;
@@ -2946,10 +3101,10 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
         hh_draw_text(rs, code_label, (int)(cx - (float)lw2 * 0.5f),
                  (int)(cy - 80.0f * s), label_size, LIGHTGRAY);
 
-        int code_size = (int)(50.0f * s);
+        int code_size = (int)(48.0f * s);
         int cw3 = hh_measure_text(rs, oui->assigned_room_code, code_size);
         hh_draw_text(rs, oui->assigned_room_code, (int)(cx - (float)cw3 * 0.5f),
-                 (int)(cy - 50.0f * s), code_size, GOLD);
+                 (int)(cy - 48.0f * s), code_size, GOLD);
 
         /* Player slots */
         int name_size = (int)(18.0f * s);
@@ -3006,16 +3161,6 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
     }
     }
 
-    /* Friend panel — left side */
-    if (rs->friend_panel) {
-        Rectangle friend_rect = {
-            0, 60,
-            FRIEND_PANEL_WIDTH,
-            rs->layout.screen_height - 120.0f
-        };
-        friend_panel_render_input(rs->friend_panel, friend_rect);
-        friend_panel_render_draw(rs->friend_panel, friend_rect, rs->fonts[0]);
-    }
 }
 
 static void draw_stats_game_tab(const RenderState *rs, float s, float cx,
@@ -3300,7 +3445,7 @@ static void draw_phase_menu(const GameState *gs, const RenderState *rs)
     float title_y = rs->menu_items[0].bounds.y - 90.0f * s;
 
     const char *title = "HOLLOW HEARTS";
-    int title_size = (int)(50.0f * s);
+    int title_size = (int)(48.0f * s);
     int tw = hh_measure_text(rs, title, title_size);
     hh_draw_text(rs, title, (int)(screen_cx - (float)tw * 0.5f),
              (int)title_y, title_size, RAYWHITE);
@@ -3472,9 +3617,9 @@ static void draw_contract_buttons(const RenderState *rs, float s)
         float bw = scaled.width;
         float pad = 8.0f * s * scale_f;
 
-        int cond_fs = (int)(15.0f * s * scale_f);
-        int name_fs = (int)(15.0f * s * scale_f);
-        int desc_fs = (int)(13.0f * s * scale_f);
+        int cond_fs = (int)(14.0f * s * scale_f);
+        int name_fs = (int)(14.0f * s * scale_f);
+        int desc_fs = (int)(14.0f * s * scale_f);
         float max_w = bw - pad * 2.0f;
 
         /* 1. Contract condition (label = description), centered word-wrap */
@@ -3862,7 +4007,7 @@ static void draw_left_panel_chat(RenderState *rs)
 
     BeginScissorMode((int)r.x, (int)r.y, (int)r.width, (int)r.height);
 
-    int msg_fs = (int)(13.0f * s);
+    int msg_fs = (int)(14.0f * s);
     float text_x = r.x + 6.0f * s;
     float max_w = r.width - 12.0f * s;
 
@@ -4400,7 +4545,7 @@ static void draw_scoreboard_hud(const GameState *gs, const RenderState *rs)
     float y = margin + pad;
 
     int font_header = (int)(16.0f * s);
-    int font_row    = (int)(15.0f * s);
+    int font_row    = (int)(14.0f * s);
     float row_h     = 22.0f * s;
 
     /* Background — matches left panel lower style */
@@ -4502,7 +4647,7 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
         /* Number in shield color */
         char shield_txt[4];
         snprintf(shield_txt, sizeof(shield_txt), "%d", rs->shield_remaining[p]);
-        int stfs = (int)(13.0f * s);
+        int stfs = (int)(14.0f * s);
         int stw = hh_measure_text(rs, shield_txt, stfs);
         float text_cy = (top_y + mid_y) * 0.5f + 2.0f * s; /* slightly below rect center */
         hh_draw_text(rs, shield_txt, (int)(ox - (float)stw * 0.5f),
@@ -4553,7 +4698,8 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
         char trick_text[32];
         snprintf(trick_text, sizeof(trick_text), "Trick %d/13", gs->tricks_played + 1);
         int trick_size = (int)(16.0f * s);
-        hh_draw_text(rs, trick_text, (int)(sb_x + pad),
+        float btn_offset = 80.0f * s + 8.0f * s; /* skip past Help button + gap */
+        hh_draw_text(rs, trick_text, (int)(sb_x + btn_offset),
                  (int)(sb_bottom + 4.0f * s), trick_size, LIGHTGRAY);
     }
 
@@ -4590,7 +4736,7 @@ static void draw_contracts_panel(const RenderState *rs, float s,
 
     Vector2 bc = layout_board_center(cfg);
     int font22 = (int)(22.0f * s);
-    int font13 = (int)(13.0f * s);
+    int font14 = (int)(14.0f * s);
     int font11 = (int)(11.0f * s);
     int table_x = (int)tbl.table_x;
     int col2_x  = (int)tbl.col2_x;
@@ -4668,14 +4814,14 @@ static void draw_contracts_panel(const RenderState *rs, float s,
             /* Column 3: Contract condition */
             draw_text_wrapped(rs, rs->contract_result_desc[i],
                               (float)col3_x, (float)y,
-                              font13, (float)col3_w, LIGHTGRAY);
+                              font14, (float)col3_w, LIGHTGRAY);
         } else {
             /* Not yet revealed */
             hh_draw_text(rs, rs->contract_result_text[i], table_x, y, font22, LIGHTGRAY);
             hh_draw_text(rs, rs->contract_result_name[i], col2_x, y, font22, LIGHTGRAY);
             draw_text_wrapped(rs, rs->contract_result_desc[i],
                               (float)col3_x, (float)y,
-                              font13, (float)col3_w, DARKGRAY);
+                              font14, (float)col3_w, DARKGRAY);
         }
     }
 
@@ -5116,6 +5262,43 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
         draw_button(rs, &rs->settings_rows_next[i], s);
     }
 
+    /* Account tab content */
+    if (rs->settings_tab == SETTINGS_TAB_ACCOUNT) {
+        if (rs->account_confirm_active) {
+            /* Confirmation prompt */
+            const char *prompt = "This will replace your current identity.";
+            const char *prompt2 = "Continue?";
+            int prompt_fs = (int)(20.0f * s);
+            int pw = hh_measure_text(rs, prompt, prompt_fs);
+            int pw2 = hh_measure_text(rs, prompt2, prompt_fs);
+            float prompt_y = rs->btn_account_confirm_yes.bounds.y - 60.0f * s;
+            hh_draw_text(rs, prompt, (int)(screen_cx - (float)pw * 0.5f),
+                     (int)prompt_y, prompt_fs, (Color){255, 200, 80, 255});
+            hh_draw_text(rs, prompt2, (int)(screen_cx - (float)pw2 * 0.5f),
+                     (int)(prompt_y + (float)prompt_fs + 4.0f * s), prompt_fs, (Color){255, 200, 80, 255});
+
+            draw_button(rs, &rs->btn_account_confirm_yes, s);
+            draw_button(rs, &rs->btn_account_confirm_no, s);
+        } else {
+            draw_button(rs, &rs->btn_account_export, s);
+            draw_button(rs, &rs->btn_account_import, s);
+            draw_button(rs, &rs->btn_account_refresh, s);
+        }
+
+        /* Status text with fade */
+        if (rs->account_status_timer > 0.0f) {
+            int st_fs = (int)(18.0f * s);
+            float alpha = rs->account_status_timer < 1.0f
+                              ? rs->account_status_timer : 1.0f;
+            uint8_t a = (uint8_t)(alpha * 255.0f);
+            int stw = hh_measure_text(rs, rs->account_status_text, st_fs);
+            float st_y = rs->btn_settings_back.bounds.y - 30.0f * s;
+            hh_draw_text(rs, rs->account_status_text,
+                     (int)(screen_cx - (float)stw * 0.5f),
+                     (int)st_y, st_fs, (Color){200, 255, 200, a});
+        }
+    }
+
     /* Apply and Back buttons */
     draw_button(rs, &rs->btn_settings_apply, s);
     draw_button(rs, &rs->btn_settings_back, s);
@@ -5268,8 +5451,8 @@ static void draw_transmute_tooltip(const RenderState *rs)
     float raw_t = rs->transmute_tooltip.anim_t;
     float t = ease_apply(EASE_OUT_QUAD, raw_t);
 
-    int name_fs = (int)(15.0f * s);
-    int desc_fs = (int)(13.0f * s);
+    int name_fs = (int)(14.0f * s);
+    int desc_fs = (int)(14.0f * s);
     float tooltip_max_w = 220.0f * s;
     float inner_pad = 8.0f * s;
 
@@ -5507,6 +5690,42 @@ void render_draw(const GameState *gs, const RenderState *rs)
 
     default:
         break;
+    }
+
+    /* Friend panel — visible in all pre-game phases (after login) */
+    if (rs->friend_panel) {
+        bool show_panel = (gs->phase == PHASE_MENU ||
+                           gs->phase == PHASE_ONLINE_MENU ||
+                           gs->phase == PHASE_STATS ||
+                           (gs->phase == PHASE_SETTINGS &&
+                            !is_ingame_phase(rs->settings_return_phase)));
+        if (show_panel) {
+            float s15 = rs->layout.scale / 1.5f;
+            float fpw = FRIEND_PANEL_WIDTH * s15;
+            float panel_h = (rs->layout.screen_height - 120.0f * s15) / 2.0f;
+            float margin = 10.0f * s15;
+            Rectangle friend_rect = {
+                margin, rs->layout.screen_height - margin - panel_h,
+                fpw, panel_h
+            };
+            friend_panel_render_input(rs->friend_panel, friend_rect);
+            friend_panel_render_draw(rs->friend_panel, friend_rect, rs);
+        }
+    }
+
+    /* Todo panel — visible only on main menu, top-right */
+    if (rs->todo_panel && rs->todo_panel->loaded && gs->phase == PHASE_MENU) {
+        float s15 = rs->layout.scale / 1.5f;
+        float tpw = TODO_PANEL_WIDTH * s15;
+        float todo_h = todo_panel_height(rs->todo_panel, s15);
+        float margin = 10.0f * s15;
+        Rectangle todo_rect = {
+            rs->layout.screen_width - tpw - margin,
+            margin,
+            tpw,
+            todo_h
+        };
+        todo_panel_draw(rs->todo_panel, todo_rect, rs);
     }
 
     /* Pause overlay (drawn on top of the game scene, but not during settings) */

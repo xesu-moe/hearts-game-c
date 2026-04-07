@@ -165,6 +165,7 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
             gs->players[0].hand.cards[i] = reordered[i];
     }
 
+
     /* ---- 3. All players: hand counts + scores (remapped) ---- */
     for (int s = 0; s < NUM_PLAYERS; s++) {
         int local = remap_seat(s, my);
@@ -357,6 +358,7 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
             ? remap_seat(view->duel_chosen_target, my) : -1;
     p2->round.transmute_round.duel_revealed_card =
         net_card_to_game(view->duel_revealed_card);
+    p2->round.transmute_round.duel_was_swap = (int)view->duel_was_swap;
 
     /* ---- 14. Round-end transmutation effects (remapped) ---- */
     for (int i = 0; i < NUM_PLAYERS; i++) {

@@ -118,7 +118,13 @@ static void lc_handle_message(const NetMsg *msg, const Identity *id)
         g_info.elo_rating = msg->login_ack.elo_rating;
         g_info.games_played = msg->login_ack.games_played;
         g_info.games_won = msg->login_ack.games_won;
-        strncpy(g_info.username, g_login_username, NET_MAX_NAME_LEN - 1);
+        /* Prefer server-provided username (key-based login), fall back to local */
+        if (msg->login_ack.username[0] != '\0') {
+            strncpy(g_info.username, msg->login_ack.username,
+                    NET_MAX_NAME_LEN - 1);
+        } else {
+            strncpy(g_info.username, g_login_username, NET_MAX_NAME_LEN - 1);
+        }
         g_info.username[NET_MAX_NAME_LEN - 1] = '\0';
         g_state = LOBBY_AUTHENTICATED;
         printf("[lobby-client] Authenticated as '%s' "
@@ -286,8 +292,7 @@ void lobby_client_connect(const char *ip, uint16_t port)
 
     g_conn_id = net_socket_connect(&g_net, ip, port);
     if (g_conn_id < 0) {
-        snprintf(g_error, sizeof(g_error), "Failed to connect to %s:%d",
-                 ip, port);
+        snprintf(g_error, sizeof(g_error), "Failed to connect to server");
         g_state = LOBBY_ERROR;
         return;
     }
@@ -372,6 +377,22 @@ void lobby_client_login(const char *username)
 
     g_state = LOBBY_LOGGING_IN;
     printf("[lobby-client] Logging in as '%s'\n", username);
+}
+
+void lobby_client_login_by_key(const Identity *id)
+{
+    if (g_state != LOBBY_CONNECTED) return;
+
+    g_login_username[0] = '\0'; /* no username yet — server will provide it */
+
+    NetMsg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = NET_MSG_LOGIN_BY_KEY;
+    memcpy(msg.login_by_key.public_key, id->public_key, NET_ED25519_PK_LEN);
+    net_socket_send_msg(&g_net, g_conn_id, &msg);
+
+    g_state = LOBBY_LOGGING_IN;
+    printf("[lobby-client] Logging in by public key\n");
 }
 
 void lobby_client_change_username(const char *new_username)

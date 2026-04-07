@@ -23,6 +23,7 @@ typedef struct LoginUIState {
     float cursor_blink;          /* 0..1 oscillating timer */
     bool  show_username_input;   /* true = first launch, show text field */
     bool  has_stored_username;   /* true = auto-login path */
+    bool  login_by_key;          /* true = imported identity, login via public key */
     char  status_text[128];      /* "Connecting...", "Logging in..." */
     char  error_text[128];       /* error message to display */
     bool  awaiting_response;     /* true while waiting for server */

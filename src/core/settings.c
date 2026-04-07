@@ -14,9 +14,19 @@
 
 #include "raylib.h"
 
+#include "net/platform.h"
 #include "vendor/cJSON.h"
 
 #define SETTINGS_FILE "settings.json"
+
+/* Build full path: <config_dir>/settings.json */
+static bool settings_build_path(char *buf, size_t buflen)
+{
+    char dir[512];
+    if (!net_config_dir(dir, sizeof(dir))) return false;
+    int n = snprintf(buf, buflen, "%s/%s", dir, SETTINGS_FILE);
+    return n > 0 && (size_t)n < buflen;
+}
 #define SESSION_TOKEN_LEN 32
 #define SESSION_TOKEN_HEX_LEN (SESSION_TOKEN_LEN * 2)
 
@@ -41,10 +51,10 @@ static bool hex_decode(const char *hex_str, uint8_t *out, int out_len)
 }
 
 const Resolution RESOLUTIONS[RESOLUTION_COUNT] = {
-    {1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440},
+    {1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3840, 2160},
 };
 
-const int FPS_OPTIONS[FPS_OPTION_COUNT] = {30, 60, 120, 144, 0}; /* 0 = uncapped */
+const int FPS_OPTIONS[FPS_OPTION_COUNT] = {30, 60, 120, 144, 165, 200, 240, 360};
 
 void settings_default(GameSettings *s)
 {
@@ -64,7 +74,10 @@ void settings_load(GameSettings *s)
 {
     settings_default(s);
 
-    FILE *f = fopen(SETTINGS_FILE, "rb");
+    char filepath[512];
+    if (!settings_build_path(filepath, sizeof(filepath))) return;
+
+    FILE *f = fopen(filepath, "rb");
     if (!f) return;
 
     fseek(f, 0, SEEK_END);
@@ -223,10 +236,13 @@ void settings_save(const GameSettings *s)
     cJSON_Delete(root);
     if (!json_str) return;
 
-    FILE *f = fopen(SETTINGS_FILE, "w");
-    if (f) {
-        fputs(json_str, f);
-        fclose(f);
+    char filepath[512];
+    if (settings_build_path(filepath, sizeof(filepath)) && net_ensure_config_dir()) {
+        FILE *f = fopen(filepath, "w");
+        if (f) {
+            fputs(json_str, f);
+            fclose(f);
+        }
     }
 
     free(json_str);
@@ -264,7 +280,7 @@ void settings_apply(const GameSettings *s)
 
     /* FPS */
     int fps = FPS_OPTIONS[s->fps_index];
-    SetTargetFPS(fps); /* 0 = uncapped */
+    SetTargetFPS(fps);
 }
 
 float settings_anim_multiplier(AnimSpeed speed)
@@ -299,7 +315,6 @@ const char *settings_resolution_name(int index)
 const char *settings_fps_name(int index)
 {
     if (index < 0 || index >= FPS_OPTION_COUNT) return "Unknown";
-    if (FPS_OPTIONS[index] == 0) return "Uncapped";
     static char buf[16];
     snprintf(buf, sizeof(buf), "%d", FPS_OPTIONS[index]);
     return buf;

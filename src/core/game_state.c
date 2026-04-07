@@ -95,6 +95,7 @@ void game_state_new_round(GameState *gs)
     for (int i = 0; i < NUM_PLAYERS; i++) {
         for (int j = 0; j < MAX_PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
+            gs->pass_selection_hints[i][j] = -1;
         }
         gs->pass_ready[i] = false;
     }
@@ -122,10 +123,13 @@ bool game_state_select_pass(GameState *gs, int player_id,
         }
     }
 
-    /* Check no duplicates */
+    /* Check no duplicates (use pass_selection_hints to distinguish
+     * same suit+rank cards with different transmutation states) */
     for (int i = 0; i < card_count; i++) {
         for (int j = i + 1; j < card_count; j++) {
-            if (card_equals(cards[i], cards[j])) {
+            if (card_equals(cards[i], cards[j]) &&
+                gs->pass_selection_hints[player_id][i] ==
+                gs->pass_selection_hints[player_id][j]) {
                 return false;
             }
         }
@@ -186,6 +190,7 @@ bool game_state_execute_pass(GameState *gs)
         gs->pass_ready[i] = false;
         for (int j = 0; j < MAX_PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
+            gs->pass_selection_hints[i][j] = -1;
         }
     }
 
@@ -302,8 +307,9 @@ bool game_state_is_valid_play(const GameState *gs, int player_id, Card card)
 
 bool game_state_is_game_over(const GameState *gs)
 {
+    int limit = gs->score_limit > 0 ? gs->score_limit : GAME_OVER_SCORE;
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (gs->players[i].total_score >= GAME_OVER_SCORE) {
+        if (gs->players[i].total_score >= limit) {
             return true;
         }
     }

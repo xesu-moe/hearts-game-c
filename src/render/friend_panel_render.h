@@ -12,15 +12,18 @@
 #include "../game/friend_panel.h"
 #include <raylib.h>
 
-#define FRIEND_PANEL_WIDTH   220
-#define FRIEND_ENTRY_HEIGHT   36
-#define FRIEND_SEARCH_HEIGHT  32
+struct RenderState;
+
+#define FRIEND_PANEL_WIDTH   308
+#define FRIEND_ENTRY_HEIGHT   52
+#define FRIEND_SEARCH_HEIGHT  44
 
 /* Process input for the friend panel (mouse, keyboard, scroll).
    Call before draw each frame. */
 void friend_panel_render_input(FriendPanelState *state, Rectangle panel_rect);
 
 /* Draw the friend panel. */
-void friend_panel_render_draw(FriendPanelState *state, Rectangle panel_rect, Font font);
+void friend_panel_render_draw(FriendPanelState *state, Rectangle panel_rect,
+                              const struct RenderState *rs);
 
 #endif /* FRIEND_PANEL_RENDER_H */

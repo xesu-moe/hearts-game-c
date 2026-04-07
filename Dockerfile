@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY --from=build /build/hh-server /app/
 COPY --from=build /build/hh-lobby /app/
+COPY --from=build /build/assets/defs/ /app/assets/defs/
 
-VOLUME /data
+RUN mkdir -p /data
 EXPOSE 7777 7778
-CMD ["/bin/sh", "-c", "/app/hh-lobby & exec /app/hh-server"]
+CMD ["/bin/sh", "-c", "/app/hh-lobby 7778 /data/lobby.db & exec /app/hh-server 7777 127.0.0.1 7778 ${PUBLIC_ADDR:-127.0.0.1}"]

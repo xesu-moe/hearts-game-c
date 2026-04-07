@@ -8,7 +8,7 @@
  *                 phase2/phase2_state.h (Phase2State), phase2/transmutation.h,
  *                 server/ai_competitive.h (CompetitiveAIState)
  * @deps-used-by: server_game.c, server_main.c, server_net.c, room.h
- * @deps-last-changed: 2026-04-02 — Added comp_ai[] array and ai_difficulty field to ServerGame
+ * @deps-last-changed: 2026-04-05 — sv_ai_select_pass() signature changed from (GameState*, int) to (ServerGame*, int)
  * ============================================================ */
 
 #ifndef SERVER_GAME_H
@@ -82,6 +82,9 @@ typedef struct ServerGame {
     /* Duel target storage (between DUEL_PICK and DUEL_GIVE) */
     int                 duel_target_player;     /* opponent selected in DUEL_PICK */
     int                 duel_target_hand_index;  /* opponent card index */
+    float               duel_timer;             /* timeout for duel pick/give phases */
+    bool                duel_ai_swap;           /* bot will swap (vs return) */
+    int                 duel_ai_give_idx;       /* card index bot will give */
 
     /* Last trick winner (for client Roulette determinism) */
     int                 last_trick_winner; /* -1 = no trick completed yet */
@@ -104,6 +107,9 @@ typedef struct ServerGame {
 
     /* AI difficulty: 0=casual, 1=competitive */
     uint8_t             ai_difficulty;
+    uint8_t             timer_option;   /* index into TIMER_BONUS_VALUES */
+    uint8_t             point_goal_idx; /* index into POINT_GOAL_VALUES */
+    uint8_t             gamemode;       /* 0=Transmutations, 1=Vanilla, 2=Dragon Hearts */
 
     /* Player display names (copied from Room slots at game start) */
     char                player_names[NUM_PLAYERS][32];

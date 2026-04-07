@@ -1,11 +1,10 @@
 /* ============================================================
  * @deps-implements: server_game.h
- * @deps-requires: server_game.h, net/protocol.h (NetPlayerView.rogue/duel_revealed_card, net_build_player_view),
- *                 core/game_state.h, core/hand.h, core/trick.h, core/card.h, core/input_cmd.h,
- *                 phase2/phase2_state.h, phase2/transmutation.h (TransmuteRoundState.rogue/duel_revealed_card),
- *                 phase2/phase2_defs.h, phase2/contract_logic.h, phase2/transmutation_logic.h,
- *                 stdio.h, stdlib.h, string.h
- * @deps-last-changed: 2026-04-05 — Added int hint_idx parameter to sv_play_card_with_transmute()
+ * @deps-requires: server_game.h, core/game_state.h (GameState.pass_selection_hints),
+ *                 core/hand.h, core/trick.h, core/card.h, core/input_cmd.h,
+ *                 phase2/phase2_state.h, phase2/transmutation.h, phase2/phase2_defs.h,
+ *                 phase2/contract_logic.h, phase2/transmutation_logic.h, stdio.h, stdlib.h, string.h
+ * @deps-last-changed: 2026-04-05 — sv_ai_select_pass(ServerGame*, int) now uses pass_selection_hints
  * ============================================================ */
 
 #include "server_game.h"
@@ -17,6 +16,7 @@
 
 #include "core/clock.h"
 #include "core/hand.h"
+#include "net/protocol.h"
 #include "core/trick.h"
 #include "core/card.h"
 #include "phase2/phase2_defs.h"
@@ -27,6 +27,17 @@
 #define SV_DRAFT_TIMEOUT    20.0f  /* PASS_CONTRACT_TIME (15s) + 5s */
 #define SV_PASS_TIMEOUT     25.0f  /* PASS_CARD_PASS_TIME (20s) + 5s */
 #define SV_SCORING_TIMEOUT  20.0f  /* max wait for scoring confirmation */
+#define SV_DEALER_TIMEOUT   15.0f  /* max wait for each dealer decision */
+#define SV_DUEL_TIMEOUT      8.0f  /* max wait for duel pick/give */
+#define SV_DUEL_AI_DELAY_MIN 1.0f  /* min AI thinking delay */
+#define SV_DUEL_AI_DELAY_MAX 2.0f  /* max AI thinking delay */
+
+static float sv_duel_ai_delay(void)
+{
+    return SV_DUEL_AI_DELAY_MIN +
+           (float)rand() / (float)RAND_MAX *
+           (SV_DUEL_AI_DELAY_MAX - SV_DUEL_AI_DELAY_MIN);
+}
 
 /* ---- Forward declarations for internal helpers ---- */
 
@@ -34,12 +45,11 @@ static void sv_reset_tti(TrickTransmuteInfo *tti);
 static void sv_do_pass_phase(ServerGame *sg);
 static void sv_do_play_phase(ServerGame *sg);
 static void sv_do_scoring(ServerGame *sg);
-static void sv_ai_select_pass(GameState *gs, int player_id);
+static void sv_ai_select_pass(ServerGame *sg, int player_id);
 static bool sv_ai_play_card(ServerGame *sg, int player_id);
 static bool sv_play_card_with_transmute(ServerGame *sg, int player_id, Card card, int hint_idx);
 static void sv_resolve_trick(ServerGame *sg);
 static void sv_execute_rogue_ai(ServerGame *sg, int winner);
-static void sv_execute_duel_ai(ServerGame *sg, int winner);
 static int  sv_determine_dealer(const ServerGame *sg);
 static void sv_log_play(ServerGame *sg, int player_id);
 static void sv_check_post_trick_effects(ServerGame *sg, int winner);
@@ -125,6 +135,9 @@ void server_game_init(ServerGame *sg)
     sg->last_trick_winner = -1;
     sg->duel_target_player = -1;
     sg->duel_target_hand_index = -1;
+    sg->duel_timer = 0.0f;
+    sg->duel_ai_swap = false;
+    sg->duel_ai_give_idx = -1;
     for (int i = 0; i < NUM_PLAYERS; i++)
         sg->selected_transmute_slot[i] = -1;
     sv_reset_tti(&sg->current_tti);
@@ -144,6 +157,15 @@ void server_game_start(ServerGame *sg)
 
     sg->gs.phase = PHASE_MENU; /* server has no login phase */
     game_state_start_game(&sg->gs);
+
+    /* Apply game options */
+    {
+        static const int point_goals[] = { 10, 50, 100 };
+        int pi = sg->point_goal_idx;
+        if (pi > GAME_OPT_POINT_MAX) pi = GAME_OPT_POINT_MAX;
+        sg->gs.score_limit = point_goals[pi];
+    }
+
     sg->game_active = true;
     sg->dealer_player = -1;
     sg->pass_substate = SV_PASS_IDLE;
@@ -152,6 +174,9 @@ void server_game_start(ServerGame *sg)
     sg->draft_initialized = false;
     sg->duel_target_player = -1;
     sg->duel_target_hand_index = -1;
+    sg->duel_timer = 0.0f;
+    sg->duel_ai_swap = false;
+    sg->duel_ai_give_idx = -1;
     memset(sg->prev_round_points, 0, sizeof(sg->prev_round_points));
     for (int i = 0; i < NUM_PLAYERS; i++)
         sg->selected_transmute_slot[i] = -1;
@@ -167,21 +192,25 @@ void server_game_tick(ServerGame *sg)
     case PHASE_DEALING:
 #ifdef DEBUG
         /* Debug: skip to round 2 so dealer phase triggers,
-         * give seat 0 all transmutations, and give all players 1 Mirror */
+         * give seat 0 all transmutations, and give all players 1 Duel */
         if (sg->gs.round_number == 1) {
             sg->gs.round_number = 2;
             sg->prev_round_points[0] = 10; /* seat 0 becomes dealer */
-            int mirror_id = -1;
+            int duel_id = -1;
             for (int t = 0; t < g_transmutation_def_count; t++) {
+                /* Skip transmutations we're not testing right now */
+                TransmuteEffect eff = g_transmutation_defs[t].effect;
+                if (eff == TEFFECT_RANDOM_TRICK_WINNER ||   /* Roulette */
+                    eff == TEFFECT_WOTT_REDUCE_SCORE_3 ||    /* Gatherer */
+                    eff == TEFFECT_WOTT_REDUCE_SCORE_1 ||    /* Pendulum */
+                    eff == TEFFECT_WOTT_SWAP_CARD)           /* Duel */
+                    continue;
                 transmute_inv_add(&sg->p2.players[0].transmute_inv,
                                   g_transmutation_defs[t].id);
-                if (g_transmutation_defs[t].effect == TEFFECT_MIRROR)
-                    mirror_id = g_transmutation_defs[t].id;
+                if (g_transmutation_defs[t].effect == TEFFECT_WOTT_SWAP_CARD)
+                    duel_id = g_transmutation_defs[t].id;
             }
-            if (mirror_id >= 0) {
-                for (int i = 1; i < NUM_PLAYERS; i++)
-                    transmute_inv_add(&sg->p2.players[i].transmute_inv, mirror_id);
-            }
+            (void)duel_id; /* Duel disabled from debug setup */
         }
 #endif
         /* Instant transition — no deal animation on server */
@@ -206,6 +235,7 @@ void server_game_tick(ServerGame *sg)
                          "%s lost the round and becomes the dealer!",
                          sv_player_name(sg->dealer_player));
             sg->pass_substate = SV_PASS_DEALER_DIR;
+            sg->pass_phase_timer = 0.0f;
         } else {
             /* Round 1: no dealer, skip to contract draft */
             printf("No dealer (round 1) — %s, %d cards\n",
@@ -283,6 +313,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             printf("Dealer %s picks direction: %s\n",
                    sv_player_name(seat), sv_dir_name(gs->pass_direction));
             sg->pass_substate = SV_PASS_DEALER_AMT;
+            sg->pass_phase_timer = 0.0f;
             sg->state_dirty = true;
         }
         return true;
@@ -302,6 +333,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             printf("Dealer %s picks amount: %d cards\n",
                    sv_player_name(seat), amt);
             sg->pass_substate = SV_PASS_DEALER_CONFIRM;
+            sg->pass_phase_timer = 0.0f;
             sg->state_dirty = true;
         }
         return true;
@@ -362,14 +394,31 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         }
         {
             Card card = cmd->card.card;
+            int hint_tid = cmd->card.card_index; /* transmutation_id hint, -1 = normal */
             int pc = gs->pass_card_count;
+            Phase2State *p2 = &sg->p2;
+            HandTransmuteState *hts = p2->enabled
+                ? &p2->players[seat].hand_transmutes : NULL;
 
-            /* Verify card is in player's hand */
+            /* Verify card is in player's hand (with transmutation disambiguation) */
             bool in_hand = false;
             for (int i = 0; i < gs->players[seat].hand.count; i++) {
-                if (card_equals(gs->players[seat].hand.cards[i], card)) {
+                if (!card_equals(gs->players[seat].hand.cards[i], card))
+                    continue;
+                int slot_tid = (hts && transmute_is_transmuted(hts, i))
+                    ? hts->slots[i].transmutation_id : -1;
+                if (slot_tid == hint_tid) {
                     in_hand = true;
                     break;
+                }
+            }
+            /* Fallback: accept if suit+rank match exists (no transmutation info) */
+            if (!in_hand) {
+                for (int i = 0; i < gs->players[seat].hand.count; i++) {
+                    if (card_equals(gs->players[seat].hand.cards[i], card)) {
+                        in_hand = true;
+                        break;
+                    }
                 }
             }
             if (!in_hand) {
@@ -377,12 +426,14 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                 REJECT("Card not in your hand");
             }
 
-            /* Count currently selected cards and check for duplicate */
+            /* Count currently selected cards and check for duplicate
+             * (match both card AND hint_tid to distinguish normal vs transmuted) */
             int selected_count = 0;
             int found = -1;
             for (int i = 0; i < MAX_PASS_CARD_COUNT; i++) {
                 if (i < pc && !card_is_none(gs->pass_selections[seat][i])) {
-                    if (card_equals(gs->pass_selections[seat][i], card)) {
+                    if (card_equals(gs->pass_selections[seat][i], card) &&
+                        gs->pass_selection_hints[seat][i] == hint_tid) {
                         found = i;
                     }
                     selected_count++;
@@ -393,8 +444,10 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                 /* Deselect: shift remaining down */
                 for (int i = found; i < selected_count - 1; i++) {
                     gs->pass_selections[seat][i] = gs->pass_selections[seat][i + 1];
+                    gs->pass_selection_hints[seat][i] = gs->pass_selection_hints[seat][i + 1];
                 }
                 gs->pass_selections[seat][selected_count - 1] = CARD_NONE;
+                gs->pass_selection_hints[seat][selected_count - 1] = -1;
                 selected_count--;
             } else {
                 if (selected_count >= pc) {
@@ -403,6 +456,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                     REJECT("Maximum cards already selected");
                 }
                 gs->pass_selections[seat][selected_count] = card;
+                gs->pass_selection_hints[seat][selected_count] = hint_tid;
                 selected_count++;
             }
 
@@ -589,12 +643,9 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             if (gs->phase == PHASE_PLAYING &&
                 p2->round.transmute_round.duel_pending_winner >= 0) {
                 int dw = p2->round.transmute_round.duel_pending_winner;
-                if (gs->players[dw].is_human) {
-                    sg->play_substate = SV_PLAY_DUEL_PICK_WAIT;
-                } else {
-                    sv_execute_duel_ai(sg, dw);
-                    sg->play_substate = SV_PLAY_WAIT_TURN;
-                }
+                sg->play_substate = SV_PLAY_DUEL_PICK_WAIT;
+                sg->duel_timer = gs->players[dw].is_human
+                    ? 0.0f : (SV_DUEL_TIMEOUT - sv_duel_ai_delay());
             } else {
                 sg->play_substate = SV_PLAY_WAIT_TURN;
             }
@@ -631,6 +682,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             p2->round.transmute_round.duel_revealed_card =
                 gs->players[target].hand.cards[hidx];
             sg->play_substate = SV_PLAY_DUEL_GIVE_WAIT;
+            sg->duel_timer = 0.0f;
             sg->state_dirty = true;
         }
         return true;
@@ -664,6 +716,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
             printf("  [Duel] %s swaps a card with %s\n",
                    sv_player_name(seat), sv_player_name(target));
 
+            p2->round.transmute_round.duel_was_swap = 1;
             p2->round.transmute_round.duel_pending_winner = -1;
             p2->round.transmute_round.duel_chosen_card_idx = -1;
             p2->round.transmute_round.duel_chosen_target = -1;
@@ -685,6 +738,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
          * Clear duel state and resume normal play. */
         printf("  [Duel] %s returns the card (no swap)\n",
                sv_player_name(seat));
+        p2->round.transmute_round.duel_was_swap = 0;
         p2->round.transmute_round.duel_pending_winner = -1;
         p2->round.transmute_round.duel_chosen_card_idx = -1;
         p2->round.transmute_round.duel_chosen_target = -1;
@@ -730,7 +784,16 @@ static void sv_do_pass_phase(ServerGame *sg)
             sg->pass_substate = SV_PASS_DEALER_AMT;
             sg->state_dirty = true;
         }
-        /* Human: wait for DEALER_DIR command */
+        /* Human: wait for DEALER_DIR command, with timeout fallback */
+        if (sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
+            gs->pass_direction = (PassDirection)(rand() % 3);
+            printf("Server timeout: auto-picked direction %s for dealer %s\n",
+                   sv_dir_name(gs->pass_direction),
+                   sv_player_name(sg->dealer_player));
+            sg->pass_substate = SV_PASS_DEALER_AMT;
+            sg->pass_phase_timer = 0.0f;
+            sg->state_dirty = true;
+        }
         break;
 
     case SV_PASS_DEALER_AMT:
@@ -747,15 +810,27 @@ static void sv_do_pass_phase(ServerGame *sg)
                    gs->pass_card_count);
             sg->pass_substate = SV_PASS_DEALER_CONFIRM;
             sg->state_dirty = true;
+        } else if (sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
+            static const int amounts[] = {2, 3, 4};
+            gs->pass_card_count = amounts[rand() % 3];
+            printf("Server timeout: auto-picked %d cards for dealer %s\n",
+                   gs->pass_card_count, sv_player_name(sg->dealer_player));
+            sg->pass_substate = SV_PASS_DEALER_CONFIRM;
+            sg->pass_phase_timer = 0.0f;
+            sg->state_dirty = true;
         }
         break;
 
     case SV_PASS_DEALER_CONFIRM:
-        if (!gs->players[sg->dealer_player].is_human) {
+        if (!gs->players[sg->dealer_player].is_human ||
+            sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
+            if (gs->players[sg->dealer_player].is_human)
+                printf("Server timeout: auto-confirmed dealer %s\n",
+                       sv_player_name(sg->dealer_player));
             /* Override direction when no cards are being passed */
             if (gs->pass_card_count == 0)
                 gs->pass_direction = PASS_NONE;
-            /* Announce AI dealer decision */
+            /* Announce dealer decision */
             if (gs->pass_card_count == 0) {
                 sv_push_chat(sg, SV_CLR_YELLOW, -1, NULL,
                              "No passing this round!");
@@ -843,9 +918,26 @@ static void sv_do_pass_phase(ServerGame *sg)
                     int pc = gs->pass_card_count;
                     Card pass_cards[MAX_PASS_CARD_COUNT];
                     comp_ai_select_pass(&sg->comp_ai[p], gs, pass_cards, pc);
+                    /* Set transmutation hints before select_pass (needed for duplicate check) */
+                    if (sg->p2.enabled) {
+                        HandTransmuteState *hts = &sg->p2.players[p].hand_transmutes;
+                        bool claimed[MAX_HAND_SIZE] = {false};
+                        for (int j = 0; j < pc; j++) {
+                            gs->pass_selection_hints[p][j] = -1;
+                            for (int k = 0; k < gs->players[p].hand.count; k++) {
+                                if (claimed[k]) continue;
+                                if (card_equals(gs->players[p].hand.cards[k], pass_cards[j])) {
+                                    claimed[k] = true;
+                                    if (transmute_is_transmuted(hts, k))
+                                        gs->pass_selection_hints[p][j] = hts->slots[k].transmutation_id;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     game_state_select_pass(gs, p, pass_cards, pc);
                 } else {
-                    sv_ai_select_pass(gs, p);
+                    sv_ai_select_pass(sg, p);
                 }
             }
         }
@@ -854,7 +946,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         if (sg->pass_phase_timer > SV_PASS_TIMEOUT) {
             for (int p = 0; p < NUM_PLAYERS; p++) {
                 if (gs->players[p].is_human && !gs->pass_ready[p]) {
-                    sv_ai_select_pass(gs, p);
+                    sv_ai_select_pass(sg, p);
                     printf("Server timeout: auto-selected pass cards for seat %d\n", p);
                 }
             }
@@ -914,7 +1006,9 @@ static void sv_do_pass_phase(ServerGame *sg)
                     saved[pl][si].is_passed = false;
                     for (int j = 0; j < gs->pass_card_count; j++) {
                         if (card_equals(hand->cards[k],
-                                        gs->pass_selections[pl][j])) {
+                                        gs->pass_selections[pl][j]) &&
+                            hts->slots[k].transmutation_id ==
+                                gs->pass_selection_hints[pl][j]) {
                             saved[pl][si].is_passed = true;
                             break;
                         }
@@ -1035,9 +1129,14 @@ static void sv_do_play_phase(ServerGame *sg)
         int current = game_state_current_player(gs);
         if (current < 0) break;
 
-        /* Record hearts_broken state before this trick for contract tracking */
+        /* Record hearts_broken state before this trick for contract tracking.
+         * Also clear last_trick_winner so stale values from the previous
+         * trick don't bleed into state updates during this trick's plays
+         * (the client defers state consumption during trick animations and
+         * would otherwise pick up the old winner for the new trick). */
         if (gs->current_trick.num_played == 0) {
             sg->hearts_broken_at_trick_start = gs->hearts_broken;
+            sg->last_trick_winner = -1;
         }
 
         /* If current player is human, wait for PLAY_CARD command */
@@ -1103,11 +1202,115 @@ static void sv_do_play_phase(ServerGame *sg)
         break;
 
     case SV_PLAY_DUEL_PICK_WAIT:
-        /* Waiting for human DUEL_PICK command — nothing to do */
+        sg->duel_timer += FIXED_DT;
+        if (sg->duel_timer >= SV_DUEL_TIMEOUT) {
+            /* Auto-pick a random opponent (same logic as sv_execute_duel_ai target selection) */
+            GameState *gs = &sg->gs;
+            Phase2State *p2 = &sg->p2;
+            int dw = p2->round.transmute_round.duel_pending_winner;
+            int target = -1;
+            int best_count = 0;
+            int candidates[NUM_PLAYERS];
+            int num_candidates = 0;
+            for (int p = 0; p < NUM_PLAYERS; p++) {
+                if (p == dw) continue;
+                int cnt = gs->players[p].hand.count;
+                if (cnt <= 0) continue;
+                if (cnt > best_count) {
+                    best_count = cnt;
+                    num_candidates = 0;
+                }
+                if (cnt == best_count)
+                    candidates[num_candidates++] = p;
+            }
+            if (num_candidates > 0)
+                target = candidates[rand() % num_candidates];
+
+            /* Competitive AI: use strategic pick if available */
+            bool is_bot = !gs->players[dw].is_human;
+            if (is_bot && sg->ai_difficulty == 1) {
+                int tgt = -1, tidx = -1, gidx = -1;
+                comp_ai_duel_pick(&sg->comp_ai[dw], gs, p2, dw,
+                                  &tgt, &tidx, &gidx);
+                if (tgt >= 0 && tidx >= 0) {
+                    target = tgt;
+                    /* Pre-store give decision for GIVE_WAIT */
+                    sg->duel_ai_swap = (gidx >= 0);
+                    sg->duel_ai_give_idx = gidx;
+                }
+            } else if (is_bot) {
+                /* Basic AI: always swap a random card */
+                int own_count = gs->players[dw].hand.count;
+                sg->duel_ai_swap = (own_count > 0);
+                sg->duel_ai_give_idx = (own_count > 0)
+                    ? (rand() % own_count) : -1;
+            }
+
+            if (target < 0 || gs->players[target].hand.count <= 0) {
+                /* No valid target — cancel duel */
+                printf("Server timeout: duel pick — no valid target, cancelling\n");
+                p2->round.transmute_round.duel_was_swap = 0;
+                p2->round.transmute_round.duel_pending_winner = -1;
+                p2->round.transmute_round.duel_revealed_card = (Card){-1, -1};
+                sg->duel_target_player = -1;
+                sg->duel_target_hand_index = -1;
+                sg->duel_ai_swap = false;
+                sg->duel_ai_give_idx = -1;
+                sg->play_substate = SV_PLAY_WAIT_TURN;
+            } else {
+                /* Pick card from target */
+                int hidx = rand() % gs->players[target].hand.count;
+                sg->duel_target_player = target;
+                sg->duel_target_hand_index = hidx;
+                p2->round.transmute_round.duel_chosen_card_idx = hidx;
+                p2->round.transmute_round.duel_chosen_target = target;
+                p2->round.transmute_round.duel_revealed_card =
+                    gs->players[target].hand.cards[hidx];
+                printf("Server timeout: duel pick — auto-picked %s\n",
+                       sv_player_name(target));
+                sg->play_substate = SV_PLAY_DUEL_GIVE_WAIT;
+                /* Bots: pre-offset timer for AI delay; humans: start at 0.
+                 * GIVE phase gets +2s extra thinking time. */
+                sg->duel_timer = is_bot
+                    ? (SV_DUEL_TIMEOUT - sv_duel_ai_delay() - 2.0f) : 0.0f;
+            }
+            sg->state_dirty = true;
+        }
         break;
 
     case SV_PLAY_DUEL_GIVE_WAIT:
-        /* Waiting for human DUEL_GIVE command — nothing to do */
+        sg->duel_timer += FIXED_DT;
+        if (sg->duel_timer >= SV_DUEL_TIMEOUT) {
+            int dw = sg->p2.round.transmute_round.duel_pending_winner;
+            bool is_bot = (dw >= 0 && !sg->gs.players[dw].is_human);
+            /* Bot with swap decision: execute the exchange */
+            if (is_bot && sg->duel_ai_swap &&
+                sg->duel_ai_give_idx >= 0 &&
+                sg->duel_ai_give_idx < sg->gs.players[dw].hand.count &&
+                sg->duel_target_player >= 0 &&
+                sg->duel_target_hand_index >= 0 &&
+                sg->duel_target_hand_index < sg->gs.players[sg->duel_target_player].hand.count) {
+                transmute_swap_between_players(
+                    &sg->gs, &sg->p2, dw, sg->duel_ai_give_idx,
+                    sg->duel_target_player, sg->duel_target_hand_index);
+                printf("  [Duel] %s swaps a card with %s\n",
+                       sv_player_name(dw), sv_player_name(sg->duel_target_player));
+                sg->p2.round.transmute_round.duel_was_swap = 1;
+            } else {
+                printf("Server timeout: duel give expired, returning card\n");
+                sg->p2.round.transmute_round.duel_was_swap = 0;
+            }
+            sg->p2.round.transmute_round.duel_pending_winner = -1;
+            sg->p2.round.transmute_round.duel_chosen_card_idx = -1;
+            sg->p2.round.transmute_round.duel_chosen_target = -1;
+            sg->p2.round.transmute_round.duel_revealed_card = (Card){-1, -1};
+            sg->duel_target_player = -1;
+            sg->duel_target_hand_index = -1;
+            sg->duel_ai_swap = false;
+            sg->duel_ai_give_idx = -1;
+            sg->play_substate = SV_PLAY_WAIT_TURN;
+            sg->state_dirty = true;
+        }
         break;
 
     default:
@@ -1158,6 +1361,7 @@ static void sv_log_play(ServerGame *sg, int player_id)
         sv_push_chat(sg, SV_CLR_PURPLE, -1, NULL,
                      "[Fog] A hidden card was played");
     }
+
 }
 
 /* ================================================================
@@ -1275,9 +1479,13 @@ static void sv_resolve_trick(ServerGame *sg)
             printf("  -> %s takes trick (%d pts)\n",
                    sv_player_name(winner), points);
 
-            sv_push_chat(sg, SV_CLR_GRAY, -1, NULL,
-                         "%s took trick %d",
-                         sv_player_name(winner), gs->tricks_played);
+            {
+                char hl_buf[32];
+                snprintf(hl_buf, sizeof(hl_buf), "trick %d", gs->tricks_played);
+                sv_push_chat(sg, SV_CLR_GRAY, -1, hl_buf,
+                             "%s took trick %d",
+                             sv_player_name(winner), gs->tricks_played);
+            }
 
             /* Stat tracking: tricks won, hearts collected, QoS caught */
             sg->stat_tricks_won[winner]++;
@@ -1315,6 +1523,9 @@ static void sv_resolve_trick(ServerGame *sg)
                 }
             }
 
+            /* Consume binding flags (before activation so new flags survive) */
+            memset(p2->binding_auto_win, 0, sizeof(p2->binding_auto_win));
+
             contract_on_trick_complete(p2, gs, &saved_trick, winner,
                                        gs->tricks_played - 1,
                                        &saved_tti,
@@ -1329,13 +1540,6 @@ static void sv_resolve_trick(ServerGame *sg)
                              "The Martyr: %s's points x%d at the end of the round!",
                              sv_player_name(winner), mult);
             }
-
-            /* Consume binding flags */
-            for (int bi = 0; bi < NUM_PLAYERS; bi++) {
-                if (p2->binding_auto_win[bi]) {
-                    p2->binding_auto_win[bi] = 0;
-                }
-            }
         }
     } else {
         /* Vanilla Hearts — no Phase 2 */
@@ -1348,9 +1552,13 @@ static void sv_resolve_trick(ServerGame *sg)
             printf("  -> %s takes trick (%d pts)\n",
                    sv_player_name(winner), points);
 
-            sv_push_chat(sg, SV_CLR_GRAY, -1, NULL,
-                         "%s took trick %d",
-                         sv_player_name(winner), gs->tricks_played);
+            {
+                char hl_buf[32];
+                snprintf(hl_buf, sizeof(hl_buf), "trick %d", gs->tricks_played);
+                sv_push_chat(sg, SV_CLR_GRAY, -1, hl_buf,
+                             "%s took trick %d",
+                             sv_player_name(winner), gs->tricks_played);
+            }
 
             /* Stat tracking: tricks won, hearts collected, QoS caught */
             sg->stat_tricks_won[winner]++;
@@ -1448,28 +1656,16 @@ static void sv_check_post_trick_effects(ServerGame *sg, int winner)
         p2->round.transmute_round.rogue_pending_winner = -1;
     }
 
-    /* Check duel */
+    /* Check duel — route ALL duels (human + bot) through staged substates */
     if (p2->enabled &&
         p2->round.transmute_round.duel_pending_winner >= 0) {
         int dw = p2->round.transmute_round.duel_pending_winner;
-        if (gs->players[dw].is_human) {
-            sg->play_substate = SV_PLAY_DUEL_PICK_WAIT;
-            return;
-        }
-        /* AI duel */
-        if (sg->ai_difficulty == 1) {
-            int tgt = -1, tidx = -1, gidx = -1;
-            comp_ai_duel_pick(&sg->comp_ai[dw], gs, p2, dw,
-                              &tgt, &tidx, &gidx);
-            if (tgt >= 0 && tidx >= 0 && gidx >= 0) {
-                transmute_swap_between_players(gs, p2, dw, gidx, tgt, tidx);
-                printf("  [Duel-Comp] %s swaps with %s\n",
-                       sg->player_names[dw], sg->player_names[tgt]);
-            }
-        } else {
-            sv_execute_duel_ai(sg, dw);
-        }
-        p2->round.transmute_round.duel_pending_winner = -1;
+        sg->play_substate = SV_PLAY_DUEL_PICK_WAIT;
+        /* Bots: pre-offset timer so SV_DUEL_TIMEOUT fires after 1-2s delay */
+        sg->duel_timer = gs->players[dw].is_human
+            ? 0.0f : (SV_DUEL_TIMEOUT - sv_duel_ai_delay());
+        sg->state_dirty = true;
+        return;
     }
 
     /* No pending effects — continue playing */
@@ -1527,41 +1723,8 @@ static void sv_execute_rogue_ai(ServerGame *sg, int winner)
            sv_player_name(winner), sv_player_name(target), count, suit);
 }
 
-static void sv_execute_duel_ai(ServerGame *sg, int winner)
-{
-    GameState *gs = &sg->gs;
-    Phase2State *p2 = &sg->p2;
-
-    int out_p = -1, out_idx = -1;
-    int best_count = 0;
-    int candidates[NUM_PLAYERS];
-    int num_candidates = 0;
-
-    for (int p = 0; p < NUM_PLAYERS; p++) {
-        if (p == winner) continue;
-        int cnt = gs->players[p].hand.count;
-        if (cnt <= 0) continue;
-        if (cnt > best_count) {
-            best_count = cnt;
-            num_candidates = 0;
-        }
-        if (cnt == best_count) {
-            candidates[num_candidates++] = p;
-        }
-    }
-    if (num_candidates > 0) {
-        out_p = candidates[rand() % num_candidates];
-        out_idx = rand() % gs->players[out_p].hand.count;
-        int own_count = gs->players[winner].hand.count;
-        if (own_count > 0) {
-            int own_idx = rand() % own_count;
-            transmute_swap_between_players(gs, p2, winner, own_idx,
-                                           out_p, out_idx);
-            printf("  [Duel] %s swaps a card with %s\n",
-                   sv_player_name(winner), sv_player_name(out_p));
-        }
-    }
-}
+/* sv_execute_duel_ai removed — bot duels now go through staged
+ * PICK_WAIT / GIVE_WAIT substates with AI delay. */
 
 /* ================================================================
  * Scoring — Evaluate contracts, apply round-end effects, advance
@@ -1687,11 +1850,16 @@ static void sv_do_scoring(ServerGame *sg)
  * ================================================================ */
 
 /* AI pass: select highest-point cards from hand */
-static void sv_ai_select_pass(GameState *gs, int player_id)
+static void sv_ai_select_pass(ServerGame *sg, int player_id)
 {
+    GameState *gs = &sg->gs;
+    Phase2State *p2 = &sg->p2;
     Hand *hand = &gs->players[player_id].hand;
+    HandTransmuteState *hts = p2->enabled
+        ? &p2->players[player_id].hand_transmutes : NULL;
     int pc = gs->pass_card_count;
     Card pass_cards[MAX_PASS_CARD_COUNT];
+    int hints[MAX_PASS_CARD_COUNT];
     int pass_count = 0;
     bool used[MAX_HAND_SIZE] = {false};
 
@@ -1710,12 +1878,17 @@ static void sv_ai_select_pass(GameState *gs, int player_id)
             }
         }
         if (best >= 0) {
-            pass_cards[pass_count++] = hand->cards[best];
+            pass_cards[pass_count] = hand->cards[best];
+            hints[pass_count] = (hts && transmute_is_transmuted(hts, best))
+                ? hts->slots[best].transmutation_id : -1;
+            pass_count++;
             used[best] = true;
         }
     }
 
     if (pass_count == pc) {
+        for (int i = 0; i < pc; i++)
+            gs->pass_selection_hints[player_id][i] = hints[i];
         game_state_select_pass(gs, player_id, pass_cards, pc);
     }
 }
@@ -1836,13 +2009,19 @@ static bool sv_play_card_with_transmute(ServerGame *sg, int player_id, Card card
     Hand *hand = &gs->players[player_id].hand;
     HandTransmuteState *hts = &p2->players[player_id].hand_transmutes;
 
-    /* Use client hint index if valid, otherwise fall back to first match.
-     * This disambiguates duplicate suit/rank (transmuted vs regular). */
+    /* hint_idx carries transmutation_id (-1 = non-transmuted).
+     * Match by suit+rank+transmutation state for order-independent disambiguation. */
+    int hint_tid = hint_idx;  /* repurposed: transmutation_id, not position */
     int hand_idx = -1;
-    if (hint_idx >= 0 && hint_idx < hand->count &&
-        card_equals(hand->cards[hint_idx], card)) {
-        hand_idx = hint_idx;
-    } else {
+    for (int i = 0; i < hand->count; i++) {
+        if (card_equals(hand->cards[i], card) &&
+            hts->slots[i].transmutation_id == hint_tid) {
+            hand_idx = i;
+            break;
+        }
+    }
+    /* Fallback: if exact tid match fails, take first suit+rank match */
+    if (hand_idx < 0) {
         for (int i = 0; i < hand->count; i++) {
             if (card_equals(hand->cards[i], card)) {
                 hand_idx = i;
@@ -1850,6 +2029,7 @@ static bool sv_play_card_with_transmute(ServerGame *sg, int player_id, Card card
             }
         }
     }
+
 
     if (hand_idx < 0) return false;  /* Card not in hand */
 
@@ -1883,6 +2063,18 @@ static bool sv_play_card_with_transmute(ServerGame *sg, int player_id, Card card
         if (!transmute_is_valid_play(&gs->current_trick, hand, hts,
                                      hand_idx, card, hb, first_trick)) {
             return false;
+        }
+        /* Only one Duel per trick */
+        const TransmutationDef *td_play = (tid >= 0) ? phase2_get_transmutation(tid) : NULL;
+        if (td_play && td_play->effect == TEFFECT_WOTT_SWAP_CARD) {
+            for (int s = 0; s < gs->current_trick.num_played; s++) {
+                int tid_s = sg->current_tti.transmutation_ids[s];
+                if (tid_s >= 0) {
+                    const TransmutationDef *td_s = phase2_get_transmutation(tid_s);
+                    if (td_s && td_s->effect == TEFFECT_WOTT_SWAP_CARD)
+                        return false;
+                }
+            }
         }
     } else {
         bool was_broken = gs->hearts_broken;

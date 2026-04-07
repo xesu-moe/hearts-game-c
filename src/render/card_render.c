@@ -26,34 +26,6 @@ static Texture2D s_spritesheet;
 static Texture2D s_card_back;
 static bool      s_textures_loaded = false;
 
-/* Custom font for procedural cards */
-static Font s_custom_font = {0};
-static bool s_custom_font_set = false;
-
-void card_render_set_font(Font font)
-{
-    s_custom_font = font;
-    s_custom_font_set = true;
-}
-
-static void cr_draw_text(const char *text, int x, int y, int font_size, Color color)
-{
-    if (s_custom_font_set) {
-        DrawTextEx(s_custom_font, text, (Vector2){(float)x, (float)y},
-                   (float)font_size, 1.0f, color);
-    } else {
-        DrawText(text, x, y, font_size, color);
-    }
-}
-
-static int cr_measure_text(const char *text, int font_size)
-{
-    if (s_custom_font_set) {
-        Vector2 size = MeasureTextEx(s_custom_font, text, (float)font_size, 1.0f);
-        return (int)size.x;
-    }
-    return MeasureText(text, font_size);
-}
 
 /* ---- Transmutation sprite state ---- */
 
@@ -211,24 +183,24 @@ static void card_render_face_procedural(Card card, Vector2 pos, float scale,
     int font_size_rank = (int)(20.0f * scale);
     int font_size_suit = (int)(28.0f * scale);
 
-    cr_draw_text(rank_str,
+    DrawText(rank_str,
              (int)(6.0f * scale),
              (int)(6.0f * scale),
              font_size_rank, suit_col);
 
-    cr_draw_text(suit_str,
+    DrawText(suit_str,
              (int)(6.0f * scale),
              (int)(24.0f * scale),
              font_size_rank, suit_col);
 
-    int suit_w = cr_measure_text(suit_str, font_size_suit);
-    cr_draw_text(suit_str,
+    int suit_w = MeasureText(suit_str, font_size_suit);
+    DrawText(suit_str,
              (int)((w - (float)suit_w) * 0.5f),
              (int)((h - (float)font_size_suit) * 0.5f),
              font_size_suit, suit_col);
 
-    int rank_w = cr_measure_text(rank_str, font_size_rank);
-    cr_draw_text(rank_str,
+    int rank_w = MeasureText(rank_str, font_size_rank);
+    DrawText(rank_str,
              (int)(w - (float)rank_w - 6.0f * scale),
              (int)(h - 24.0f * scale),
              font_size_rank, suit_col);

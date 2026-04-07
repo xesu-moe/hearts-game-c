@@ -572,16 +572,20 @@ static void sv_handle_request_start_game(int conn_id, const NetMsgStartGame *sta
         return;
     }
 
-    /* Store AI difficulty before starting */
-    room->ai_difficulty = start_msg->ai_difficulty;
+    /* Store game options before starting (clamp to valid ranges) */
+    room->ai_difficulty  = start_msg->ai_difficulty > 1 ? 0 : start_msg->ai_difficulty;
+    room->timer_option   = start_msg->timer_option > GAME_OPT_TIMER_MAX ? 0 : start_msg->timer_option;
+    room->point_goal_idx = start_msg->point_goal_idx > GAME_OPT_POINT_MAX ? GAME_OPT_POINT_MAX : start_msg->point_goal_idx;
+    room->gamemode       = start_msg->gamemode > GAME_OPT_MODE_MAX ? 0 : start_msg->gamemode;
 
     if (room_start(room_idx) < 0) {
         printf("[net] REQUEST_START_GAME: room_start failed (need 4 players)\n");
         return;
     }
 
-    printf("[net] Room %s: game started by creator (conn %d, ai_diff=%d)\n",
-           room->code, conn_id, start_msg->ai_difficulty);
+    printf("[net] Room %s: game started by creator (conn %d, ai_diff=%d, timer=%d, points=%d, mode=%d)\n",
+           room->code, conn_id, start_msg->ai_difficulty,
+           start_msg->timer_option, start_msg->point_goal_idx, start_msg->gamemode);
     /* State update will be broadcast in the next sv_broadcast_state() cycle */
 }
 
@@ -716,6 +720,14 @@ static void sv_broadcast_state(void)
                 s /* seat */
             );
 
+            /* Set configured turn time limit from room options */
+            {
+                static const int timer_bonus[] = { 0, 5, 10, 15, 20 };
+                int ti = room->game.timer_option;
+                if (ti > GAME_OPT_TIMER_MAX) ti = 0;
+                msg.state_update.turn_time_limit = 30.0f + (float)timer_bonus[ti];
+            }
+
             /* Fill trick transmute info from server game state */
             const TrickTransmuteInfo *tti = &room->game.current_tti;
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
@@ -747,6 +759,34 @@ static void sv_broadcast_state(void)
                 }
             }
         }
+
+        /* Send game-over message with ELO data when room is finished */
+        if (room->status == ROOM_FINISHED) {
+            NetMsg go_msg;
+            memset(&go_msg, 0, sizeof(go_msg));
+            go_msg.type = NET_MSG_GAME_OVER;
+            for (int i = 0; i < NET_MAX_PLAYERS; i++)
+                go_msg.game_over.final_scores[i] =
+                    (int16_t)room->game.gs.players[i].total_score;
+            int winners[NUM_PLAYERS];
+            int wc = game_state_get_winners(&room->game.gs, winners);
+            go_msg.game_over.winner_count = (uint8_t)wc;
+            for (int w = 0; w < wc && w < NET_MAX_PLAYERS; w++)
+                go_msg.game_over.winners[w] = (uint8_t)winners[w];
+            go_msg.game_over.has_elo = room->elo_received;
+            if (room->elo_received) {
+                for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+                    go_msg.game_over.prev_elo[i] = room->elo_prev[i];
+                    go_msg.game_over.new_elo[i]  = room->elo_new[i];
+                }
+            }
+            for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+                if (room->slots[s].status != SLOT_CONNECTED) continue;
+                int cid = room->slots[s].conn_id;
+                if (cid >= 0)
+                    net_socket_send_msg(&g_net, cid, &go_msg);
+            }
+        }
     }
 }
 
@@ -775,6 +815,12 @@ static void sv_cleanup_finished_rooms(void)
     for (int r = 0; r < MAX_ROOMS; r++) {
         Room *room = room_get(r);
         if (!room || room->status != ROOM_FINISHED) continue;
+
+        /* Keep room alive until ELO response arrives (or timeout) */
+        if (!room->elo_received) {
+            room->elo_wait_timer += (1.0f / 60.0f);
+            if (room->elo_wait_timer < 10.0f) continue; /* wait up to 10s */
+        }
 
         /* Free stale ConnSlotInfo for all connections pointing at this room */
         for (int i = 0; i < g_net.max_conns; i++) {

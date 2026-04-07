@@ -44,14 +44,10 @@ void phase2_defs_init(void)
                              g_transmutation_defs, MAX_TRANSMUTATION_DEFS,
                              &g_transmutation_def_count);
 
-    json_load_characters("assets/defs/characters.json",
-                         g_character_defs, MAX_CHARACTER_DEFS,
-                         &g_character_def_count);
-
     fprintf(stderr, "[INFO] PHASE2: Loaded %d contracts, "
-                    "%d transmutations, %d characters\n",
+                    "%d transmutations\n",
             g_contract_def_count,
-            g_transmutation_def_count, g_character_def_count);
+            g_transmutation_def_count);
 }
 
 /* --- Lookup Functions --- */

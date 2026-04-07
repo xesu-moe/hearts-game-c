@@ -105,6 +105,7 @@ typedef enum NetMsgType {
     NET_MSG_STATS_RESPONSE   = 55,  /* lobby -> client: full stats payload */
     NET_MSG_LEADERBOARD_REQUEST  = 56,  /* client -> lobby: request top 100 */
     NET_MSG_LEADERBOARD_RESPONSE = 57,  /* lobby -> client: top 100 + rank */
+    NET_MSG_LOGIN_BY_KEY         = 58,  /* client -> lobby: login with public key */
 
     /* Friend system messages (70-82) */
     NET_MSG_FRIEND_SEARCH          = 70,
@@ -337,7 +338,12 @@ typedef struct NetMsgLoginAck {
     int32_t  elo_rating;
     uint32_t games_played;
     uint32_t games_won;
+    char     username[NET_MAX_NAME_LEN]; /* returned by server on key-based login */
 } NetMsgLoginAck;
+
+typedef struct NetMsgLoginByKey {
+    uint8_t public_key[NET_ED25519_PK_LEN];
+} NetMsgLoginByKey;
 
 typedef struct NetMsgCreateRoom {
     uint8_t auth_token[NET_AUTH_TOKEN_LEN];
@@ -777,6 +783,7 @@ typedef struct NetMsg {
         NetMsgRegister        reg;
         NetMsgLogin           login;
         NetMsgLoginAck        login_ack;
+        NetMsgLoginByKey      login_by_key;
         NetMsgLoginChallenge  login_challenge;
         NetMsgLoginResponse   login_response;
         NetMsgCreateRoom      create_room;
