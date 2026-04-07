@@ -1,7 +1,24 @@
 *.o
 *.d
-*.md
 hollow-hearts
 hollow-hearts.exe
 build/
 vendor/raylib/
+
+# Binaries
+hh-server
+hh-lobby
+
+# Cache / IDE
+.cache/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Settings (user-local)
+settings.json
+
+# Compile commands (generated)
+compile_commands.json
