@@ -175,6 +175,7 @@ void state_recv_apply(GameState *gs, Phase2State *p2,
         gs->players[local].round_points = view->round_points[s];
         gs->players[local].total_score  = view->total_scores[s];
     }
+    gs->score_limit = view->score_limit;
 
     /* ---- 4. Current trick (remapped player IDs) ---- */
     /* Skip during trick animations — the saved_trick snapshot is

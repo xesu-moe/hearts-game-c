@@ -1274,6 +1274,8 @@ void render_init(RenderState *rs)
         snprintf(rs->player_names[i], sizeof(rs->player_names[i]), "%s",
                  s_default_names[i]);
 
+    rs->local_seat = -1;
+
     /* Help menu */
     help_menu_load(&rs->help_menu, "assets/defs/help-menu.json", "hollow_hearts");
 }
@@ -1353,12 +1355,22 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
     rs->pass_card_limit = gs->pass_card_count;
 
-    /* Sync player names from online UI (usernames replace cardinal dirs) */
+    /* Sync player names from online UI (usernames replace cardinal dirs).
+     * online_ui->player_names is in absolute server seat order, but
+     * rs->player_names is in local rotated render space (player 0 = local
+     * viewer). Remap with local = (server - my_seat + N) % N so labels
+     * align with the gameplay state, which state_recv.c has already
+     * rotated. For non-host players this is what makes the score table
+     * and on-board labels show the correct username per seat. */
     if (rs->online_ui) {
+        int seat = (rs->local_seat >= 0 && rs->local_seat < NUM_PLAYERS)
+                       ? rs->local_seat
+                       : 0;
         for (int i = 0; i < NUM_PLAYERS; i++) {
             if (rs->online_ui->player_names[i][0] != '\0') {
-                snprintf(rs->player_names[i],
-                         sizeof(rs->player_names[i]), "%s",
+                int local = (i - seat + NUM_PLAYERS) % NUM_PLAYERS;
+                snprintf(rs->player_names[local],
+                         sizeof(rs->player_names[local]), "%s",
                          rs->online_ui->player_names[i]);
             }
         }

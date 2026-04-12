@@ -130,11 +130,14 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
             if (cmd.type == INPUT_CMD_QUIT) {
                 *quit_requested = true;
             }
-            friend_panel_set_can_invite(&oui->friend_panel,
-                oui->subphase == ONLINE_SUB_CONNECTED_WAITING);
-            if (oui->subphase == ONLINE_SUB_CONNECTED_WAITING) {
-                memcpy(oui->friend_panel.current_room_code,
-                       oui->created_room_code[0] ? oui->created_room_code : oui->assigned_room_code, 8);
+            {
+                bool in_room = (oui->subphase == ONLINE_SUB_CREATE_WAITING ||
+                                oui->subphase == ONLINE_SUB_CONNECTED_WAITING);
+                friend_panel_set_can_invite(&oui->friend_panel, in_room);
+                if (in_room) {
+                    memcpy(oui->friend_panel.current_room_code,
+                           oui->created_room_code[0] ? oui->created_room_code : oui->assigned_room_code, 8);
+                }
             }
             break;
 

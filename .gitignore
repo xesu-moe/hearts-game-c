@@ -22,3 +22,4 @@ settings.json
 
 # Compile commands (generated)
 compile_commands.json
+run.sh

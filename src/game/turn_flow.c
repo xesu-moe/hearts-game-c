@@ -291,6 +291,7 @@ static void rogue_launch_flights(TurnFlow *flow, RenderState *rs,
 static bool try_start_rogue(TurnFlow *flow, GameState *gs, RenderState *rs,
                             Phase2State *p2, GameSettings *settings)
 {
+    (void)settings;
     if (!p2->enabled || gs->phase != PHASE_PLAYING ||
         p2->round.transmute_round.rogue_pending_winner < 0)
         return false;
@@ -321,12 +322,10 @@ static bool try_start_rogue(TurnFlow *flow, GameState *gs, RenderState *rs,
         render_chat_log_push(rs, "Rogue: Choose an opponent to reveal cards from!");
         rs->sync_needed = true;
     } else {
-        /* Non-human winner: server handles AI rogue.
-         * Skip to between-tricks on the client side. */
-        flow->rogue_winner = -1;
-        flow->step = FLOW_BETWEEN_TRICKS;
-        flow->timer = FLOW_BETWEEN_TRICKS_TIME *
-                      settings_anim_multiplier(settings->anim_speed);
+        /* Non-winner (other human or AI): passively watch the reveal.
+         * Server will broadcast rogue_revealed_count when the picker
+         * commits a suit; FLOW_ROGUE_WAITING consumes it. */
+        flow->step = FLOW_ROGUE_WAITING;
     }
     return true;
 }
@@ -673,6 +672,8 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
         if (rcount >= 0) {
             float anim_m = settings_anim_multiplier(settings->anim_speed);
             int rp = flow->rogue_reveal_player;
+            if (rp < 0)
+                rp = p2->round.transmute_round.rogue_chosen_target;
             flow->rogue_revealed_count = rcount;
             p2->round.transmute_round.rogue_revealed_count = -1;
 

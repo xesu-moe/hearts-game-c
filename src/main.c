@@ -1326,6 +1326,7 @@ int main(int argc, char **argv)
             }
         }
 
+        rs.local_seat = client_net_seat();
         render_update(&gs, &rs, clk.raw_dt);
 
         /* SFX: score tick */

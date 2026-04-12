@@ -676,6 +676,7 @@ typedef struct NetPlayerView {
     /* Scores */
     int16_t round_points[NET_MAX_PLAYERS];
     int16_t total_scores[NET_MAX_PLAYERS];
+    int16_t score_limit;  /* configured game-over score (0 = use default) */
 
     /* Current trick */
     NetTrickView current_trick;

@@ -159,12 +159,12 @@ $(DIST_OBJ_DIR)/%.o: %.c
 .PHONY: dist-linux
 dist-linux: embed $(RAYLIB_A_LINUX)
 	rm -rf $(DIST_OBJ_DIR)
-	$(MAKE) hollow-hearts-dist
+	$(MAKE) linux-hearts-dist
 
-hollow-hearts-dist: $(DIST_OBJ) $(DIST_EMBED_O)
-	$(CC) $^ -o hollow-hearts -s $(RAYLIB_A_LINUX) -lm -lGL -lpthread -ldl -lrt -lX11 \
+linux-hearts-dist: $(DIST_OBJ) $(DIST_EMBED_O)
+	$(CC) $^ -o linux-hearts -s $(RAYLIB_A_LINUX) -lm -lGL -lpthread -ldl -lrt -lX11 \
 		$(shell pkg-config wayland-client wayland-cursor wayland-egl xkbcommon --libs)
-	@echo "==> Built: hollow-hearts (Linux distribution, $(shell du -h hollow-hearts | cut -f1))"
+	@echo "==> Built: linux-hearts (Linux distribution, $(shell du -h linux-hearts | cut -f1))"
 
 # ---- Windows distribution binary ----
 .PHONY: dist-windows
@@ -176,4 +176,4 @@ hollow-hearts-win: $(DIST_OBJ) $(DIST_EMBED_O)
 	$(CC) $^ -o hollow-hearts.exe -s -static -mwindows $(RAYLIB_A_WIN) -lopengl32 -lgdi32 -lwinmm -lws2_32 -lbcrypt -lshell32 -lm
 	@echo "==> Built: hollow-hearts.exe (Windows distribution, $(shell du -h hollow-hearts.exe | cut -f1))"
 
-.PHONY: all server lobby debug debug-server debug-all clean clean-dist embed dist-linux dist-windows
+.PHONY: all server lobby debug debug-server debug-all clean clean-dist embed dist-linux dist-windows linux-hearts-dist hollow-hearts-win

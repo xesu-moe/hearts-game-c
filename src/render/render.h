@@ -478,6 +478,12 @@ typedef struct RenderState {
     /* Player display names (usernames or default names) */
     char player_names[NUM_PLAYERS][32];
 
+    /* Server seat assigned to this client (0..NUM_PLAYERS-1), or -1 if
+     * unknown. Set each frame by main.c from client_net_seat(). Used to
+     * remap absolute-order data (e.g. online_ui->player_names) into the
+     * local rotated render space where player 0 is always the viewer. */
+    int local_seat;
+
     /* Stats screen */
     StatsTab stats_tab;
     UIButton stats_tab_btns[STATS_TAB_COUNT];

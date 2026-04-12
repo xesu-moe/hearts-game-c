@@ -10,3 +10,4 @@
 - [patterns_client_net_wiring.md](patterns_client_net_wiring.md) — Client networking wiring: online UI phase transition race, NET_PLAYER_VIEW_MAX_SIZE undercount, command routing split
 - [patterns_async_pass_anim.md](patterns_async_pass_anim.md) — Async pass animation: server state consumption can overwrite client-side subphase during toss animations
 - [patterns_deser_bounds_check.md](patterns_deser_bounds_check.md) — Deserialization bounds checks in protocol.c use hardcoded byte counts that go stale when fields are added
+- [patterns_timer_reset.md](patterns_timer_reset.md) — Server timers must be reset at EVERY entry point to a timed substate, not just timeout paths

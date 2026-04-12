@@ -288,8 +288,14 @@ bool server_game_is_over(const ServerGame *sg)
 bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                            char *err_out, size_t err_len)
 {
-    if (!sg->game_active) REJECT("Game is not active");
     if (seat < 0 || seat >= NUM_PLAYERS) REJECT("Invalid seat");
+    /* Allow CONFIRM through after game-over so clients can ack
+     * "Return to Menu"; reject everything else once inactive. */
+    if (!sg->game_active &&
+        !(cmd->type == INPUT_CMD_CONFIRM &&
+          sg->gs.phase == PHASE_GAME_OVER)) {
+        REJECT("Game is not active");
+    }
 
     GameState *gs = &sg->gs;
     Phase2State *p2 = &sg->p2;
@@ -539,6 +545,10 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         return true;
 
     case INPUT_CMD_CONFIRM:
+        /* Game-over phase: client acking "Return to Menu" — no-op success */
+        if (gs->phase == PHASE_GAME_OVER) {
+            return true;
+        }
         /* Scoring phase: mark player as ready to advance */
         if (gs->phase == PHASE_SCORING && sg->scoring_evaluated) {
             sg->scoring_ready[seat] = true;

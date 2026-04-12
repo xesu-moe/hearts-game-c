@@ -1863,6 +1863,7 @@ static int ser_player_view(const NetPlayerView *v, uint8_t *buf, size_t len)
         write_i16(buf, &off, v->round_points[i]);
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         write_i16(buf, &off, v->total_scores[i]);
+    write_i16(buf, &off, v->score_limit);
 
     /* Trick */
     ser_trick_view(buf, &off, &v->current_trick);
@@ -2003,8 +2004,8 @@ static int deser_player_view(NetPlayerView *v, const uint8_t *buf, size_t len)
     for (int i = 0; i < v->hand_count; i++)
         v->hand[i] = read_card(buf, &off);
 
-    /* hand_counts(4) + round_points(4*2) + total_scores(4*2) = 20 bytes */
-    if (off + NET_MAX_PLAYERS + NET_MAX_PLAYERS * 2 + NET_MAX_PLAYERS * 2 > len)
+    /* hand_counts(4) + round_points(4*2) + total_scores(4*2) + score_limit(2) = 22 bytes */
+    if (off + NET_MAX_PLAYERS + NET_MAX_PLAYERS * 2 + NET_MAX_PLAYERS * 2 + 2 > len)
         return -1;
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         v->hand_counts[i] = read_u8(buf, &off);
@@ -2013,6 +2014,7 @@ static int deser_player_view(NetPlayerView *v, const uint8_t *buf, size_t len)
         v->round_points[i] = read_i16(buf, &off);
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
         v->total_scores[i] = read_i16(buf, &off);
+    v->score_limit = read_i16(buf, &off);
 
     if (!deser_trick_view(buf, &off, len, &v->current_trick))
         return -1;
@@ -2649,6 +2651,7 @@ void net_build_player_view(NetPlayerView *out, const struct GameState *gs,
         out->round_points[p] = (int16_t)gs->players[p].round_points;
         out->total_scores[p] = (int16_t)gs->players[p].total_score;
     }
+    out->score_limit = (int16_t)gs->score_limit;
 
     /* Current trick (played cards are public) */
     const Trick *t = &gs->current_trick;
