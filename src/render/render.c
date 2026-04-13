@@ -519,8 +519,10 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             btn_w, btn_h
         };
         rs->btn_login_retry.label = "Retry";
+        /* Hide retry on version mismatch — retrying won't help, user must update. */
         rs->btn_login_retry.visible =
-            rs->login_ui && rs->login_ui->error_text[0];
+            rs->login_ui && rs->login_ui->error_text[0] &&
+            strstr(rs->login_ui->error_text, "outdated") == NULL;
         rs->btn_login_retry.disabled = false;
 
         float refresh_w = 80.0f * s;
