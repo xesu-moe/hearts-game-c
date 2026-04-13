@@ -3,9 +3,9 @@
  * @deps-requires: turn_flow.h, core/game_state.h (GameState functions),
  *                 core/settings.h, core/trick.h, render/render.h,
  *                 render/layout.h, render/anim.h, game/play_phase.h,
- *                 phase2/transmutation_logic.h, phase2/contract_logic.h (contract_on_trick_complete),
+ *                 phase2/transmutation_logic.h,
  *                 phase2/phase2_defs.h, phase2/phase2_state.h
- * @deps-last-changed: 2026-04-01
+ * @deps-last-changed: 2026-04-13 — turn timer now server-authoritative; removed local auto-play and select_valid_card helper
  * ============================================================ */
 
 #include "turn_flow.h"
@@ -13,50 +13,11 @@
 #include <stdio.h>
 
 #include <stdlib.h>
-#include "core/input_cmd.h"
 #include "core/trick.h"
 #include "render/render.h"
 #include "render/layout.h"
-#include "phase2/contract_logic.h"
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
-
-
-/* Select a valid card for timeout auto-play (no mutation). */
-static bool select_valid_card(const GameState *gs, const Phase2State *p2,
-                              int player_id, Card *out)
-{
-    const Hand *hand = &gs->players[player_id].hand;
-    bool first_trick = (gs->tricks_played == 0);
-    bool leading = (gs->current_trick.num_played == 0);
-    bool cursed = p2->enabled && p2->curse_force_hearts[player_id];
-    bool anchored = p2->enabled && p2->anchor_force_suit[player_id] >= 0;
-    for (int i = 0; i < hand->count; i++) {
-        bool valid;
-        if (p2->enabled) {
-            bool hb = gs->hearts_broken || (leading && cursed);
-            valid = transmute_is_valid_play(
-                &gs->current_trick, hand,
-                &p2->players[player_id].hand_transmutes, i,
-                hand->cards[i], hb, first_trick);
-            if (leading && cursed && valid) {
-                valid = transmute_curse_is_valid_lead(hand, hand->cards[i]);
-            }
-            if (leading && !cursed && anchored && valid) {
-                valid = transmute_anchor_is_valid_lead(
-                    hand, hand->cards[i],
-                    p2->anchor_force_suit[player_id]);
-            }
-        } else {
-            valid = game_state_is_valid_play(gs, player_id, hand->cards[i]);
-        }
-        if (valid) {
-            *out = hand->cards[i];
-            return true;
-        }
-    }
-    return false;
-}
 
 /* Map player_id to screen position (matches render.c player_screen_pos) */
 static const PlayerPosition pos_map[NUM_PLAYERS] = {
@@ -409,10 +370,9 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 {
     if (gs->phase != PHASE_PLAYING) {
         /* Settings screen is a temporary overlay — preserve flow state
-         * so the turn timer keeps ticking and isn't reset on return. */
+         * so we resume cleanly on return. The turn clock is authoritative
+         * on the server and continues to tick regardless of local UI. */
         if (gs->phase == PHASE_SETTINGS) {
-            if (flow->step == FLOW_WAITING_FOR_HUMAN)
-                flow->turn_timer -= dt;
             return;
         }
         rs->trick_anim_in_progress = false;
@@ -469,8 +429,6 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             if (current == 0) {
                 flow->step = FLOW_WAITING_FOR_HUMAN;
                 flow->prev_trick_count = gs->current_trick.num_played;
-                flow->turn_timer = flow->turn_time_limit;
-
             }
         }
         break;
@@ -478,21 +436,10 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
 
     case FLOW_WAITING_FOR_HUMAN: {
         float anim_mult = settings_anim_multiplier(settings->anim_speed);
-        flow->turn_timer -= dt;
-
-        if (flow->turn_timer <= 0.0f) {
-            render_cancel_drag(rs);
-            /* Timeout: pick a valid card and send to server */
-            Card card;
-            if (select_valid_card(gs, p2, 0, &card)) {
-                input_cmd_push((InputCmd){
-                    .type = INPUT_CMD_PLAY_CARD,
-                    .source_player = 0,
-                    .card = { .card = card },
-                });
-            }
-            flow->turn_timer = FLOW_TURN_TIME_LIMIT; /* prevent re-fire */
-        }
+        /* Turn timeout is now enforced server-side (server_game.c
+         * SV_PLAY_WAIT_TURN). The server auto-plays a valid card and
+         * broadcasts the resulting state, so the client doesn't need a
+         * local fallback timer here. */
 
         if (gs->current_trick.num_played > flow->prev_trick_count) {
             int play_idx = flow->prev_trick_count;

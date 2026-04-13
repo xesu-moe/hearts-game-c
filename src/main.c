@@ -1082,6 +1082,14 @@ int main(int argc, char **argv)
             if (view.turn_time_limit > 0.0f && view.turn_time_limit <= 120.0f)
                 flow.turn_time_limit = view.turn_time_limit;
 
+            /* Latch the server-authoritative turn timer for display.
+             * The server resets this on every active-seat change, so
+             * remote players' clocks no longer freeze. Between updates
+             * the client decrements rs.turn_time_remaining locally for
+             * smoothness (see post-flow_update block below). */
+            if (view.turn_timer >= 0.0f && view.turn_timer <= 600.0f)
+                rs.turn_time_remaining = view.turn_timer;
+
             /* Apply trick transmutation info from server to PlayPhaseState
              * so info_sync can detect Mirror and other per-slot effects */
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
@@ -1286,8 +1294,21 @@ int main(int argc, char **argv)
         flow_update(&flow, &gs, &rs, &p2, &g_settings, &pls,
                    clk.raw_dt);
 
-        /* Pass turn timer to render state for display */
-        rs.turn_time_remaining = flow.turn_timer;
+        /* Smooth display countdown between server updates.
+         * Server is authoritative and re-latches on every state update
+         * (see state_recv_apply call above). Pause local decrement while
+         * a Rogue/Duel transmutation UI is active so the clock doesn't
+         * drift while the server has it frozen. */
+        {
+            bool in_transmutation =
+                (flow.step >= FLOW_ROGUE_CHOOSING &&
+                 flow.step <= FLOW_DUEL_RECEIVE);
+            if (!in_transmutation && rs.turn_time_remaining > 0.0f) {
+                rs.turn_time_remaining -= clk.raw_dt;
+                if (rs.turn_time_remaining < 0.0f)
+                    rs.turn_time_remaining = 0.0f;
+            }
+        }
 
         /* Pass duel state to render */
         rs.duel_watching = flow.duel_watching;

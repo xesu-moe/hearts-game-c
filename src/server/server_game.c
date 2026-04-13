@@ -39,6 +39,16 @@ static float sv_duel_ai_delay(void)
            (SV_DUEL_AI_DELAY_MAX - SV_DUEL_AI_DELAY_MIN);
 }
 
+/* Server-side turn time table — must match TIMER_BONUS_VALUES in
+ * src/game/online_ui.c (kept local so server doesn't link client UI code). */
+static float sv_full_turn_time(const ServerGame *sg)
+{
+    static const int bonus[] = { 0, 5, 10, 15, 20 };
+    int ti = sg->timer_option;
+    if (ti < 0 || ti >= (int)(sizeof(bonus) / sizeof(bonus[0]))) ti = 0;
+    return 30.0f + (float)bonus[ti];
+}
+
 /* ---- Forward declarations for internal helpers ---- */
 
 static void sv_reset_tti(TrickTransmuteInfo *tti);
@@ -138,6 +148,8 @@ void server_game_init(ServerGame *sg)
     sg->duel_timer = 0.0f;
     sg->duel_ai_swap = false;
     sg->duel_ai_give_idx = -1;
+    sg->turn_timer = 0.0f;
+    sg->turn_timer_seq = -1;
     for (int i = 0; i < NUM_PLAYERS; i++)
         sg->selected_transmute_slot[i] = -1;
     sv_reset_tti(&sg->current_tti);
@@ -1149,8 +1161,44 @@ static void sv_do_play_phase(ServerGame *sg)
             sg->last_trick_winner = -1;
         }
 
-        /* If current player is human, wait for PLAY_CARD command */
-        if (gs->players[current].is_human) break;
+        /* Reset the human turn timer whenever the active turn changes.
+         * The sequence number encodes (tricks_played, num_played, current)
+         * so it advances on every play AND on every trick boundary, even
+         * when the same player both ends a trick and leads the next one
+         * after a Rogue/Duel resolution. -1 sentinel forces a reset on
+         * the very first turn of the game. */
+        int new_seq = (gs->tricks_played * (CARDS_PER_TRICK + 1) +
+                       gs->current_trick.num_played) * NUM_PLAYERS + current;
+        if (new_seq != sg->turn_timer_seq) {
+            sg->turn_timer = sv_full_turn_time(sg);
+            sg->turn_timer_seq = new_seq;
+            sg->state_dirty = true;
+        }
+
+        /* If current player is human, decrement the turn clock and auto-play
+         * a valid card on timeout. The owning client also displays the timer,
+         * but this is the authoritative tick — clients that drop or freeze
+         * cannot stall the table. */
+        if (gs->players[current].is_human) {
+            sg->turn_timer -= FIXED_DT;
+            if (sg->turn_timer <= 0.0f) {
+                sg->turn_timer = 0.0f;
+                printf("Server timeout: turn — auto-playing for %s\n",
+                       sv_player_name(current));
+                if (!sv_ai_play_card(sg, current)) {
+                    fprintf(stderr,
+                            "ERROR: turn-timeout auto-play failed for seat %d\n",
+                            current);
+                    break;
+                }
+                sv_log_play(sg, current);
+                if (trick_is_complete(&gs->current_trick)) {
+                    sg->play_substate = SV_PLAY_TRICK_BROADCAST;
+                }
+                sg->state_dirty = true;
+            }
+            break;
+        }
 
         /* AI think delay: 0-1s before playing */
         if (sg->ai_play_delay < 0.0f) {

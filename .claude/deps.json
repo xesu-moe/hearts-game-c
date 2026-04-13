@@ -268,7 +268,7 @@
       "exports": [
         "enum ServerPassSubstate (SV_PASS_IDLE, SV_PASS_DEALER_DIR, SV_PASS_DEALER_AMT, SV_PASS_DEALER_CONFIRM, SV_PASS_CONTRACT_DRAFT, SV_PASS_CARD_SELECT, SV_PASS_EXECUTE, SV_PASS_TRANSMUTE)",
         "enum ServerPlaySubstate (SV_PLAY_IDLE, SV_PLAY_WAIT_TURN, SV_PLAY_TRICK_BROADCAST, SV_PLAY_TRICK_DONE, SV_PLAY_ROGUE_WAIT, SV_PLAY_DUEL_PICK_WAIT, SV_PLAY_DUEL_GIVE_WAIT)",
-        "struct ServerGame (gs, p2, current_tti, dealer_player, pass_done, contracts_done, game_active, hearts_broken_at_trick_start, prev_round_points[], pass_substate, play_substate, draft_round, draft_initialized, state_dirty, scoring_evaluated[bool], scoring_ready[NUM_PLAYERS], scoring_wait_timer, duel_target_player, duel_target_hand_index, duel_timer, last_trick_winner, selected_transmute_slot[NUM_PLAYERS], pass_phase_timer, ai_pass_delay[NUM_PLAYERS], ai_play_delay, ai_play_timer, prev_pass_ready[NUM_PLAYERS], ai_difficulty, timer_option, point_goal_idx, gamemode, player_names[4][32], chat_queue[8][128], chat_colors[8][3], chat_transmute_ids[8], chat_highlights[8][32], chat_count, comp_ai[NUM_PLAYERS])",
+        "struct ServerGame (gs, p2, current_tti, dealer_player, pass_done, contracts_done, game_active, hearts_broken_at_trick_start, prev_round_points[], pass_substate, play_substate, draft_round, draft_initialized, state_dirty, scoring_evaluated[bool], scoring_ready[NUM_PLAYERS], scoring_wait_timer, duel_target_player, duel_target_hand_index, duel_timer, last_trick_winner, selected_transmute_slot[NUM_PLAYERS], pass_phase_timer, ai_pass_delay[NUM_PLAYERS], ai_play_delay, ai_play_timer, turn_timer, turn_timer_seq, prev_pass_ready[NUM_PLAYERS], ai_difficulty, timer_option, point_goal_idx, gamemode, player_names[4][32], chat_queue[8][128], chat_colors[8][3], chat_transmute_ids[8], chat_highlights[8][32], chat_count, comp_ai[NUM_PLAYERS])",
         "server_game_init()",
         "server_game_start()",
         "server_game_tick()",
@@ -289,7 +289,7 @@
         "src/server/room.h",
         "src/server/server_net.c"
       ],
-      "last_changed": "2026-04-06 \u2014 Added timer_option, point_goal_idx, gamemode fields to ServerGame struct for game options"
+      "last_changed": "2026-04-13 \u2014 Added turn_timer and turn_timer_seq fields for server-authoritative turn timing"
     },
     "src/server/server_game.c": {
       "implements": "src/server/server_game.h",
@@ -1214,21 +1214,18 @@
         "src/game/turn_flow.h",
         "src/core/game_state.h (game_state_current_player, game_state_complete_trick, game_state_complete_trick_with)",
         "src/core/settings.h (settings_anim_multiplier, settings_ai_think_time, GameSettings)",
-        "src/core/input.h (InputCmd)",
-        "src/game/ai.h (ai_play_card, ai_rogue_choose, ai_duel_choose, ai_duel_execute)",
         "src/core/trick.h (trick_is_complete, trick_get_winner)",
         "src/render/render.h (render_clear_piles, render_cancel_drag, render_chat_log_push, opponent_hover_active, pile_cards, pile_card_count, cards, card_count, hand_visuals, hand_visual_counts, sync_needed, anim_play_player, last_trick_winner)",
         "src/render/layout.h (layout_pile_position, layout_board_center)",
         "src/render/anim.h (CardVisual, anim_start, ANIM_PILE_COLLECT_DURATION, ANIM_PILE_STAGGER, ANIM_EFFECT_FLIGHT_DURATION, ANIM_DUEL_EXCHANGE_DURATION, revealed_to, EASE_OUT_QUAD, EASE_IN_OUT_QUAD)",
         "src/game/play_phase.h (PlayPhaseState, p2_player_name)",
         "src/phase2/phase2_state.h (Phase2State, shield_tricks_remaining[], binding_auto_win[])",
-        "src/phase2/contract_logic.h (contract_on_trick_complete)",
         "src/phase2/transmutation_logic.h (transmute_trick_get_winner, transmute_trick_count_points, transmute_on_trick_complete, transmute_apply_round_end, transmute_swap_between_players, TEFFECT_PARASITE_REDIRECT_POINTS, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS)",
         "src/phase2/phase2_defs.h (phase2_get_transmutation)",
         "stdio.h",
         "stdlib.h"
       ],
-      "last_changed": "2026-04-05 \u2014 Uses RenderState.trick_history and MAX_TRICKS_PER_ROUND for trick recording"
+      "last_changed": "2026-04-13 \u2014 turn timer now server-authoritative; removed local auto-play and select_valid_card helper"
     },
     "src/game/process_input.h": {
       "exports": [

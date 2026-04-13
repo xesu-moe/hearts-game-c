@@ -1,5 +1,6 @@
 /* ============================================================
  * @deps-exports: ServerGame (includes ai_play_delay, ai_play_timer,
+ *                turn_timer, turn_timer_player,
  *                ai_difficulty, comp_ai[NUM_PLAYERS]),
  *                ServerPassSubstate, ServerPlaySubstate,
  *                server_game_init(), server_game_start(),
@@ -101,6 +102,14 @@ typedef struct ServerGame {
     /* AI play delay for current turn (0-1s random, reset after each play) */
     float               ai_play_delay;
     float               ai_play_timer;
+
+    /* Human turn timer — authoritative countdown for the player on the clock
+     * in SV_PLAY_WAIT_TURN. Reset whenever the active turn changes.
+     * turn_timer_seq encodes (tricks_played, num_played, current_player) plus
+     * a flag that flips whenever play_substate leaves and re-enters WAIT_TURN,
+     * so Rogue/Duel resolutions also force a fresh allotment. -1 = uninit. */
+    float               turn_timer;
+    int                 turn_timer_seq;
 
     /* Snapshot of pass_ready[] for detecting per-player confirmations (AI/timeout) */
     bool                prev_pass_ready[NUM_PLAYERS];

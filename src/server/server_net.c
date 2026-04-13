@@ -713,7 +713,7 @@ static void sv_broadcast_state(void)
                 &room->game.gs,
                 &room->game.p2,
                 0, /* flow_step: not used on server */
-                0.0f, /* turn_timer: added in Step 11 */
+                room->game.turn_timer,
                 sv_pass_substate_to_client(room->game.pass_substate),
                 room->game.dealer_player,
                 game_state_current_player(&room->game.gs),
