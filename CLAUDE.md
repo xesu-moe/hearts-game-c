@@ -1,6 +1,6 @@
 # Hollow Hearts
 
-A Hearts card game with Contracts, Vendettas, and Transmutation Cards, built in C with Raylib. 4 human players over the network. Server-authoritative architecture — never trust the client.
+A Hearts card game with Contracts and Transmutation Cards, built in C with Raylib. 4 human players over the network. Server-authoritative architecture — never trust the client.
 
 **Three binaries**: Client (`hollow-hearts`), Game Server (`hh-server`), Lobby Server (`hh-lobby`).
 

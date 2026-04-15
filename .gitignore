@@ -1,9 +1,12 @@
 *.o
 *.d
 hollow-hearts
-hollow-hearts.exe
+*.exe
 build/
 vendor/raylib/
+linux-hearts-*
+*_plan.md
+*.sh
 
 # Binaries
 hh-server

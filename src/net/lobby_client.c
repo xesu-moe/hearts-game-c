@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "net/socket.h"
+#include "net/version.h"
 
 /* ================================================================
  * File-scope state
@@ -74,6 +75,20 @@ static NetMsgRoomInviteExpired  g_room_invite_expired;
 static void lc_handle_message(const NetMsg *msg, const Identity *id)
 {
     switch (msg->type) {
+    case NET_MSG_HANDSHAKE_REJECT:
+        if (msg->handshake_reject.reason == NET_REJECT_VERSION_MISMATCH) {
+            snprintf(g_error, sizeof(g_error),
+                     "Client version %s is outdated. Please update to play.",
+                     HH_VERSION);
+        } else {
+            snprintf(g_error, sizeof(g_error),
+                     "Lobby rejected connection (reason %u)",
+                     msg->handshake_reject.reason);
+        }
+        printf("[lobby-client] %s\n", g_error);
+        g_state = LOBBY_ERROR;
+        break;
+
     case NET_MSG_REGISTER_ACK:
         printf("[lobby-client] Registration successful\n");
         /* Auto-login after registration */
@@ -323,6 +338,16 @@ void lobby_client_update(float dt, const Identity *id)
     if (g_state == LOBBY_CONNECTING && cs == NET_CONN_CONNECTED) {
         g_state = LOBBY_CONNECTED;
         printf("[lobby-client] Connected to lobby\n");
+
+        /* Send version hello as the very first message. Lobby rejects us
+         * and closes the socket if HH_VERSION doesn't match. */
+        NetMsg hello;
+        memset(&hello, 0, sizeof(hello));
+        hello.type = NET_MSG_LOBBY_HELLO;
+        strncpy(hello.lobby_hello.version, HH_VERSION,
+                sizeof(hello.lobby_hello.version) - 1);
+        net_socket_send_msg(&g_net, g_conn_id, &hello);
+        printf("[lobby-client] Sent lobby hello (version %s)\n", HH_VERSION);
     }
 
     /* Check for connection lost */

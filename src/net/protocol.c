@@ -797,6 +797,25 @@ static int deser_login_by_key(NetMsgLoginByKey *m, const uint8_t *buf, size_t le
     return (int)off;
 }
 
+static int ser_lobby_hello(const NetMsgLobbyHello *m, uint8_t *buf, size_t len)
+{
+    if (len < sizeof(m->version))
+        return -1;
+    size_t off = 0;
+    write_bytes(buf, &off, m->version, sizeof(m->version));
+    return (int)off;
+}
+
+static int deser_lobby_hello(NetMsgLobbyHello *m, const uint8_t *buf, size_t len)
+{
+    if (len < sizeof(m->version))
+        return -1;
+    size_t off = 0;
+    read_bytes(buf, &off, m->version, sizeof(m->version));
+    m->version[sizeof(m->version) - 1] = '\0';
+    return (int)off;
+}
+
 static int ser_create_room(const NetMsgCreateRoom *m, uint8_t *buf, size_t len)
 {
     if (len < NET_AUTH_TOKEN_LEN)
@@ -2245,6 +2264,9 @@ int net_msg_serialize(const NetMsg *msg, uint8_t *buf, size_t buf_size)
     case NET_MSG_LOGIN_BY_KEY:
         n = ser_login_by_key(&msg->login_by_key, payload, remaining);
         break;
+    case NET_MSG_LOBBY_HELLO:
+        n = ser_lobby_hello(&msg->lobby_hello, payload, remaining);
+        break;
     case NET_MSG_LOGOUT:
     case NET_MSG_QUEUE_CANCEL:
     case NET_MSG_REGISTER_ACK:
@@ -2437,6 +2459,9 @@ int net_msg_deserialize(NetMsg *msg, const uint8_t *buf, size_t buf_len)
         break;
     case NET_MSG_LOGIN_BY_KEY:
         n = deser_login_by_key(&msg->login_by_key, payload, remaining);
+        break;
+    case NET_MSG_LOBBY_HELLO:
+        n = deser_lobby_hello(&msg->lobby_hello, payload, remaining);
         break;
     case NET_MSG_LOGOUT:
     case NET_MSG_QUEUE_CANCEL:

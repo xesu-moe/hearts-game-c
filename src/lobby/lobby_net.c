@@ -27,6 +27,7 @@
 #include "server_registry.h"
 #include "net/socket.h"
 #include "net/protocol.h"
+#include "net/version.h"
 
 /* ================================================================
  * Per-Connection Metadata (stored in NetConn.user_data)
@@ -52,6 +53,7 @@ typedef struct LobbyConnInfo {
     uint8_t        pending_pk[AUTH_PK_LEN];            /* stored pk for verification */
     uint8_t        session_token[AUTH_TOKEN_LEN];      /* valid when AUTHENTICATED */
     char           pending_username[32];               /* username for login_ack */
+    bool           hello_ok;                            /* client passed version check */
 } LobbyConnInfo;
 
 /* ================================================================
@@ -252,8 +254,52 @@ int lobby_net_find_conn_by_account(int32_t account_id)
  * Message Routing
  * ================================================================ */
 
+static void lby_send_version_reject(int conn_id)
+{
+    NetMsg reply = {0};
+    reply.type = NET_MSG_HANDSHAKE_REJECT;
+    reply.handshake_reject.server_version = PROTOCOL_VERSION;
+    reply.handshake_reject.reason         = NET_REJECT_VERSION_MISMATCH;
+    net_socket_send_msg(&g_net, conn_id, &reply);
+}
+
+static bool lby_is_server_msg(NetMsgType t)
+{
+    return t == NET_MSG_SERVER_REGISTER ||
+           t == NET_MSG_SERVER_RESULT ||
+           t == NET_MSG_SERVER_HEARTBEAT ||
+           t == NET_MSG_SERVER_ROOM_CREATED ||
+           t == NET_MSG_SERVER_ROOM_DESTROYED;
+}
+
 static void lby_handle_message(int conn_id, const NetMsg *msg)
 {
+    /* Version handshake: clients must send NET_MSG_LOBBY_HELLO first.
+     * Game server connections bypass this (identified by NET_MSG_SERVER_*). */
+    LobbyConnInfo *gate_info = g_net.conns[conn_id].user_data;
+    if (msg->type == NET_MSG_LOBBY_HELLO) {
+        if (!gate_info) return;
+        if (strncmp(msg->lobby_hello.version, HH_VERSION,
+                    sizeof(msg->lobby_hello.version)) != 0) {
+            printf("[lobby-net] Conn %d version mismatch: client='%.31s' server='%s'\n",
+                   conn_id, msg->lobby_hello.version, HH_VERSION);
+            lby_send_version_reject(conn_id);
+            lby_cleanup_connection(conn_id);
+            return;
+        }
+        gate_info->hello_ok = true;
+        gate_info->type     = LOBBY_CONN_CLIENT;
+        return;
+    }
+    if (gate_info && !gate_info->hello_ok && !lby_is_server_msg(msg->type) &&
+        msg->type != NET_MSG_PING && msg->type != NET_MSG_DISCONNECT) {
+        printf("[lobby-net] Conn %d sent msg %d before hello — rejecting\n",
+               conn_id, msg->type);
+        lby_send_version_reject(conn_id);
+        lby_cleanup_connection(conn_id);
+        return;
+    }
+
     switch (msg->type) {
     /* Auth messages */
     case NET_MSG_REGISTER:
