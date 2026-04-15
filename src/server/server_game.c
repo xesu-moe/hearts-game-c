@@ -9,6 +9,7 @@
 
 #include "server_game.h"
 
+#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -170,6 +171,19 @@ void server_game_start(ServerGame *sg)
     sg->gs.phase = PHASE_MENU; /* server has no login phase */
     game_state_start_game(&sg->gs);
 
+    /* Derive Phase 2 enablement from the gamemode the room committed to.
+     * room_start() copies Room.gamemode -> ServerGame.gamemode before calling us,
+     * so sg->gamemode is authoritative by this point.
+     *
+     * contract_state_init zeroes sg->p2 (including enabled=false) unconditionally.
+     * We MUST run it on every game start — not only on vanilla entry — otherwise
+     * a transmutations->transmutations transition leaks transmute_inv / shield /
+     * curse / anchor / binding / persistent_effects / martyr_flags / per-player
+     * contracts across game boundaries in the reused ServerGame slot. Then we
+     * set enabled based on the chosen mode. */
+    contract_state_init(&sg->p2);
+    sg->p2.enabled = gamemode_uses_phase2((GameMode)sg->gamemode);
+
     /* Apply game options */
     {
         static const int point_goals[] = { 10, 50, 100 };
@@ -204,8 +218,11 @@ void server_game_tick(ServerGame *sg)
     case PHASE_DEALING:
 #ifdef DEBUG
         /* Debug: skip to round 2 so dealer phase triggers,
-         * give seat 0 all transmutations, and give all players 1 Duel */
-        if (sg->gs.round_number == 1) {
+         * give seat 0 all transmutations, and give all players 1 Duel.
+         * Guarded on sg->p2.enabled — in vanilla mode phase2 state is
+         * inert and must not be populated, or it leaks into the next
+         * transmutations game that reuses this ServerGame slot. */
+        if (sg->p2.enabled && sg->gs.round_number == 1) {
             sg->gs.round_number = 2;
             sg->prev_round_points[0] = 10; /* seat 0 becomes dealer */
             int duel_id = -1;
@@ -227,8 +244,6 @@ void server_game_tick(ServerGame *sg)
 #endif
         /* Instant transition — no deal animation on server */
         printf("\n=== Round %d ===\n", sg->gs.round_number);
-        sg->gs.phase = PHASE_PASSING;
-
         /* Initialize competitive AI state for this hand */
         if (sg->ai_difficulty == 1) {
             for (int i = 0; i < NUM_PLAYERS; i++) {
@@ -236,29 +251,84 @@ void server_game_tick(ServerGame *sg)
                     comp_ai_init_hand(&sg->comp_ai[i], i, &sg->gs);
             }
         }
-        contract_round_reset(&sg->p2);
+
+        if (sg->p2.enabled) {
+            contract_round_reset(&sg->p2);
+        }
         sg->pass_done = false;
         sg->contracts_done = false;
 
-        /* Initialize pass sub-state machine */
-        sg->dealer_player = sv_determine_dealer(sg);
-        if (sg->dealer_player >= 0) {
-            sv_push_chat(sg, SV_CLR_YELLOW, -1, NULL,
-                         "%s lost the round and becomes the dealer!",
-                         sv_player_name(sg->dealer_player));
-            sg->pass_substate = SV_PASS_DEALER_DIR;
-            sg->pass_phase_timer = 0.0f;
+        if (sg->p2.enabled) {
+            /* Phase 2: dealer picks direction + amount after round 1,
+             * otherwise go straight to contract draft. */
+            sg->dealer_player = sv_determine_dealer(sg);
+            if (sg->dealer_player >= 0) {
+                sv_push_chat(sg, SV_CLR_YELLOW, -1, NULL,
+                             "%s lost the round and becomes the dealer!",
+                             sv_player_name(sg->dealer_player));
+                sg->pass_substate = SV_PASS_DEALER_DIR;
+                sg->pass_phase_timer = 0.0f;
+            } else {
+                /* Round 1: no dealer, skip to contract draft */
+                printf("No dealer (round 1) — %s, %d cards\n",
+                       sv_dir_name(sg->gs.pass_direction),
+                       sg->gs.pass_card_count);
+                sg->pass_substate = SV_PASS_CONTRACT_DRAFT;
+            }
         } else {
-            /* Round 1: no dealer, skip to contract draft */
-            printf("No dealer (round 1) — %s, %d cards\n",
-                   sv_dir_name(sg->gs.pass_direction),
-                   sg->gs.pass_card_count);
-            sg->pass_substate = SV_PASS_CONTRACT_DRAFT;
+            /* Vanilla: no dealer, no draft. Override the L/R/Across/Hold
+             * rotation manually since game_state_new_round() always sets
+             * PASS_LEFT. round_number is 1-based here (incremented at the
+             * end of new_round). */
+            static const PassDirection vanilla_rotation[4] = {
+                PASS_LEFT, PASS_RIGHT, PASS_ACROSS, PASS_NONE
+            };
+            int slot = (sg->gs.round_number - 1) % 4;
+            sg->gs.pass_direction = vanilla_rotation[slot];
+            sg->gs.pass_card_count =
+                (sg->gs.pass_direction == PASS_NONE) ? 0 : 3;
+
+            if (sg->gs.pass_direction == PASS_NONE) {
+                sv_push_chat(sg, SV_CLR_YELLOW, -1, NULL,
+                             "No passing this round!");
+                /* No pass will move cards, so 2♣ holder leads immediately. */
+                sg->gs.lead_player = game_state_find_two_of_clubs(&sg->gs);
+                trick_init(&sg->gs.current_trick, sg->gs.lead_player);
+
+                sg->gs.phase                     = PHASE_PLAYING;
+                sg->pass_substate                = SV_PASS_IDLE;
+                sg->play_substate                = SV_PLAY_WAIT_TURN;
+                sg->hearts_broken_at_trick_start = sg->gs.hearts_broken;
+                sv_reset_tti(&sg->current_tti);
+
+                sg->dealer_player    = -1;
+                sg->pass_phase_timer = 0.0f;
+                sg->state_dirty      = true;
+                /* Duplicate the draft-state reset from the shared tail below,
+                 * since this fast path breaks out of PHASE_DEALING early. */
+                sg->draft_round = 0;
+                sg->draft_initialized = false;
+                for (int i = 0; i < NUM_PLAYERS; i++)
+                    sg->selected_transmute_slot[i] = -1;
+                break;
+            }
+
+            sv_push_chat(sg, SV_CLR_YELLOW, -1, NULL,
+                         "Pass %d card%s to %s!",
+                         sg->gs.pass_card_count,
+                         sg->gs.pass_card_count == 1 ? "" : "s",
+                         sv_dir_chat_name(sg->gs.pass_direction));
+            sg->dealer_player    = -1;
+            sg->pass_substate    = SV_PASS_CARD_SELECT;
+            sg->pass_phase_timer = 0.0f;
         }
+
         sg->draft_round = 0;
         sg->draft_initialized = false;
         for (int i = 0; i < NUM_PLAYERS; i++)
             sg->selected_transmute_slot[i] = -1;
+
+        sg->gs.phase = PHASE_PASSING;
         break;
 
     case PHASE_PASSING:
@@ -307,6 +377,27 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
         !(cmd->type == INPUT_CMD_CONFIRM &&
           sg->gs.phase == PHASE_GAME_OVER)) {
         REJECT("Game is not active");
+    }
+
+    /* In vanilla mode, Phase 2 commands are never valid — reject with a
+     * clear error so misbehaving / stale clients don't silently no-op. */
+    if (!sg->p2.enabled) {
+        switch (cmd->type) {
+        case INPUT_CMD_SELECT_CONTRACT:
+        case INPUT_CMD_SELECT_TRANSMUTATION:
+        case INPUT_CMD_APPLY_TRANSMUTATION:
+        case INPUT_CMD_ROGUE_PICK:
+        case INPUT_CMD_ROGUE_REVEAL:
+        case INPUT_CMD_DUEL_PICK:
+        case INPUT_CMD_DUEL_GIVE:
+        case INPUT_CMD_DUEL_RETURN:
+        case INPUT_CMD_DEALER_DIR:
+        case INPUT_CMD_DEALER_AMT:
+        case INPUT_CMD_DEALER_CONFIRM:
+            REJECT("Not available in vanilla mode");
+        default:
+            break;
+        }
     }
 
     GameState *gs = &sg->gs;
@@ -793,6 +884,7 @@ static void sv_do_pass_phase(ServerGame *sg)
     switch (sg->pass_substate) {
 
     case SV_PASS_DEALER_DIR:
+        assert(sg->p2.enabled);
         if (!gs->players[sg->dealer_player].is_human) {
             /* AI dealer picks direction */
             if (sg->ai_difficulty == 1)
@@ -819,6 +911,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         break;
 
     case SV_PASS_DEALER_AMT:
+        assert(sg->p2.enabled);
         if (!gs->players[sg->dealer_player].is_human) {
             if (sg->ai_difficulty == 1)
                 gs->pass_card_count = comp_ai_pick_amount(
@@ -844,6 +937,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         break;
 
     case SV_PASS_DEALER_CONFIRM:
+        assert(sg->p2.enabled);
         if (!gs->players[sg->dealer_player].is_human ||
             sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
             if (gs->players[sg->dealer_player].is_human)
@@ -872,6 +966,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         break;
 
     case SV_PASS_CONTRACT_DRAFT: {
+        assert(sg->p2.enabled);
         DraftState *draft = &p2->round.draft;
 
         /* Initialize draft on first entry */

@@ -12,9 +12,10 @@
  *                NetMsgServerEloResult, NetMsgGameOver (has_elo, prev_elo[4], new_elo[4]),
  *                NetMsg (server_elo_result union member), NetCard, NetInputCmd, NetPlayerView
  * @deps-requires: core/card.h (Card, Suit, Rank, NUM_PLAYERS),
- *                 core/input_cmd.h (InputCmd, InputCmdType)
+ *                 core/input_cmd.h (InputCmd, InputCmdType),
+ *                 core/game_mode.h (GameMode, GAMEMODE_COUNT, GAMEMODE_LABELS)
  * @deps-used-by: protocol.c, socket.c, server_net.c, client_net.c, lobby_client.c, lobby_net.c
- * @deps-last-changed: 2026-04-06 — Added NET_MSG_SERVER_ELO_RESULT, NetMsgServerEloResult, and ELO fields to NetMsgGameOver
+ * @deps-last-changed: 2026-04-15 — Rewired GAME_OPT_MODE_MAX to reference GAMEMODE_COUNT from core/game_mode.h
  * ============================================================ */
 
 #include <stdbool.h>
@@ -22,6 +23,7 @@
 #include <stdint.h>
 
 #include "core/card.h"
+#include "core/game_mode.h"
 #include "core/input_cmd.h"
 
 /* ================================================================
@@ -304,7 +306,12 @@ typedef struct NetMsgPhaseChange {
 #define GAME_OPT_POINT_COUNT    3
 #define GAME_OPT_POINT_MAX      2
 #define GAME_OPT_MODE_COUNT     3
-#define GAME_OPT_MODE_MAX       2
+/* Server-side clamp for NetMsgStartGame.gamemode. Temporarily pinned to
+ * GAMEMODE_VANILLA because Dragon Hearts is not yet implemented — accepting
+ * GAMEMODE_DRAGON_HEARTS from a tampered client would silently run a
+ * transmutations game under a Dragon Hearts label. When Dragon Hearts lands,
+ * change this back to ((uint8_t)(GAMEMODE_COUNT - 1)). */
+#define GAME_OPT_MODE_MAX       ((uint8_t)GAMEMODE_VANILLA)
 
 typedef struct NetMsgStartGame {
     uint8_t ai_difficulty;  /* 0=casual, 1=competitive */

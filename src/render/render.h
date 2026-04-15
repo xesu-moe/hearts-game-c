@@ -184,6 +184,12 @@ typedef struct RenderState {
     bool      phase_just_changed;
     float     phase_timer;
 
+    /* Gamemode master switch — mirrors Phase2State.enabled via info_sync_update.
+     * Render code uses this to suppress Phase 2-only widgets (contract
+     * tracker, dealer picker, transmute HUD, rogue/duel prompts, etc.) in
+     * vanilla Hearts mode. */
+    bool      phase2_enabled;
+
     /* Pass subphase display */
     PassSubphase pass_subphase;
     float        pass_subphase_remaining;  /* countdown for UI */

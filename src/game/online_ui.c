@@ -4,7 +4,7 @@
  *                 raylib.h (GetCharPressed, IsKeyPressed,
  *                 IsKeyPressedRepeat, KEY_BACKSPACE),
  *                 stdio.h, string.h
- * @deps-last-changed: 2026-03-25 — Step 20: Online Menu & Room UI
+ * @deps-last-changed: 2026-04-15 — Moved GAMEMODE_LABELS/GAMEMODE_COUNT to core/game_mode.{h,c}
  * ============================================================ */
 
 #include "online_ui.h"
@@ -24,8 +24,7 @@ const int    POINT_GOAL_VALUES[] = { 10, 50, 100 };
 const char  *POINT_GOAL_LABELS[] = { "10", "50", "100" };
 const int    POINT_GOAL_COUNT    = 3;
 
-const char  *GAMEMODE_LABELS[]   = { "Transmutations", "Vanilla", "Dragon Hearts" };
-const int    GAMEMODE_COUNT      = 3;
+/* GAMEMODE_LABELS and GAMEMODE_COUNT moved to src/core/game_mode.{h,c} */
 
 /* Room codes use uppercase alphanumeric, excluding ambiguous chars (O/0/I/l).
  * Accept lowercase too and convert to uppercase. */

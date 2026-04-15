@@ -9,9 +9,10 @@
  *                DISCONNECT_GRACE_SEC
  * @deps-requires: server/server_game.h (ServerGame, server_game_init,
  *                 server_game_start, server_game_tick, server_game_is_over),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN),
+ *                 core/game_mode.h (GameMode)
  * @deps-used-by: room.c, lobby_link.c, server_net.c
- * @deps-last-changed: 2026-04-06 — Added elo_received (bool), elo_prev[4] (int32_t), elo_new[4] (int32_t) for ELO results
+ * @deps-last-changed: 2026-04-15 — vanilla_plan.md Step 2: include core/game_mode.h for GameMode
  * ============================================================ */
 
 #ifndef ROOM_H
@@ -22,6 +23,7 @@
 
 #include "server_game.h"
 #include "net/protocol.h"
+#include "core/game_mode.h"
 
 /* ================================================================
  * Constants

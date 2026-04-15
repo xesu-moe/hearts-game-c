@@ -1341,6 +1341,7 @@ void render_reset_to_menu(RenderState *rs)
         rs->hand_visual_counts[i] = 0;
     rs->trick_visual_count = 0;
     rs->sync_needed = true;
+    rs->phase2_enabled = false;
     rs->draft_waiting = false;
     rs->draft_wait_border_t = 0.0f;
     rs->draft_fadeout_t = 0.0f;
@@ -2968,27 +2969,15 @@ static void draw_phase_online(const GameState *gs, const RenderState *rs)
                              "Point Goal", pv, pc);
             }
 
-            /* Gamemode */
+            /* Gamemode — cycler is limited to implemented modes
+             * (Transmutations + Vanilla); Dragon Hearts is hidden until
+             * it's built, so every value we can display here is playable. */
             {
                 int gi = oui->gamemode;
-                const char *gv = (gi >= 0 && gi < GAMEMODE_COUNT)
+                const char *gv = (gi >= 0 && gi < GAMEMODE_DRAGON_HEARTS)
                     ? GAMEMODE_LABELS[gi] : GAMEMODE_LABELS[0];
-                Color gc = (gi == 0) ? GOLD : DARKGRAY;
                 DRAW_OPT_ROW(rs->btn_opt_mode_prev, rs->btn_opt_mode_next,
-                             "Gamemode", gv, gc);
-                /* "(Coming Soon)" subtitle for TBI modes */
-                if (gi > 0) {
-                    int sfs = (int)(11.0f * s);
-                    const char *stxt = "(Coming Soon)";
-                    int sw = hh_measure_text(rs, stxt, sfs);
-                    float mcx = rs->btn_opt_mode_prev.bounds.x +
-                        (rs->btn_opt_mode_next.bounds.x + rs->btn_opt_mode_next.bounds.width
-                         - rs->btn_opt_mode_prev.bounds.x) * 0.5f;
-                    hh_draw_text(rs, stxt, (int)(mcx - (float)sw * 0.5f),
-                        (int)(rs->btn_opt_mode_prev.bounds.y +
-                              rs->btn_opt_mode_prev.bounds.height + 2.0f * s),
-                        sfs, DARKGRAY);
-                }
+                             "Gamemode", gv, GOLD);
             }
 
             #undef DRAW_OPT_ROW
@@ -3567,6 +3556,7 @@ static void draw_border_segment(Rectangle r, float roundness,
 
 static void draw_contract_buttons(const RenderState *rs, float s)
 {
+    if (!rs->phase2_enabled) return;
     float t = ease_apply(EASE_OUT_BACK, rs->contract_anim_t);
     float alpha = rs->contract_anim_t; /* linear alpha for smoothness */
     float scale_f = 0.8f + 0.2f * t;  /* 80% → 100% */
@@ -3741,7 +3731,7 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
                      (int)(bc.x - (float)st_w * 0.5f),
                      (int)(bc.y - 120.0f * s), st_size, LIGHTGRAY);
         }
-        if (rs->dealer_ui_active) {
+        if (rs->dealer_ui_active && rs->phase2_enabled) {
             static const char *dir_labels[] = {"Left", "Front", "Right"};
             static const int dir_values[] = {PASS_LEFT, PASS_ACROSS, PASS_RIGHT};
             static const char *amt_labels[] = {"0", "2", "3", "4"};
@@ -4359,6 +4349,7 @@ static void draw_player_labels(const RenderState *rs,
 /* ---- Rogue reveal border (growing gold segment around revealed cards) ---- */
 static void draw_rogue_reveal_border(const RenderState *rs)
 {
+    if (!rs->phase2_enabled) return;
     if (!rs->rogue_border_active || rs->rogue_border_progress <= 0.0f) return;
     if (rs->staged_rogue_cv_count <= 0) return;
 
@@ -4403,6 +4394,7 @@ static void draw_rogue_reveal_border(const RenderState *rs)
 /* ---- Duel countdown timer + border around revealed card ---- */
 static void draw_duel_overlay(const RenderState *rs)
 {
+    if (!rs->phase2_enabled) return;
     if (rs->duel_time_remaining < 0.0f) return;
 
     float s = rs->layout.scale;
@@ -4480,6 +4472,7 @@ static void draw_duel_overlay(const RenderState *rs)
 /* ---- Suit selection overlay (Rogue: pick a suit) ---- */
 static void draw_suit_selection(const RenderState *rs)
 {
+    if (!rs->phase2_enabled) return;
     if (!rs->suit_hover_active) return;
 
     float s = rs->layout.scale;
@@ -4745,6 +4738,7 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
 static void draw_contracts_panel(const RenderState *rs, float s,
                                   const LayoutConfig *cfg)
 {
+    if (!rs->phase2_enabled) return;
     ContractsTableLayout tbl;
     layout_contracts_table(cfg, &tbl);
 
@@ -5453,6 +5447,7 @@ static void draw_ingame_phase(const GameState *gs, const RenderState *rs,
 
 static void draw_transmute_tooltip(const RenderState *rs)
 {
+    if (!rs->phase2_enabled) return;
     if (rs->transmute_tooltip.transmute_id < 0 ||
         rs->transmute_tooltip.anim_t <= 0.0f)
         return;
@@ -5543,6 +5538,7 @@ static void draw_transmute_tooltip(const RenderState *rs)
 
 static void draw_trick_tooltip(const RenderState *rs)
 {
+    if (!rs->phase2_enabled) return;
     if (rs->trick_tooltip.trick_num <= 0 ||
         rs->trick_tooltip.anim_t <= 0.0f)
         return;

@@ -8,7 +8,7 @@ CFLAGS = -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200112L -Isrc -MMD -MP
 # Shared by all binaries (Raylib-free)
 CORE_SRC = src/core/card.c src/core/hand.c src/core/deck.c \
            src/core/trick.c src/core/player.c src/core/game_state.c \
-           src/core/input_cmd.c
+           src/core/input_cmd.c src/core/game_mode.c
 NET_SRC    = $(wildcard src/net/*.c)
 P2_SRC     = $(wildcard src/phase2/*.c)
 VENDOR_SRC = $(wildcard src/vendor/*.c)

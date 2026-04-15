@@ -5,11 +5,12 @@
  *                ServerPassSubstate, ServerPlaySubstate,
  *                server_game_init(), server_game_start(),
  *                server_game_tick(), server_game_is_over()
- * @deps-requires: core/game_state.h (GameState), core/input_cmd.h (InputCmd),
+ * @deps-requires: core/game_state.h (GameState), core/game_mode.h (GameMode),
+ *                 core/input_cmd.h (InputCmd),
  *                 phase2/phase2_state.h (Phase2State), phase2/transmutation.h,
  *                 server/ai_competitive.h (CompetitiveAIState)
  * @deps-used-by: server_game.c, server_main.c, server_net.c, room.h
- * @deps-last-changed: 2026-04-05 — sv_ai_select_pass() signature changed from (GameState*, int) to (ServerGame*, int)
+ * @deps-last-changed: 2026-04-15 — vanilla_plan.md Step 2: include core/game_mode.h for GameMode/gamemode_uses_phase2
  * ============================================================ */
 
 #ifndef SERVER_GAME_H
@@ -19,6 +20,7 @@
 #include <stddef.h>
 
 #include "core/game_state.h"
+#include "core/game_mode.h"
 #include "core/input_cmd.h"
 #include "phase2/phase2_state.h"
 #include "server/ai_competitive.h"

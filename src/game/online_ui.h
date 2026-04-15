@@ -7,9 +7,10 @@
  * @deps-exports: OnlineSubphase, OnlineUIState (with has_reconnect field),
  *                online_ui_init, online_ui_update_text_input
  * @deps-requires: net/protocol.h (NET_ROOM_CODE_LEN, NET_ADDR_LEN,
- *                 NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)
+ *                 NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN),
+ *                 core/game_mode.h (GameMode, GAMEMODE_COUNT, GAMEMODE_LABELS)
  * @deps-used-by: main.c, game/update.c, render/render.c
- * @deps-last-changed: 2026-03-31 — Added has_reconnect bool field to OnlineUIState
+ * @deps-last-changed: 2026-04-15 — vanilla_plan.md Step 2: direct include of core/game_mode.h
  * ============================================================ */
 
 #ifndef ONLINE_UI_H
@@ -19,6 +20,7 @@
 #include <stdint.h>
 
 #include "net/protocol.h"
+#include "core/game_mode.h"
 #include "game/friend_panel.h"
 
 typedef enum OnlineSubphase {
@@ -89,8 +91,8 @@ extern const int    POINT_GOAL_VALUES[];
 extern const char  *POINT_GOAL_LABELS[];
 extern const int    POINT_GOAL_COUNT;
 
-extern const char  *GAMEMODE_LABELS[];
-extern const int    GAMEMODE_COUNT;
+/* GAMEMODE_LABELS and GAMEMODE_COUNT now live in core/game_mode.h
+ * (included directly above). */
 
 /* Initialize online UI state to defaults. */
 void online_ui_init(OnlineUIState *oui);

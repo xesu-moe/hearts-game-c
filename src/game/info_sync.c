@@ -21,6 +21,10 @@
 void info_sync_update(GameState *gs, RenderState *rs, Phase2State *p2,
                       PlayPhaseState *pls)
 {
+    /* Mirror the Phase 2 master switch to RenderState so draw code can gate
+     * Phase 2-only widgets without needing direct Phase2State access. */
+    rs->phase2_enabled = p2->enabled;
+
     if (p2->enabled) {
         /* Contracts (up to 3) */
         rs->info_contract_count = 0;

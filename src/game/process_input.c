@@ -517,10 +517,15 @@ void process_input(GameState *gs, RenderState *rs,
                         oui->point_goal = (oui->point_goal - 1 + POINT_GOAL_COUNT) % POINT_GOAL_COUNT;
                     if (render_hit_test_button(&rs->btn_opt_points_next, mouse))
                         oui->point_goal = (oui->point_goal + 1) % POINT_GOAL_COUNT;
+                    /* Cycle only over implemented modes. Dragon Hearts is
+                     * defined but not yet implemented, so we wrap over
+                     * [0, GAMEMODE_DRAGON_HEARTS) — i.e. Transmutations and
+                     * Vanilla only. When Dragon Hearts lands, restore the
+                     * full GAMEMODE_COUNT range. */
                     if (render_hit_test_button(&rs->btn_opt_mode_prev, mouse))
-                        oui->gamemode = (oui->gamemode - 1 + GAMEMODE_COUNT) % GAMEMODE_COUNT;
+                        oui->gamemode = (oui->gamemode - 1 + GAMEMODE_DRAGON_HEARTS) % GAMEMODE_DRAGON_HEARTS;
                     if (render_hit_test_button(&rs->btn_opt_mode_next, mouse))
-                        oui->gamemode = (oui->gamemode + 1) % GAMEMODE_COUNT;
+                        oui->gamemode = (oui->gamemode + 1) % GAMEMODE_DRAGON_HEARTS;
                 }
             }
             /* Add AI to waiting room */

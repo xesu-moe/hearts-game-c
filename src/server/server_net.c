@@ -6,8 +6,9 @@
  *                 net/protocol.h (NetMsg, NetMsgType, NetPlayerView (with rogue/duel_revealed_card),
  *                 NET_MAX_PLAYERS, net_build_player_view, net_input_cmd_to_local),
  *                 core/game_state.h (PassSubphase, game_state_current_player),
+ *                 core/game_mode.h (GAME_OPT_MODE_MAX via GAMEMODE_COUNT),
  *                 core/input_cmd.h (InputCmd), stdio.h, stdlib.h, string.h, time.h
- * @deps-last-changed: 2026-04-04 — Updated net_build_player_view for NetPlayerView rogue/duel card fields
+ * @deps-last-changed: 2026-04-15 — vanilla_plan.md Step 2: include core/game_mode.h for GAME_OPT_MODE_MAX clamping
  * ============================================================ */
 
 #include "server_net.h"
@@ -22,6 +23,7 @@
 #include "net/socket.h"
 #include "net/protocol.h"
 #include "core/game_state.h"
+#include "core/game_mode.h"
 #include "core/input_cmd.h"
 
 /* ================================================================
