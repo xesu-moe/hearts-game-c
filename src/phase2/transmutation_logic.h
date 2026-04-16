@@ -10,10 +10,10 @@
  *                transmute_trick_get_winner(const Phase2State *p2), transmute_resolve_effect(), transmute_effect_name()
  * @deps-requires: transmutation.h (TEFFECT_ANCHOR_FORCE_LEAD_SUIT, TEFFECT_BINDING_AUTO_WIN_NEXT, others),
  *                core/hand.h (Hand, hand_contains, hand_has_suit), core/trick.h (Trick),
- *                phase2_state.h (Phase2State, shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[]),
+ *                phase2_state.h (Phase2State, shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[], last_played_transmuted_card),
  *                core/game_state.h (GameState)
  * @deps-used-by: transmutation_logic.c, play_phase.c, info_sync.c, pass_phase.c, turn_flow.c, update.c, json_parse.c, ai.c
- * @deps-last-changed: 2026-03-21 — Added transmute_anchor_is_valid_lead(), transmute_anchor_consume(); transmute_trick_get_winner() now takes Phase2State *p2
+ * @deps-last-changed: 2026-04-05 — Changed transmute_trick_count_points() to take const Phase2State* p2 parameter
  * ============================================================ */
 
 #include <stdbool.h>
@@ -68,7 +68,8 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
                                const Phase2State *p2);
 
 /* Transmutation-aware point counting for a trick. */
-int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti);
+int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti,
+                                 const Phase2State *p2);
 
 /* Transmutation-aware valid play check. */
 bool transmute_is_valid_play(const Trick *trick, const Hand *hand,

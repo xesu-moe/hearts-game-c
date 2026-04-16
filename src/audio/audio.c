@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 
+#include "core/resource.h"
 #include "core/settings.h"
 
 #define FADE_DURATION 1.0f
@@ -26,22 +27,19 @@ static const char *sfx_paths[SFX_COUNT] = {
 
 void audio_init(AudioState *a, const GameSettings *s)
 {
+    SetAudioStreamBufferSizeDefault(8192);
     InitAudioDevice();
 
     for (int i = 0; i < MUSIC_COUNT; i++) {
-        if (FileExists(music_paths[i])) {
-            a->tracks[i] = LoadMusicStream(music_paths[i]);
-            a->tracks[i].looping = true;
-            a->track_loaded[i] = true;
-        } else {
-            a->track_loaded[i] = false;
-        }
+        a->tracks[i] = res_load_music(music_paths[i]);
+        a->tracks[i].looping = true;
+        a->track_loaded[i] = (a->tracks[i].stream.sampleRate > 0);
     }
 
     for (int i = 0; i < SFX_COUNT; i++) {
-        if (sfx_paths[i] && FileExists(sfx_paths[i])) {
-            a->sfx[i] = LoadSound(sfx_paths[i]);
-            a->sfx_loaded[i] = true;
+        if (sfx_paths[i]) {
+            a->sfx[i] = res_load_sound(sfx_paths[i]);
+            a->sfx_loaded[i] = (a->sfx[i].frameCount > 0);
         } else {
             a->sfx_loaded[i] = false;
         }

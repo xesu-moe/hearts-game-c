@@ -16,6 +16,8 @@
 #include "core/settings.h"
 #include "game/pass_phase.h"
 #include "game/play_phase.h"
+#include "game/login_ui.h"
+#include "game/online_ui.h"
 #include "game/settings_ui.h"
 #include "game/turn_flow.h"
 #include "phase2/phase2_state.h"
@@ -25,6 +27,7 @@ typedef struct RenderState RenderState;
 
 void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                  PassPhaseState *pps, PlayPhaseState *pls,
+                 LoginUIState *lui, OnlineUIState *oui,
                  SettingsUIState *sui, GameSettings *settings,
                  TurnFlow *flow, float dt, bool *quit_requested);
 

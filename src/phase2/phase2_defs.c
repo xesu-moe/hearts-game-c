@@ -1,7 +1,8 @@
 /* ============================================================
  * @deps-implements: phase2_defs.h
- * @deps-requires: phase2_defs.h, transmutation.h (TransmuteEffect), json_parse.h, stdio.h, string.h
- * @deps-last-changed: 2026-03-22 — Removed raylib.h, replaced TraceLog with fprintf
+ * @deps-requires: phase2_defs.h (phase2_find_transmute_by_effect), transmutation.h (TransmuteEffect),
+ *                 json_parse.h (json_parse_contract_defs, json_parse_transmutation_defs), stdio.h, string.h
+ * @deps-last-changed: 2026-04-04 — Implemented phase2_find_transmute_by_effect() for Mirror transmutation
  * ============================================================ */
 
 #include "phase2_defs.h"
@@ -43,14 +44,10 @@ void phase2_defs_init(void)
                              g_transmutation_defs, MAX_TRANSMUTATION_DEFS,
                              &g_transmutation_def_count);
 
-    json_load_characters("assets/defs/characters.json",
-                         g_character_defs, MAX_CHARACTER_DEFS,
-                         &g_character_def_count);
-
     fprintf(stderr, "[INFO] PHASE2: Loaded %d contracts, "
-                    "%d transmutations, %d characters\n",
+                    "%d transmutations\n",
             g_contract_def_count,
-            g_transmutation_def_count, g_character_def_count);
+            g_transmutation_def_count);
 }
 
 /* --- Lookup Functions --- */
@@ -73,6 +70,17 @@ const TransmutationDef *phase2_get_transmutation(int id)
         }
     }
     return NULL;
+}
+
+int phase2_find_transmute_by_effect(TransmuteEffect effect)
+{
+    if (effect == TEFFECT_NONE || effect == TEFFECT_MIRROR)
+        return -1;
+    for (int i = 0; i < g_transmutation_def_count; i++) {
+        if (g_transmutation_defs[i].effect == effect)
+            return g_transmutation_defs[i].id;
+    }
+    return -1;
 }
 
 const CharacterDef *phase2_get_character(int id)

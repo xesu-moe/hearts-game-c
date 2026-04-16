@@ -1,0 +1,64 @@
+## [AGENT:dep-mapper] [SEVERITY:high] [FILES_AFFECTED:9]
+
+### What changed
+- **Files:** `src/lobby/stats.h` (new), `src/lobby/stats.c` (new), `src/core/game_state.h` (modified), `src/core/input_cmd.h` (modified), `src/render/render.h` (modified), `src/lobby/db.h` (modified)
+- **Symbols:**
+  - `stats_calc_elo_deltas()`, `ELO_K_FACTOR`, `ELO_DEFAULT`, `ELO_MIN`, `ELO_MAX` (new in stats.h)
+  - `PHASE_STATS` (new enum value in GamePhase)
+  - `INPUT_CMD_OPEN_STATS` (new enum value in InputCmdType)
+  - `LOBBY_STMT_UPDATE_ELO` (new enum value in LobbyStmtID)
+  - `btn_stats_back` (new UIButton field in RenderState)
+  - `stats_available`, `stat_elo`, `stat_games_played`, `stat_games_won` (new fields in RenderState)
+- **Type of change:** New subsystem + structural additions to 3 headers
+
+### Files that REQUIRE revision
+| File | Line(s) | Symbol used | Why it breaks |
+|------|---------|-------------|---------------|
+| `src/game/process_input.c` | varies | `INPUT_CMD_OPEN_STATS`, `PHASE_STATS`, `btn_stats_back` | Menu button click → must dispatch INPUT_CMD_OPEN_STATS; back button hit-test on PHASE_STATS |
+| `src/game/update.c` | varies | `INPUT_CMD_OPEN_STATS`, `PHASE_STATS` | Must handle INPUT_CMD_OPEN_STATS → transition to PHASE_STATS |
+| `src/render/render.c` | varies | `PHASE_STATS`, `btn_stats_back`, `draw_phase_stats()`, RenderState stats fields | New phase requires render case; button sync/hover/draw; populate stats fields from lobby_client |
+| `src/lobby/lobby_net.c` | line 1055 | `stats_calc_elo_deltas()`, `LOBBY_STMT_UPDATE_ELO` | Server result handler must calculate ELO deltas and update database |
+| `src/main.c` | varies | `PHASE_STATS`, all new RenderState fields | Likely handles phase initialization and state machine for PHASE_STATS (not inspected) |
+
+### Files NOT affected (confirmed safe)
+| File | Reason safe |
+|------|-------------|
+| `src/core/game_state.c` | No PHASE_STATS-specific logic needed; GameState itself unchanged |
+| `src/server/server_game.c` | Server never sends PHASE_STATS; stats screen is client-only |
+| `src/net/protocol.h` | No new message types for stats; uses existing NET_MSG_SERVER_RESULT |
+| `src/game/play_phase.c`, `src/game/pass_phase.c` | Client-only screen, does not affect game logic phases |
+
+### deps.json updated
+- **New entries:** `src/lobby/stats.h`, `src/lobby/stats.c`
+- **Modified entries:**
+  - `src/core/game_state.h` → exports updated to include PHASE_STATS
+  - `src/core/input_cmd.h` → exports updated to include INPUT_CMD_OPEN_STATS
+  - `src/render/render.h` → exports updated to include btn_stats_back
+  - `src/lobby/db.h` → exports updated to include LOBBY_STMT_UPDATE_ELO
+  - `src/lobby/lobby_net.c` → requires updated to include stats.h
+  - `src/game/process_input.c` → requires updated to include INPUT_CMD_OPEN_STATS, PHASE_STATS, btn_stats_back
+  - `src/game/update.c` → requires updated to include INPUT_CMD_OPEN_STATS, PHASE_STATS
+  - `src/render/render.c` → requires updated to include PHASE_STATS, net/lobby_client.h
+- **Change log:** Entry added for Step 21
+
+### In-file headers updated
+- `src/lobby/stats.h` → @deps-exports, @deps-requires, @deps-last-changed added/updated
+- `src/lobby/stats.c` → @deps-implements, @deps-requires, @deps-last-changed updated
+- `src/core/game_state.h` → @deps-exports, @deps-used-by, @deps-last-changed updated
+- `src/core/input_cmd.h` → @deps-exports, @deps-used-by, @deps-last-changed updated
+- `src/render/render.h` → @deps-exports, @deps-requires, @deps-last-changed updated
+- `src/lobby/db.h` → @deps-exports, @deps-used-by, @deps-last-changed updated
+- `src/render/render.c` → @deps-requires, @deps-last-changed updated
+- `src/lobby/lobby_net.c` → @deps-requires, @deps-last-changed updated
+- `src/game/process_input.c` → @deps-requires, @deps-last-changed updated
+- `src/game/update.c` → @deps-requires, @deps-last-changed updated
+
+### Required actions
+- [ ] Verify `src/game/process_input.c` correctly routes MENU_STATISTICS click to INPUT_CMD_OPEN_STATS and handles PHASE_STATS back button
+- [ ] Verify `src/game/update.c` correctly transitions to PHASE_STATS on INPUT_CMD_OPEN_STATS
+- [ ] Verify `src/render/render.c` has draw_phase_stats() implementation and correctly renders button + stats fields
+- [ ] Verify `src/lobby/lobby_net.c` calls stats_calc_elo_deltas() and updates ELO via LOBBY_STMT_UPDATE_ELO in match result handler
+- [ ] Verify `src/main.c` initializes PHASE_STATS handling in state machine (not verified in this scan)
+
+### Summary
+Step 21 (Stats & Match History) added a new client-only screen (PHASE_STATS) and integrated ELO calculation into the lobby server. The changes are primarily **additive** — all new types and functions. No existing APIs changed signatures. The highest risk is in the UI routing (`process_input.c`, `update.c`, `render.c`) where incorrect handling would prevent stats screen access or cause crashes. Confirm all 5 verification points before marking complete.

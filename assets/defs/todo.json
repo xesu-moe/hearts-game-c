@@ -1,0 +1,29 @@
+{
+    "known_bugs": [
+        "Time options do not apply on every timer.",
+        "Contract results screen shows when game is over (unnecessary)",
+        "Small stutter on passing phase end."
+    ],
+    "testing_required": [
+        "Windows Build",
+        "Elo system",
+        "Quick Match Matchmaking",
+        "Competitive AI",
+        "Multiple human games",
+        "Auto-sorting Option (Sorts cards after passing phase)",
+        "Rogue effect shows transmutated cards or just suit and value?",
+        "Friends system (tomodachi ga inai)"
+    ],
+    "planned_features": [
+        "In-game Help button actual info (current info is AI generated)",
+        "Minimal buffer for card play",
+        "Command Flood Protection",
+        "Achievements System",
+        "Mirroring Jokers",
+        "Tutorial",
+        "Keypair recovery",
+        "Vanilla mode",
+        "Other popular game variations",
+        "Android Build"
+    ]
+}

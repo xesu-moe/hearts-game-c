@@ -1,13 +1,11 @@
 /* ============================================================
  * @deps-implements: render.h
- * @deps-requires: render.h (draft UI fields, info_contract_count,
- *                 contract_result_*, RenderState fields),
- *                 particle.h, anim.h (anim_get_speed, CardVisual.revealed_to,
- *                 CardVisual.inverted), layout.h (layout_scoring_*, layout_wipe_boundary_x),
- *                 card_render.h, phase2/phase2_defs.h,
- *                 core/game_state.h (GamePhase, PHASE_SCORING),
- *                 core/card.h, core/settings.h, raylib.h, rlgl.h, math.h
- * @deps-last-changed: 2026-03-22 — Uses SETTINGS_ROW_COUNT and SETTINGS_ACTIVE_COUNT (now 9)
+ * @deps-requires: render.h (mirror_source_tid), online_ui.h, particle.h, anim.h, layout.h,
+ *                 card_render.h, phase2/phase2_defs.h, net/lobby_client.h,
+ *                 core/game_state.h (PHASE_STATS, PHASE_ONLINE_MENU),
+ *                 core/card.h, core/settings.h, todo_panel.h (todo_panel_height, todo_panel_draw),
+ *                 raylib.h, rlgl.h, math.h
+ * @deps-last-changed: 2026-04-06 — Added todo_panel rendering in PHASE_MENU; calls todo_panel_height() and todo_panel_draw()
  * ============================================================ */
 
 #include "render.h"
@@ -15,10 +13,18 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "core/resource.h"
+
 #include "card_render.h"
+#include "easing.h"
 #include "core/hand.h"
+#include "game/login_ui.h"
+#include "game/online_ui.h"
+#include "friend_panel_render.h"
+#include "todo_panel.h"
 #include "phase2/phase2_state.h"
 #include "phase2/phase2_defs.h"
 #include "rlgl.h"
@@ -26,13 +32,19 @@
 /* ---- Internal constants ---- */
 
 #define TRICK_WINNER_DISPLAY_TIME 1.0f
+#define TOOLTIP_ANIM_SECS 0.15f
 
 #define HUMAN_PLAYER 0
+
+static const char *const s_default_names[] = {"You", "West", "North", "East"};
 
 /* Forward declarations */
 static void draw_contracts_panel(const RenderState *rs, float s,
                                   const LayoutConfig *cfg);
-static const char *player_name(int player_id);
+static const char *player_name(int player_id, const RenderState *rs);
+static void draw_player_labels(const RenderState *rs,
+                                const bool show_thinking[NUM_PLAYERS],
+                                int timer_secs);
 
 /* Map player_id to screen position: 0=bottom, 1=left, 2=top, 3=right */
 static PlayerPosition player_screen_pos(int player_id)
@@ -47,8 +59,8 @@ static PlayerPosition player_screen_pos(int player_id)
 
 /* Measure or draw word-wrapped text.  Returns total height consumed.
  * If draw==false, only measures (no DrawText calls). */
-static float text_wrapped(const char *text, float x, float y,
-                          int font_size, float max_w, Color color,
+static float text_wrapped(const RenderState *rs, const char *text, float x,
+                          float y, int font_size, float max_w, Color color,
                           bool draw)
 {
     float line_h = (float)font_size + 2.0f;
@@ -65,7 +77,7 @@ static float text_wrapped(const char *text, float x, float y,
             int n = (i < (int)sizeof(tmp)) ? i : (int)sizeof(tmp) - 1;
             memcpy(tmp, p, n);
             tmp[n] = '\0';
-            if (MeasureText(tmp, font_size) > (int)max_w) break;
+            if (hh_measure_text(rs, tmp, font_size) > (int)max_w) break;
             best = i;
             if (p[i] == ' ' || p[i] == '\0') best_word = i;
         }
@@ -82,7 +94,7 @@ static float text_wrapped(const char *text, float x, float y,
             int n = (best < (int)sizeof(tmp)) ? best : (int)sizeof(tmp) - 1;
             memcpy(tmp, p, n);
             tmp[n] = '\0';
-            DrawText(tmp, (int)x, (int)cur_y, font_size, color);
+            hh_draw_text(rs, tmp, (int)x, (int)cur_y, font_size, color);
         }
         cur_y += line_h;
         p += skip;
@@ -91,16 +103,166 @@ static float text_wrapped(const char *text, float x, float y,
 }
 
 /* Measure height of word-wrapped text without drawing. */
-static float measure_text_wrapped(const char *text, int font_size, float max_w)
+static float measure_text_wrapped(const RenderState *rs, const char *text,
+                                  int font_size, float max_w)
 {
-    return text_wrapped(text, 0, 0, font_size, max_w, WHITE, false);
+    return text_wrapped(rs, text, 0, 0, font_size, max_w, WHITE, false);
 }
 
 /* Draw word-wrapped text. Returns total height consumed. */
-static float draw_text_wrapped(const char *text, float x, float y,
-                               int font_size, float max_w, Color color)
+static float draw_text_wrapped(const RenderState *rs, const char *text,
+                               float x, float y, int font_size, float max_w,
+                               Color color)
 {
-    return text_wrapped(text, x, y, font_size, max_w, color, true);
+    return text_wrapped(rs, text, x, y, font_size, max_w, color, true);
+}
+
+/* Draw word-wrapped text with an underlined highlight substring.
+ * If highlight is non-empty, finds it in text and underlines that span.
+ * Records the bounding rect of the highlight into *out_rect (if non-NULL).
+ * Returns total height consumed. */
+static float draw_text_wrapped_rich(const RenderState *rs, const char *text,
+                                    float x, float y, int font_size,
+                                    float max_w, Color color,
+                                    const char *highlight,
+                                    Rectangle *out_rect)
+{
+    if (out_rect) *out_rect = (Rectangle){0, 0, 0, 0};
+
+    /* No highlight — fall back to normal draw */
+    if (!highlight || !highlight[0])
+        return text_wrapped(rs, text, x, y, font_size, max_w, color, true);
+
+    /* Find highlight position in the original text */
+    const char *hl_start = strstr(text, highlight);
+    if (!hl_start)
+        return text_wrapped(rs, text, x, y, font_size, max_w, color, true);
+
+    int hl_off = (int)(hl_start - text);
+    int hl_len = (int)strlen(highlight);
+    float line_h = (float)font_size + 2.0f;
+    float cur_y = y;
+    const char *p = text;
+    int char_offset = 0; /* chars consumed from original text */
+    float hl_rect_x = 0, hl_rect_y = 0, hl_rect_w = 0, hl_rect_h = 0;
+    bool hl_rect_set = false;
+
+    while (*p) {
+        int best = 0;
+        int best_word = 0;
+        int len = (int)strlen(p);
+        for (int i = 1; i <= len; i++) {
+            char tmp[CHAT_MSG_LEN];
+            int n = (i < (int)sizeof(tmp)) ? i : (int)sizeof(tmp) - 1;
+            memcpy(tmp, p, n);
+            tmp[n] = '\0';
+            if (hh_measure_text(rs, tmp, font_size) > (int)max_w) break;
+            best = i;
+            if (p[i] == ' ' || p[i] == '\0') best_word = i;
+        }
+        if (best_word > 0) best = best_word;
+        if (best == 0) best = 1;
+
+        /* Check if highlight intersects this line */
+        int line_start = char_offset;
+        int line_end = char_offset + best;
+        int hl_end_off = hl_off + hl_len;
+
+        if (hl_off < line_end && hl_end_off > line_start) {
+            /* Highlight overlaps this line — draw in 3 segments */
+            int seg_start = (hl_off > line_start) ? hl_off - line_start : 0;
+            int seg_end = (hl_end_off < line_end) ? hl_end_off - line_start : best;
+
+            /* Prefix */
+            if (seg_start > 0) {
+                char tmp[CHAT_MSG_LEN];
+                int n = (seg_start < (int)sizeof(tmp)) ? seg_start : (int)sizeof(tmp) - 1;
+                memcpy(tmp, p, n);
+                tmp[n] = '\0';
+                hh_draw_text(rs, tmp, (int)x, (int)cur_y, font_size, color);
+            }
+
+            /* Measure prefix width to position highlight */
+            float prefix_w = 0;
+            if (seg_start > 0) {
+                char tmp[CHAT_MSG_LEN];
+                int n = (seg_start < (int)sizeof(tmp)) ? seg_start : (int)sizeof(tmp) - 1;
+                memcpy(tmp, p, n);
+                tmp[n] = '\0';
+                prefix_w = (float)hh_measure_text(rs, tmp, font_size);
+            }
+
+            /* Highlight segment */
+            {
+                char tmp[CHAT_MSG_LEN];
+                int n = seg_end - seg_start;
+                if (n >= (int)sizeof(tmp)) n = (int)sizeof(tmp) - 1;
+                memcpy(tmp, p + seg_start, n);
+                tmp[n] = '\0';
+                float hx = x + prefix_w;
+                hh_draw_text(rs, tmp, (int)hx, (int)cur_y, font_size, color);
+                float hw = (float)hh_measure_text(rs, tmp, font_size);
+                /* Underline */
+                float uy = cur_y + (float)font_size + 1.0f;
+                DrawLineEx((Vector2){hx, uy}, (Vector2){hx + hw, uy},
+                           1.0f, color);
+                /* Record rect (merge across lines) */
+                if (!hl_rect_set) {
+                    hl_rect_x = hx;
+                    hl_rect_y = cur_y;
+                    hl_rect_w = hw;
+                    hl_rect_h = line_h;
+                    hl_rect_set = true;
+                } else {
+                    /* Extend vertically for multi-line highlights */
+                    if (hx < hl_rect_x) {
+                        hl_rect_w += hl_rect_x - hx;
+                        hl_rect_x = hx;
+                    }
+                    float right = hx + hw;
+                    if (right > hl_rect_x + hl_rect_w)
+                        hl_rect_w = right - hl_rect_x;
+                    hl_rect_h = (cur_y + line_h) - hl_rect_y;
+                }
+            }
+
+            /* Suffix */
+            if (seg_end < best) {
+                char prefix_plus_hl[CHAT_MSG_LEN];
+                int pn = (seg_end < (int)sizeof(prefix_plus_hl))
+                             ? seg_end : (int)sizeof(prefix_plus_hl) - 1;
+                memcpy(prefix_plus_hl, p, pn);
+                prefix_plus_hl[pn] = '\0';
+                float ph_w = (float)hh_measure_text(rs, prefix_plus_hl, font_size);
+
+                char tmp[CHAT_MSG_LEN];
+                int n = best - seg_end;
+                if (n >= (int)sizeof(tmp)) n = (int)sizeof(tmp) - 1;
+                memcpy(tmp, p + seg_end, n);
+                tmp[n] = '\0';
+                hh_draw_text(rs, tmp, (int)(x + ph_w), (int)cur_y,
+                             font_size, color);
+            }
+        } else {
+            /* No highlight on this line — draw normally */
+            char tmp[CHAT_MSG_LEN];
+            int n = (best < (int)sizeof(tmp)) ? best : (int)sizeof(tmp) - 1;
+            memcpy(tmp, p, n);
+            tmp[n] = '\0';
+            hh_draw_text(rs, tmp, (int)x, (int)cur_y, font_size, color);
+        }
+
+        cur_y += line_h;
+        int skip = best;
+        while (p[skip] == ' ') skip++;
+        char_offset += skip;
+        p += skip;
+    }
+
+    if (out_rect && hl_rect_set)
+        *out_rect = (Rectangle){hl_rect_x, hl_rect_y, hl_rect_w, hl_rect_h};
+
+    return cur_y - y;
 }
 
 /* ---- Card visual helpers ---- */
@@ -165,6 +327,7 @@ static void sync_hands(const GameState *gs, RenderState *rs)
             origin = (Vector2){cw_s * 0.5f, 0.0f};
         }
 
+
         for (int i = 0; i < hand->count; i++) {
             int idx = alloc_card_visual(rs);
             if (idx < 0) break;
@@ -182,7 +345,7 @@ static void sync_hands(const GameState *gs, RenderState *rs)
             cv->face_up = (p == HUMAN_PLAYER);
             cv->scale = card_scale;
             cv->opacity = 1.0f;
-            cv->z_order = i;
+            cv->z_order = (p == HUMAN_PLAYER) ? 50 + i : i;
             cv->selected = false;
             cv->hovered = false;
             cv->animating = false;
@@ -199,7 +362,10 @@ static void sync_hands(const GameState *gs, RenderState *rs)
     if (gs->phase != PHASE_PLAYING) {
         trick = NULL;
     }
-    for (int i = 0; trick != NULL && i < trick->num_played; i++) {
+    int trick_show = trick ? trick->num_played : 0;
+    if (rs->trick_visible_count > 0 && trick_show > rs->trick_visible_count)
+        trick_show = rs->trick_visible_count;
+    for (int i = 0; trick != NULL && i < trick_show; i++) {
         int idx = alloc_card_visual(rs);
         if (idx < 0) break;
         rs->trick_visuals[i] = idx;
@@ -292,12 +458,11 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             const char *subtitle;
             bool        disabled;
         } menu_defs[MENU_ITEM_COUNT] = {
-            [MENU_PLAY_ONLINE]   = {"Play Online",   "(Coming Soon)", true},
-            [MENU_PLAY_OFFLINE]  = {"Play Offline",   NULL,            false},
-            [MENU_DECK_BUILDING] = {"Deck Building",  "(Coming Soon)", true},
-            [MENU_STATISTICS]    = {"Statistics",      "(Coming Soon)", true},
-            [MENU_SETTINGS]      = {"Settings",        NULL,            false},
-            [MENU_EXIT]          = {"Exit",            NULL,            false},
+            [MENU_PLAY]          = {"Play",             NULL,            false},
+            [MENU_STATISTICS]    = {"Statistics",       NULL,            false},
+            [MENU_ACHIEVEMENTS]  = {"Achievements",     "(coming soon)", true},
+            [MENU_SETTINGS]      = {"Settings",         NULL,            false},
+            [MENU_EXIT]          = {"Exit",             NULL,            false},
         };
 
         /* Menu uses true screen center, not the shifted board center. */
@@ -330,9 +495,350 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         }
     }
 
+    /* ---- Login UI buttons ---- */
+    if (gs->phase == PHASE_LOGIN) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
+        float btn_w = 200.0f * s;
+        float btn_h = 45.0f * s;
+
+        rs->btn_login_submit.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 5.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_login_submit.label = "Register";
+        rs->btn_login_submit.visible =
+            rs->login_ui && rs->login_ui->show_username_input &&
+            !rs->login_ui->awaiting_response;
+        rs->btn_login_submit.disabled = false;
+
+        rs->btn_login_retry.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 20.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_login_retry.label = "Retry";
+        /* Hide retry on version mismatch — retrying won't help, user must update. */
+        rs->btn_login_retry.visible =
+            rs->login_ui && rs->login_ui->error_text[0] &&
+            strstr(rs->login_ui->error_text, "outdated") == NULL;
+        rs->btn_login_retry.disabled = false;
+
+        float refresh_w = 80.0f * s;
+        float refresh_h = 28.0f * s;
+        bool show_import = rs->login_ui &&
+            rs->login_ui->show_username_input &&
+            !rs->login_ui->awaiting_response;
+
+        rs->btn_login_import.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            screen_cy + 135.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_login_import.label = "Import Identity";
+        rs->btn_login_import.subtitle = NULL;
+        rs->btn_login_import.visible = show_import;
+        rs->btn_login_import.disabled = !rs->backup_exists;
+
+        rs->btn_login_refresh.bounds = (Rectangle){
+            screen_cx + btn_w * 0.5f + 6.0f * s,
+            screen_cy + 135.0f * s + (btn_h - refresh_h) * 0.5f,
+            refresh_w, refresh_h
+        };
+        rs->btn_login_refresh.label = "Re-check";
+        rs->btn_login_refresh.subtitle = NULL;
+        rs->btn_login_refresh.visible = show_import;
+        rs->btn_login_refresh.disabled = false;
+    } else {
+        rs->btn_login_submit.visible = false;
+        rs->btn_login_retry.visible = false;
+        rs->btn_login_import.visible = false;
+        rs->btn_login_refresh.visible = false;
+    }
+
+    /* ---- Online menu buttons ---- */
+    if (gs->phase == PHASE_ONLINE_MENU && rs->online_ui) {
+        float screen_cx = cfg->screen_width * 0.5f;
+        float screen_cy = cfg->screen_height * 0.5f;
+        float btn_w = 280.0f * s;
+        float btn_h = 50.0f * s;
+        float btn_gap = 12.0f * s;
+
+        const char *online_labels[ONLINE_BTN_MAX];
+        int btn_count = 0;
+        if (rs->online_ui->has_reconnect)
+            online_labels[btn_count++] = "Reconnect";
+        online_labels[btn_count++] = "Quick Match";
+        online_labels[btn_count++] = "Create Room";
+        online_labels[btn_count++] = "Join Room";
+        online_labels[btn_count++] = "Back";
+        rs->online_btn_count = btn_count;
+
+        OnlineSubphase sub = rs->online_ui->subphase;
+        bool show_menu = (sub == ONLINE_SUB_MENU);
+
+        float total_h = btn_count * btn_h +
+                         (btn_count - 1) * btn_gap;
+        float top_y = screen_cy - total_h * 0.5f + 50.0f * s;
+
+        for (int i = 0; i < btn_count; i++) {
+            rs->online_btns[i].bounds = (Rectangle){
+                screen_cx - btn_w * 0.5f,
+                top_y + (float)i * (btn_h + btn_gap),
+                btn_w, btn_h
+            };
+            rs->online_btns[i].label = online_labels[i];
+            rs->online_btns[i].visible = show_menu;
+            rs->online_btns[i].disabled = false;
+        }
+
+        /* Join submit button */
+        float small_btn_w = 200.0f * s;
+        float small_btn_h = 45.0f * s;
+        rs->btn_online_join_submit.bounds = (Rectangle){
+            screen_cx - small_btn_w * 0.5f,
+            screen_cy + 30.0f * s,
+            small_btn_w, small_btn_h
+        };
+        rs->btn_online_join_submit.label = "Join";
+        rs->btn_online_join_submit.visible = (sub == ONLINE_SUB_JOIN_INPUT);
+        rs->btn_online_join_submit.disabled = false;
+
+        /* Add AI button (visible for creator in CREATE_WAITING with empty slots) */
+        int occupied = 0;
+        if (rs->online_ui && sub == ONLINE_SUB_CREATE_WAITING) {
+            for (int i = 0; i < NET_MAX_PLAYERS; i++)
+                if (rs->online_ui->player_names[i][0] != '\0') occupied++;
+        }
+
+        /* Game options section — upper-left, parallel to seat list */
+        {
+            float opt_w = 160.0f * s;
+            float opt_x = screen_cx - 160.0f * s - opt_w;
+            float opt_y = screen_cy - 60.0f * s;
+            float opt_row_h = 52.0f * s;
+            float opt_arrow_sz = 22.0f * s;
+            bool opt_vis = (sub == ONLINE_SUB_CREATE_WAITING);
+
+            /* Row 0: Timers */
+            rs->btn_opt_timer_prev.bounds = (Rectangle){
+                opt_x, opt_y, opt_arrow_sz, opt_arrow_sz };
+            rs->btn_opt_timer_prev.label = "<";
+            rs->btn_opt_timer_prev.visible = opt_vis;
+            rs->btn_opt_timer_prev.disabled = false;
+            rs->btn_opt_timer_prev.subtitle = NULL;
+
+            rs->btn_opt_timer_next.bounds = (Rectangle){
+                opt_x + opt_w - opt_arrow_sz, opt_y, opt_arrow_sz, opt_arrow_sz };
+            rs->btn_opt_timer_next.label = ">";
+            rs->btn_opt_timer_next.visible = opt_vis;
+            rs->btn_opt_timer_next.disabled = false;
+            rs->btn_opt_timer_next.subtitle = NULL;
+
+            /* Row 1: Point Goal */
+            float row1_y = opt_y + opt_row_h;
+            rs->btn_opt_points_prev.bounds = (Rectangle){
+                opt_x, row1_y, opt_arrow_sz, opt_arrow_sz };
+            rs->btn_opt_points_prev.label = "<";
+            rs->btn_opt_points_prev.visible = opt_vis;
+            rs->btn_opt_points_prev.disabled = false;
+            rs->btn_opt_points_prev.subtitle = NULL;
+
+            rs->btn_opt_points_next.bounds = (Rectangle){
+                opt_x + opt_w - opt_arrow_sz, row1_y, opt_arrow_sz, opt_arrow_sz };
+            rs->btn_opt_points_next.label = ">";
+            rs->btn_opt_points_next.visible = opt_vis;
+            rs->btn_opt_points_next.disabled = false;
+            rs->btn_opt_points_next.subtitle = NULL;
+
+            /* Row 2: Gamemode */
+            float row2_y = opt_y + opt_row_h * 2.0f;
+            rs->btn_opt_mode_prev.bounds = (Rectangle){
+                opt_x, row2_y, opt_arrow_sz, opt_arrow_sz };
+            rs->btn_opt_mode_prev.label = "<";
+            rs->btn_opt_mode_prev.visible = opt_vis;
+            rs->btn_opt_mode_prev.disabled = false;
+            rs->btn_opt_mode_prev.subtitle = NULL;
+
+            rs->btn_opt_mode_next.bounds = (Rectangle){
+                opt_x + opt_w - opt_arrow_sz, row2_y, opt_arrow_sz, opt_arrow_sz };
+            rs->btn_opt_mode_next.label = ">";
+            rs->btn_opt_mode_next.visible = opt_vis;
+            rs->btn_opt_mode_next.disabled = false;
+            rs->btn_opt_mode_next.subtitle = NULL;
+        }
+
+        /* AI section — upper-right, parallel to seat list */
+        float ai_btn_w = 140.0f * s;
+        float ai_btn_gap = 6.0f * s;
+        float ai_btn_x = screen_cx + 160.0f * s;
+        float ai_btn_y = screen_cy - 20.0f * s;
+        float arrow_sz = 22.0f * s;
+
+        /* AI Difficulty arrow selector: [<] value [>] */
+        float diff_row_y = ai_btn_y;
+        rs->btn_online_ai_diff_prev.bounds = (Rectangle){
+            ai_btn_x, diff_row_y, arrow_sz, arrow_sz
+        };
+        rs->btn_online_ai_diff_prev.label = "<";
+        rs->btn_online_ai_diff_prev.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_ai_diff_prev.disabled = false;
+        rs->btn_online_ai_diff_prev.subtitle = NULL;
+
+        rs->btn_online_ai_diff_next.bounds = (Rectangle){
+            ai_btn_x + ai_btn_w - arrow_sz, diff_row_y, arrow_sz, arrow_sz
+        };
+        rs->btn_online_ai_diff_next.label = ">";
+        rs->btn_online_ai_diff_next.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_ai_diff_next.disabled = false;
+        rs->btn_online_ai_diff_next.subtitle = NULL;
+
+        rs->btn_online_add_ai.bounds = (Rectangle){
+            ai_btn_x,
+            ai_btn_y + arrow_sz + ai_btn_gap + 16.0f * s,
+            ai_btn_w, small_btn_h
+        };
+        rs->btn_online_add_ai.label = "Add AI";
+        rs->btn_online_add_ai.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_add_ai.disabled = (occupied >= NET_MAX_PLAYERS);
+
+        bool has_ai = false;
+        if (rs->online_ui) {
+            for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+                if (rs->online_ui->slot_is_ai[i]) { has_ai = true; break; }
+            }
+        }
+        rs->btn_online_remove_ai.bounds = (Rectangle){
+            ai_btn_x,
+            ai_btn_y + arrow_sz + ai_btn_gap + 16.0f * s + small_btn_h + ai_btn_gap,
+            ai_btn_w, small_btn_h
+        };
+        rs->btn_online_remove_ai.label = "Remove AI";
+        rs->btn_online_remove_ai.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_remove_ai.disabled = !has_ai;
+
+        /* Cancel and Start Game — side by side at the bottom */
+        float bottom_y = screen_cy + 185.0f * s;
+        float pair_gap = 16.0f * s;
+        float pair_btn_w = (small_btn_w * 2.0f - pair_gap) * 0.5f;
+
+        /* Cancel on the left */
+        if (sub == ONLINE_SUB_CREATE_WAITING) {
+            rs->btn_online_cancel.bounds = (Rectangle){
+                screen_cx - pair_btn_w - pair_gap * 0.5f,
+                bottom_y,
+                pair_btn_w, small_btn_h
+            };
+        } else if (sub == ONLINE_SUB_CONNECTED_WAITING) {
+            /* Centered at the bottom for joiners */
+            rs->btn_online_cancel.bounds = (Rectangle){
+                screen_cx - small_btn_w * 0.5f,
+                bottom_y,
+                small_btn_w, small_btn_h
+            };
+        } else if (sub == ONLINE_SUB_ERROR) {
+            /* Error: "Try Again" and "Back" side by side */
+            rs->btn_online_cancel.bounds = (Rectangle){
+                screen_cx - pair_btn_w - pair_gap * 0.5f,
+                screen_cy + 125.0f * s,
+                pair_btn_w, small_btn_h
+            };
+        } else {
+            /* Centered for other sub-states */
+            rs->btn_online_cancel.bounds = (Rectangle){
+                screen_cx - small_btn_w * 0.5f,
+                screen_cy + 125.0f * s,
+                small_btn_w, small_btn_h
+            };
+        }
+        rs->btn_online_cancel.label =
+            (sub == ONLINE_SUB_ERROR) ? "Back" :
+            (sub == ONLINE_SUB_CONNECTED_WAITING) ? "Exit Room" : "Cancel";
+        rs->btn_online_cancel.visible =
+            (sub == ONLINE_SUB_CREATE_WAITING ||
+             sub == ONLINE_SUB_JOIN_INPUT ||
+             sub == ONLINE_SUB_JOIN_WAITING ||
+             sub == ONLINE_SUB_QUEUE_SEARCHING ||
+             sub == ONLINE_SUB_CONNECTED_WAITING ||
+             sub == ONLINE_SUB_ERROR);
+        rs->btn_online_cancel.disabled = false;
+
+        /* Try Again button (error screen only) */
+        rs->btn_online_try_again.bounds = (Rectangle){
+            screen_cx + pair_gap * 0.5f,
+            screen_cy + 125.0f * s,
+            pair_btn_w, small_btn_h
+        };
+        rs->btn_online_try_again.label = "Try Again";
+        rs->btn_online_try_again.visible = (sub == ONLINE_SUB_ERROR);
+        rs->btn_online_try_again.disabled = false;
+
+        /* Start Game on the right */
+        rs->btn_online_start_game.bounds = (Rectangle){
+            screen_cx + pair_gap * 0.5f,
+            bottom_y,
+            pair_btn_w, small_btn_h
+        };
+        rs->btn_online_start_game.label = "Start Game";
+        rs->btn_online_start_game.visible = (sub == ONLINE_SUB_CREATE_WAITING);
+        rs->btn_online_start_game.disabled = (occupied < NET_MAX_PLAYERS);
+    } else {
+        for (int i = 0; i < ONLINE_BTN_MAX; i++)
+            rs->online_btns[i].visible = false;
+        rs->btn_online_join_submit.visible = false;
+        rs->btn_online_ai_diff_prev.visible = false;
+        rs->btn_online_ai_diff_next.visible = false;
+        rs->btn_online_add_ai.visible = false;
+        rs->btn_online_remove_ai.visible = false;
+        rs->btn_online_start_game.visible = false;
+        rs->btn_online_cancel.visible = false;
+        rs->btn_online_try_again.visible = false;
+    }
+
+    /* ---- Stats screen buttons ---- */
+    if (gs->phase == PHASE_STATS) {
+        float screen_cx = cfg->screen_width * 0.5f;
+
+        /* Tab buttons */
+        float tab_w = 140.0f * s;
+        float tab_h = 36.0f * s;
+        float tab_gap = 8.0f * s;
+        float tab_total_w = STATS_TAB_COUNT * tab_w +
+                            (STATS_TAB_COUNT - 1) * tab_gap;
+        float tab_start_x = screen_cx - tab_total_w * 0.5f;
+        int title_size = (int)(32.0f * s);
+        float tab_y = 30.0f * s + (float)title_size + 16.0f * s;
+        for (int t = 0; t < STATS_TAB_COUNT; t++) {
+            rs->stats_tab_btns[t].bounds = (Rectangle){
+                tab_start_x + (float)t * (tab_w + tab_gap),
+                tab_y, tab_w, tab_h
+            };
+            rs->stats_tab_btns[t].visible = true;
+            rs->stats_tab_btns[t].disabled = false;
+        }
+
+        /* Back button at bottom */
+        float btn_w = 200.0f * s;
+        float btn_h = 45.0f * s;
+        rs->btn_stats_back.bounds = (Rectangle){
+            screen_cx - btn_w * 0.5f,
+            cfg->screen_height - btn_h - 20.0f * s,
+            btn_w, btn_h
+        };
+        rs->btn_stats_back.label = "Back";
+        rs->btn_stats_back.visible = true;
+        rs->btn_stats_back.disabled = false;
+    } else {
+        rs->btn_stats_back.visible = false;
+        for (int t = 0; t < STATS_TAB_COUNT; t++)
+            rs->stats_tab_btns[t].visible = false;
+    }
+
     rs->btn_confirm_pass.bounds = btn_rect;
-    rs->btn_confirm_pass.label = "Confirm Pass";
-    if (rs->pass_anim_in_progress) {
+    rs->btn_confirm_pass.label = (gs->pass_card_count == 0) ? "Ready" : "Confirm Pass";
+    if ((rs->pass_anim_in_progress && rs->pass_subphase != PASS_SUB_CARD_PASS) ||
+        rs->pass_ready_waiting) {
         rs->btn_confirm_pass.visible = false;
     } else if (rs->contract_ui_active) {
         rs->btn_confirm_pass.visible =
@@ -398,30 +904,8 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         rs->btn_continue.visible = false;
     }
 
-    /* ---- Transmutation inventory buttons ---- */
-    {
-        Rectangle lp = layout_left_panel_lower(cfg);
-        float btn_w = lp.width - 16.0f * s;
-        float btn_h = 28.0f * s;
-        float btn_gap = 4.0f * s;
-        /* Position after Contract + Bonuses sections.
-         * Worst case: ~100px headers + 8 bonus lines * 14px = ~210px at 720p. */
-        float y_start = lp.y + 260.0f * s;
-
-        for (int i = 0; i < rs->transmute_btn_count; i++) {
-            rs->transmute_btns[i].bounds = (Rectangle){
-                lp.x + 8.0f * s,
-                y_start + (float)i * (btn_h + btn_gap),
-                btn_w, btn_h
-            };
-            rs->transmute_btns[i].visible = true;
-            rs->transmute_btns[i].disabled = false;
-            rs->transmute_btns[i].subtitle = NULL;
-            rs->transmute_btns[i].pressed =
-                (rs->pending_transmutation_id >= 0 &&
-                 rs->transmute_btn_ids[i] == rs->pending_transmutation_id);
-        }
-    }
+    /* Transmutation card rects are computed in draw_left_panel_info()
+     * where the running y position is known. */
 
     /* ---- Settings screen buttons ---- */
     if (gs->phase == PHASE_SETTINGS) {
@@ -434,7 +918,7 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
         float cx = scx;
 
         /* Tab bar layout */
-        static const char *tab_labels[] = {"Display", "Gameplay", "Audio"};
+        static const char *tab_labels[] = {"Display", "Gameplay", "Audio", "Account"};
         float tab_w = 140.0f * s;
         float tab_h = 36.0f * s;
         float tab_gap = 8.0f * s;
@@ -451,15 +935,15 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->settings_tab_btns[t].subtitle = NULL;
         }
 
-        /* Row ranges per tab: Display=0..2, Gameplay=3..5, Audio=6..8 */
-        static const int tab_row_start[] = {0, 3, 6};
-        static const int tab_row_end[]   = {3, 6, 9}; /* exclusive */
+        /* Row ranges per tab: Display=0..2, Gameplay=3..4, Audio=5..7, Account=none */
+        static const int tab_row_start[] = {0, 3, 5, 8};
+        static const int tab_row_end[]   = {3, 5, 8, 8}; /* exclusive; Account has no rows */
         int rstart = tab_row_start[rs->settings_tab];
         int rend   = tab_row_end[rs->settings_tab];
 
         static const char *labels[] = {
             "Window Mode", "Resolution", "FPS Cap",
-            "Anim Speed", "AI Speed", "Auto-Sort Received",
+            "Anim Speed", "Auto-Sort",
             "Master Volume", "Music Volume", "SFX Volume"
         };
 
@@ -510,6 +994,78 @@ static void sync_buttons(const GameState *gs, RenderState *rs)
             rs->btn_settings_apply.subtitle = NULL;
         } else {
             rs->btn_settings_apply.visible = false;
+        }
+
+        /* Account tab buttons */
+        if (rs->settings_tab == SETTINGS_TAB_ACCOUNT) {
+            float abtn_w = 240.0f * s;
+            float abtn_h = 45.0f * s;
+            float abtn_x = scx - abtn_w * 0.5f;
+
+            if (!rs->account_confirm_active) {
+                float arefresh_w = 80.0f * s;
+                float arefresh_h = 28.0f * s;
+                float import_y = content_y + abtn_h + 15.0f * s;
+
+                rs->btn_account_export.bounds = (Rectangle){
+                    abtn_x, content_y, abtn_w, abtn_h};
+                rs->btn_account_export.label = "Export Identity";
+                rs->btn_account_export.subtitle = "~/hollow-hearts-identity.bak";
+                rs->btn_account_export.visible = true;
+                rs->btn_account_export.disabled = false;
+
+                rs->btn_account_import.bounds = (Rectangle){
+                    abtn_x, import_y, abtn_w, abtn_h};
+                rs->btn_account_import.label = "Import Identity";
+                rs->btn_account_import.subtitle = NULL;
+                rs->btn_account_import.visible = true;
+                rs->btn_account_import.disabled = !rs->backup_exists;
+
+                rs->btn_account_refresh.bounds = (Rectangle){
+                    abtn_x + abtn_w + 6.0f * s,
+                    import_y + (abtn_h - arefresh_h) * 0.5f,
+                    arefresh_w, arefresh_h};
+                rs->btn_account_refresh.label = "Re-check";
+                rs->btn_account_refresh.subtitle = NULL;
+                rs->btn_account_refresh.visible = true;
+                rs->btn_account_refresh.disabled = false;
+
+                rs->btn_account_confirm_yes.visible = false;
+                rs->btn_account_confirm_no.visible = false;
+            } else {
+                /* Confirmation dialog */
+                rs->btn_account_export.visible = false;
+                rs->btn_account_import.visible = false;
+                rs->btn_account_refresh.visible = false;
+
+                float cbtn_w = 120.0f * s;
+                float cbtn_h = 40.0f * s;
+                float cbtn_gap = 20.0f * s;
+                float cbtn_y = content_y + 50.0f * s;
+
+                rs->btn_account_confirm_yes.bounds = (Rectangle){
+                    scx - cbtn_w - cbtn_gap * 0.5f, cbtn_y, cbtn_w, cbtn_h};
+                rs->btn_account_confirm_yes.label = "Yes";
+                rs->btn_account_confirm_yes.subtitle = NULL;
+                rs->btn_account_confirm_yes.visible = true;
+                rs->btn_account_confirm_yes.disabled = false;
+
+                rs->btn_account_confirm_no.bounds = (Rectangle){
+                    scx + cbtn_gap * 0.5f, cbtn_y, cbtn_w, cbtn_h};
+                rs->btn_account_confirm_no.label = "Cancel";
+                rs->btn_account_confirm_no.subtitle = NULL;
+                rs->btn_account_confirm_no.visible = true;
+                rs->btn_account_confirm_no.disabled = false;
+            }
+
+            /* Override after_rows_y for Back button positioning */
+            after_rows_y = content_y + 2.0f * (abtn_h + 15.0f * s);
+        } else {
+            rs->btn_account_export.visible = false;
+            rs->btn_account_import.visible = false;
+            rs->btn_account_refresh.visible = false;
+            rs->btn_account_confirm_yes.visible = false;
+            rs->btn_account_confirm_no.visible = false;
         }
 
         /* Back button — always below content area */
@@ -611,6 +1167,18 @@ void render_init(RenderState *rs)
     rs->layout_dirty = true;
     rs->sync_needed = true;
     rs->anim_play_player = -1;
+    rs->anim_trick_slot = -1;
+    rs->suit_hover_active = false;
+    rs->suit_hover_idx = -1;
+    rs->suit_border_t = 0.0f;
+    rs->rogue_target_player = -1;
+    rs->staged_rogue_cv_count = 0;
+    rs->rogue_border_active = false;
+    rs->rogue_border_progress = 0.0f;
+    rs->staged_duel_cv_idx = -1;
+    rs->staged_duel_own_cv_idx = -1;
+    rs->duel_border_active = false;
+    rs->duel_border_progress = 0.0f;
 
     /* Initialize mutable layout with defaults */
     layout_recalculate(&rs->layout, 1280, 720);
@@ -632,19 +1200,37 @@ void render_init(RenderState *rs)
 
     rs->transmute_btn_count = 0;
     rs->pending_transmutation_id = -1;
-    rs->transmute_info_count = 0;
+    rs->transmute_drop_target = -1;
     for (int i = 0; i < MAX_HAND_SIZE; i++)
         rs->hand_transmute_ids[i] = -1;
     for (int i = 0; i < CARDS_PER_TRICK; i++)
         rs->trick_transmute_ids[i] = -1;
+    for (int i = 0; i < CARDS_PER_TRICK; i++) {
+        rs->mirror_source_tid[i] = -1;
+        rs->mirror_morphed[i] = false;
+        rs->mirror_morph_timer[i] = 0.0f;
+    }
+
+    rs->transmute_tooltip.transmute_id = -1;
+    rs->transmute_tooltip.anim_t = 0.0f;
+    rs->transmute_tooltip.active = false;
+    rs->chat_hover_tid = -1;
+    rs->chat_hover_trick_num = -1;
+    rs->trick_tooltip.trick_num = -1;
+    rs->trick_tooltip.anim_t = 0.0f;
+    rs->trick_tooltip.active = false;
+    rs->trick_history_count = 0;
+    rs->info_contract_sprite_count = 0;
 
     for (int i = 0; i < CHAT_LOG_MAX; i++)
         rs->chat_colors[i] = LIGHTGRAY;
 
     rs->deal_complete = false;
+    rs->deal_anim = false;
 
     rs->pile_card_count = 0;
     rs->pile_anim_in_progress = false;
+    rs->trick_anim_in_progress = false;
 
     rs->pass_staged_count = 0;
     rs->pass_anim_in_progress = false;
@@ -657,7 +1243,7 @@ void render_init(RenderState *rs)
     particle_init(&rs->particles);
 
     /* Fog shader */
-    rs->fog_shader = LoadShader(NULL, "assets/shaders/fog.fs");
+    rs->fog_shader = res_load_shader(NULL, "assets/shaders/fog.fs");
     if (rs->fog_shader.id > 0) {
         rs->fog_loc_time = GetShaderLocation(rs->fog_shader, "time");
         rs->fog_loc_opacity = GetShaderLocation(rs->fog_shader, "opacity");
@@ -668,40 +1254,149 @@ void render_init(RenderState *rs)
     }
     for (int i = 0; i < MAX_HAND_SIZE; i++) rs->hand_fog_mode[i] = 0;
     for (int i = 0; i < CARDS_PER_TRICK; i++) rs->trick_fog_mode[i] = 0;
+
+    /* Custom fonts — one per used size for crisp rendering */
+    static const int base_sizes[FONT_SIZE_COUNT] = {
+        14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 36, 40, 48
+    };
+    rs->font_loaded = true;
+    for (int i = 0; i < FONT_SIZE_COUNT; i++) {
+        rs->font_base_sizes[i] = base_sizes[i];
+        rs->fonts[i] = res_load_font("assets/fonts/Lora-VariableFont_wght.ttf",
+                                    base_sizes[i]);
+        if (rs->fonts[i].texture.id == 0) {
+            rs->font_loaded = false;
+        } else {
+            SetTextureFilter(rs->fonts[i].texture, TEXTURE_FILTER_BILINEAR);
+        }
+    }
+
+    /* Default player names */
+    for (int i = 0; i < NUM_PLAYERS; i++)
+        snprintf(rs->player_names[i], sizeof(rs->player_names[i]), "%s",
+                 s_default_names[i]);
+
+    rs->local_seat = -1;
+
+    /* Help menu */
+    help_menu_load(&rs->help_menu, "assets/defs/help-menu.json", "hollow_hearts");
+}
+
+/* ---- Font-aware text helpers ---- */
+
+/* Pick the font whose base size is closest to (and >= ) the requested size.
+ * Falls back to the largest font if all are smaller. */
+static Font pick_font(const RenderState *rs, int font_size)
+{
+    int best = 0;
+    int best_diff = abs(rs->font_base_sizes[0] - font_size);
+    for (int i = 1; i < FONT_SIZE_COUNT; i++) {
+        int diff = abs(rs->font_base_sizes[i] - font_size);
+        if (diff < best_diff) {
+            best = i;
+            best_diff = diff;
+        }
+    }
+    return rs->fonts[best];
+}
+
+void hh_draw_text(const RenderState *rs, const char *text, int x, int y,
+                  int font_size, Color color)
+{
+    if (rs->font_loaded) {
+        Font f = pick_font(rs, font_size);
+        DrawTextEx(f, text, (Vector2){(float)x, (float)y},
+                   (float)f.baseSize, 1.0f, color);
+    } else {
+        DrawText(text, x, y, font_size, color);
+    }
+}
+
+int hh_measure_text(const RenderState *rs, const char *text, int font_size)
+{
+    if (rs->font_loaded) {
+        Font f = pick_font(rs, font_size);
+        Vector2 size = MeasureTextEx(f, text, (float)f.baseSize, 1.0f);
+        return (int)size.x;
+    }
+    return MeasureText(text, font_size);
 }
 
 void render_reset_to_menu(RenderState *rs)
 {
     rs->pause_state = PAUSE_INACTIVE;
     render_clear_piles(rs);
+    rs->trick_history_count = 0;
+    for (int i = 0; i < NUM_PLAYERS; i++)
+        snprintf(rs->player_names[i], sizeof(rs->player_names[i]), "%s",
+                 s_default_names[i]);
     rs->pass_staged_count = 0;
     rs->pass_anim_in_progress = false;
     rs->pile_anim_in_progress = false;
+    rs->trick_anim_in_progress = false;
     rs->deal_complete = false;
+    rs->deal_anim = false;
     rs->card_count = 0;
     for (int i = 0; i < NUM_PLAYERS; i++)
         rs->hand_visual_counts[i] = 0;
     rs->trick_visual_count = 0;
     rs->sync_needed = true;
+    rs->phase2_enabled = false;
+    rs->draft_waiting = false;
+    rs->draft_wait_border_t = 0.0f;
+    rs->draft_fadeout_t = 0.0f;
     memset(rs->hand_fog_mode, 0, sizeof(rs->hand_fog_mode));
     memset(rs->trick_fog_mode, 0, sizeof(rs->trick_fog_mode));
+    render_chat_log_clear(rs);
 }
 
 void render_update(const GameState *gs, RenderState *rs, float dt)
 {
+    /* Account status text fade-out */
+    if (rs->account_status_timer > 0.0f)
+        rs->account_status_timer -= dt;
+
     rs->pass_card_limit = gs->pass_card_count;
 
-    /* Detect phase change */
-    if (gs->phase != rs->current_phase) {
+    /* Sync player names from online UI (usernames replace cardinal dirs).
+     * online_ui->player_names is in absolute server seat order, but
+     * rs->player_names is in local rotated render space (player 0 = local
+     * viewer). Remap with local = (server - my_seat + N) % N so labels
+     * align with the gameplay state, which state_recv.c has already
+     * rotated. For non-host players this is what makes the score table
+     * and on-board labels show the correct username per seat. */
+    if (rs->online_ui) {
+        int seat = (rs->local_seat >= 0 && rs->local_seat < NUM_PLAYERS)
+                       ? rs->local_seat
+                       : 0;
+        for (int i = 0; i < NUM_PLAYERS; i++) {
+            if (rs->online_ui->player_names[i][0] != '\0') {
+                int local = (i - seat + NUM_PLAYERS) % NUM_PLAYERS;
+                snprintf(rs->player_names[local],
+                         sizeof(rs->player_names[local]), "%s",
+                         rs->online_ui->player_names[i]);
+            }
+        }
+    }
+
+    /* Detect phase change.
+     * PHASE_SETTINGS is a temporary UI overlay — don't flag it as a
+     * real phase change so the sync block doesn't wipe card visuals. */
+    if (gs->phase != rs->current_phase &&
+        gs->phase != PHASE_SETTINGS &&
+        rs->current_phase != PHASE_SETTINGS) {
         rs->phase_just_changed = true;
         rs->phase_timer = 0.0f;
         rs->current_phase = gs->phase;
         rs->layout_dirty = true;
 
-        /* Clear selection on phase change */
+        /* Clear selection and waiting state on phase change */
         render_clear_selection(rs);
+        rs->pass_ready_waiting = false;
     } else {
         rs->phase_just_changed = false;
+        if (gs->phase != rs->current_phase)
+            rs->current_phase = gs->phase;
     }
 
     rs->phase_timer += dt;
@@ -734,9 +1429,10 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
 
     if ((rs->phase_just_changed || rs->sync_needed) &&
         !rs->pass_anim_in_progress && !rs->pile_anim_in_progress &&
-        !rs->drag.active) {
-        /* Clear any pending snap-back — sync rebuilds visuals */
-        if (rs->drag.snap_back) {
+        !rs->trick_anim_in_progress) {
+        /* Clear any pending snap-back — sync rebuilds visuals.
+         * Skip if drag is active (snap_back from a previous drag). */
+        if (rs->drag.snap_back && !rs->drag.active) {
             rs->drag.snap_back = false;
             rs->drag.card_visual_idx = -1;
             rs->drag.has_release_pos = false;
@@ -764,6 +1460,33 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             }
         }
 
+        /* Save staged rogue/duel card visuals before resync.
+         * These are opponent cards being animated to/from center with
+         * manually set face_up/card/z_order that sync_hands would clobber. */
+        CardVisual saved_rogue_cvs[MAX_HAND_SIZE];
+        int saved_rogue_cv_indices[MAX_HAND_SIZE];
+        int saved_rogue_cv_count = 0;
+        for (int i = 0; i < rs->staged_rogue_cv_count; i++) {
+            int idx = rs->staged_rogue_cv_indices[i];
+            if (idx >= 0 && idx < rs->card_count) {
+                saved_rogue_cv_indices[saved_rogue_cv_count] = idx;
+                saved_rogue_cvs[saved_rogue_cv_count] = rs->cards[idx];
+                saved_rogue_cv_count++;
+            }
+        }
+        CardVisual saved_duel_cv = {0};
+        int saved_duel_cv_idx = -1;
+        if (rs->staged_duel_cv_idx >= 0 && rs->staged_duel_cv_idx < rs->card_count) {
+            saved_duel_cv_idx = rs->staged_duel_cv_idx;
+            saved_duel_cv = rs->cards[saved_duel_cv_idx];
+        }
+        CardVisual saved_duel_own_cv = {0};
+        int saved_duel_own_cv_idx = -1;
+        if (rs->staged_duel_own_cv_idx >= 0 && rs->staged_duel_own_cv_idx < rs->card_count) {
+            saved_duel_own_cv_idx = rs->staged_duel_own_cv_idx;
+            saved_duel_own_cv = rs->cards[saved_duel_own_cv_idx];
+        }
+
         /* Save hover_t for human hand cards */
         struct { Card card; float hover_t; } saved_hover[MAX_HAND_SIZE];
         int saved_hover_count = 0;
@@ -776,19 +1499,49 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             }
         }
 
+        /* Save dragged card state before resync — sync_hands rebuilds
+         * all visuals, invalidating drag.card_visual_idx. */
+        Card saved_drag_card = {0};
+        CardVisual saved_drag_cv = {0};
+        bool had_active_drag = rs->drag.active
+                               && !rs->drag.is_transmute_drag
+                               && rs->drag.card_visual_idx >= 0
+                               && rs->drag.card_visual_idx < rs->card_count;
+        if (had_active_drag) {
+            saved_drag_card = rs->cards[rs->drag.card_visual_idx].card;
+            saved_drag_cv = rs->cards[rs->drag.card_visual_idx];
+        }
+
         if (gs->phase == PHASE_DEALING) {
             sync_deal(gs, rs);
         } else {
             sync_hands(gs, rs);
         }
 
-        /* Restore selections by matching card identity */
+        /* Restore selections by matching card identity.
+         * Online: use server-authoritative pass_selections[0].
+         * Offline: use saved visual state (server hasn't seen selections yet). */
         rs->selected_count = 0;
-        if (gs->phase == PHASE_PASSING && saved_count > 0) {
-            for (int si = 0; si < saved_count; si++) {
+        if (gs->phase == PHASE_PASSING) {
+            Card source[MAX_PASS_CARD_COUNT];
+            int source_count = 0;
+            /* Use server-authoritative selections if available;
+             * otherwise preserve local visual selections (player
+             * hasn't confirmed yet, so server has no data). */
+            for (int i = 0; i < gs->pass_card_count && i < MAX_PASS_CARD_COUNT; i++) {
+                if (!card_is_none(gs->pass_selections[0][i]))
+                    source[source_count++] = gs->pass_selections[0][i];
+            }
+            if (source_count == 0) {
+                source_count = saved_count;
+                for (int i = 0; i < saved_count; i++)
+                    source[i] = saved_selected[i];
+            }
+            for (int si = 0; si < source_count; si++) {
                 for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
                     int idx = rs->hand_visuals[HUMAN_PLAYER][i];
-                    if (card_equals(rs->cards[idx].card, saved_selected[si])) {
+                    if (idx >= 0 && idx < rs->card_count &&
+                        card_equals(rs->cards[idx].card, source[si])) {
                         rs->selected_indices[rs->selected_count++] = idx;
                         rs->cards[idx].selected = true;
                         break;
@@ -824,9 +1577,56 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             }
         }
 
-        /* Animate the last trick card from hand/release position to trick slot */
+        /* Restore dragged card visual — find new cv index by card identity */
+        if (had_active_drag) {
+            int new_idx = -1;
+            for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+                int idx = rs->hand_visuals[HUMAN_PLAYER][i];
+                if (idx >= 0 && idx < rs->card_count &&
+                    card_equals(rs->cards[idx].card, saved_drag_card)) {
+                    new_idx = idx;
+                    break;
+                }
+            }
+            if (new_idx >= 0) {
+                /* Restore visual state, keep server-fresh card metadata */
+                Card fresh_card = rs->cards[new_idx].card;
+                int fresh_tid = rs->cards[new_idx].transmute_id;
+                uint8_t fresh_fog = rs->cards[new_idx].fog_mode;
+                float fresh_fog_t = rs->cards[new_idx].fog_reveal_t;
+                rs->cards[new_idx] = saved_drag_cv;
+                rs->cards[new_idx].card = fresh_card;
+                rs->cards[new_idx].transmute_id = fresh_tid;
+                rs->cards[new_idx].fog_mode = fresh_fog;
+                rs->cards[new_idx].fog_reveal_t = fresh_fog_t;
+                rs->drag.card_visual_idx = new_idx;
+                /* Rebuild rearrange_map for potentially new hand count */
+                int hcount = rs->hand_visual_counts[HUMAN_PLAYER];
+                int src = rs->drag.hand_slot_origin;
+                /* Safety clamp — hcount==0 is unreachable here because the
+                 * card_equals lookup above would have failed first. */
+                if (src >= hcount) src = hcount - 1;
+                rs->drag.hand_slot_origin = src;
+                rs->drag.rearrange_count = 0;
+                for (int i = 0; i < hcount; i++) {
+                    if (i == src) continue;
+                    rs->drag.rearrange_map[rs->drag.rearrange_count++] = i;
+                }
+            } else {
+                /* Card removed from hand by server — cancel drag */
+                render_cancel_drag(rs);
+            }
+        }
+
+        /* Animate a trick card from hand/release position to trick slot.
+         * anim_trick_slot selects the specific card sequentially,
+         * falling back to the last trick visual. */
+        int anim_slot = rs->anim_trick_slot;
+        rs->anim_trick_slot = -1;
+        if (anim_slot < 0 || anim_slot >= rs->trick_visual_count)
+            anim_slot = rs->trick_visual_count - 1;
         if (anim_player >= 0 && rs->trick_visual_count > 0) {
-            int trick_idx = rs->trick_visuals[rs->trick_visual_count - 1];
+            int trick_idx = rs->trick_visuals[anim_slot];
             CardVisual *cv = &rs->cards[trick_idx];
 
             Vector2 start_pos;
@@ -845,11 +1645,13 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                                     &rs->drag.velocity,
                                     ANIM_TOSS_DURATION, 0.0f);
                 } else {
-                    /* TOSS_CLICK or TOSS_DROP: simple straight-line animation */
-                    cv->position = start_pos;
-                    cv->rotation = 0.0f;
-                    anim_start(cv, target, 0.0f, ANIM_PLAY_CARD_DURATION,
-                                    EASE_OUT_QUAD);
+                    /* TOSS_CLICK or TOSS_DROP: toss with extra scatter */
+                    Vector2 scattered = {
+                        target.x + (float)GetRandomValue(-8, 8),
+                        target.y + (float)GetRandomValue(-8, 8),
+                    };
+                    anim_setup_toss(cv, start_pos, 0.0f, scattered,
+                                    NULL, ANIM_TOSS_DURATION, 0.0f);
                 }
             } else {
                 /* AI players: bezier toss with randomized "personality" */
@@ -876,6 +1678,25 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                                     EASE_OUT_QUAD);
                 }
             }
+
+            /* Block further syncs while this card animation plays.
+             * Set here (after animation setup) rather than in flow_update,
+             * so the sync block isn't gated before the animation is created. */
+            rs->trick_anim_in_progress = true;
+        }
+
+        /* Restore staged rogue/duel card visuals — sync_hands rebuilt them
+         * as face-down opponent cards, losing face_up/card/z_order/position. */
+        for (int i = 0; i < saved_rogue_cv_count; i++) {
+            int idx = saved_rogue_cv_indices[i];
+            if (idx >= 0 && idx < rs->card_count)
+                rs->cards[idx] = saved_rogue_cvs[i];
+        }
+        if (saved_duel_cv_idx >= 0 && saved_duel_cv_idx < rs->card_count) {
+            rs->cards[saved_duel_cv_idx] = saved_duel_cv;
+        }
+        if (saved_duel_own_cv_idx >= 0 && saved_duel_own_cv_idx < rs->card_count) {
+            rs->cards[saved_duel_own_cv_idx] = saved_duel_own_cv;
         }
 
         rs->sync_needed = false;
@@ -951,8 +1772,12 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             break;
 
         case SCORE_SUB_CONTRACTS:
-            /* Staggered reveal of contract rows */
-            if (rs->contract_reveal_count < rs->contract_result_count) {
+            if (rs->contract_result_count == 0) {
+                /* Nobody achieved a contract — show message and button */
+                rs->contract_reveal_count = 1;
+                rs->btn_continue.visible = true;
+            } else if (rs->contract_reveal_count < rs->contract_result_count) {
+                /* Staggered reveal of contract rows */
                 rs->contract_reveal_timer -= dt;
                 if (rs->contract_reveal_timer <= 0.0f) {
                     rs->contract_reveal_count++;
@@ -1005,9 +1830,10 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                 rs->cards[idx].face_up = true;
             }
             for (int p = 0; p < NUM_PLAYERS; p++) {
+                int layer = (p == HUMAN_PLAYER) ? 50 : 0;
                 for (int i = 0; i < rs->hand_visual_counts[p]; i++) {
                     int idx = rs->hand_visuals[p][i];
-                    rs->cards[idx].z_order = i;
+                    rs->cards[idx].z_order = layer + i;
                 }
             }
         }
@@ -1036,14 +1862,8 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
             rs->cards[idx].hovered = false;
         }
     }
-    if (rs->opponent_hover_active) {
-        Vector2 mouse = GetMousePosition();
-        int opp = -1;
-        int hit = render_hit_test_opponent_card(rs, mouse, &opp);
-        if (hit >= 0) {
-            rs->cards[hit].hovered = true;
-        }
-    }
+    /* Opponent card hover removed: selection is by name indicator,
+     * not individual cards (server picks randomly). */
 
     /* Drag tracking: smooth card follow */
     if (rs->drag.active && rs->drag.card_visual_idx >= 0 &&
@@ -1066,10 +1886,25 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         dcv->hovered = false;
         dcv->hover_t = 0.5f;         /* subtle lifted feel (7.5% scale, half lift) */
 
-        /* Velocity tracking from raw (unsmoothed) target for accurate flick detection */
+        /* Velocity tracking: store per-frame sample in ring buffer, then average */
         if (dt > 0.0f) {
-            rs->drag.velocity.x = (target_x - rs->drag.prev_pos.x) / dt;
-            rs->drag.velocity.y = (target_y - rs->drag.prev_pos.y) / dt;
+            Vector2 frame_vel = {
+                (target_x - rs->drag.prev_pos.x) / dt,
+                (target_y - rs->drag.prev_pos.y) / dt,
+            };
+            rs->drag.vel_ring[rs->drag.vel_ring_idx] = frame_vel;
+            rs->drag.vel_ring_idx = (rs->drag.vel_ring_idx + 1) % DRAG_VEL_SAMPLES;
+            if (rs->drag.vel_ring_count < DRAG_VEL_SAMPLES)
+                rs->drag.vel_ring_count++;
+
+            /* Compute smoothed velocity from ring buffer */
+            Vector2 sum = {0, 0};
+            for (int i = 0; i < rs->drag.vel_ring_count; i++) {
+                sum.x += rs->drag.vel_ring[i].x;
+                sum.y += rs->drag.vel_ring[i].y;
+            }
+            rs->drag.velocity.x = sum.x / rs->drag.vel_ring_count;
+            rs->drag.velocity.y = sum.y / rs->drag.vel_ring_count;
         }
         rs->drag.prev_pos = (Vector2){ target_x, target_y };
 
@@ -1113,6 +1948,44 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                     rs->drag.rearrange_map[rs->drag.rearrange_count++] = others[i];
                 }
             }
+        }
+    }
+
+    /* Transmute card drag tracking */
+    if (rs->drag.active && rs->drag.is_transmute_drag) {
+        Vector2 mouse = GetMousePosition();
+        float target_x = mouse.x - rs->drag.grab_offset.x;
+        float target_y = mouse.y - rs->drag.grab_offset.y;
+        float blend = 1.0f - expf(-20.0f * dt);
+        rs->drag.current_pos.x += (target_x - rs->drag.current_pos.x) * blend;
+        rs->drag.current_pos.y += (target_y - rs->drag.current_pos.y) * blend;
+
+        /* Check if dragged transmute card is over a hand card */
+        rs->transmute_drop_target = render_hit_test_card(rs, mouse);
+
+        /* Slot detection by 2D distance to card center */
+        int count = rs->transmute_btn_count;
+        if (count > 1) {
+            float drag_cx = rs->drag.current_pos.x +
+                            rs->transmute_card_rects[0].width * 0.5f;
+            float drag_cy = rs->drag.current_pos.y +
+                            rs->transmute_card_rects[0].height * 0.5f;
+            int best_slot = rs->drag.transmute_slot_current;
+            float best_dist = 1e9f;
+            for (int i = 0; i < count; i++) {
+                float cx = rs->transmute_card_rects[i].x +
+                           rs->transmute_card_rects[i].width * 0.5f;
+                float cy = rs->transmute_card_rects[i].y +
+                           rs->transmute_card_rects[i].height * 0.5f;
+                float dx = drag_cx - cx;
+                float dy = drag_cy - cy;
+                float d = dx*dx + dy*dy;
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_slot = i;
+                }
+            }
+            rs->drag.transmute_slot_current = best_slot;
         }
     }
 
@@ -1178,37 +2051,10 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
         }
     }
 
-    /* Animate hover_t for opponent hand cards (when opponent_hover_active) */
-    if (rs->opponent_hover_active) {
-        for (int p = 1; p < NUM_PLAYERS; p++) {
-            for (int i = 0; i < rs->hand_visual_counts[p]; i++) {
-                int idx = rs->hand_visuals[p][i];
-                CardVisual *cv = &rs->cards[idx];
-                float hover_target = cv->hovered ? 1.0f : 0.0f;
-                float diff = hover_target - cv->hover_t;
-                if (fabsf(diff) > 0.001f) {
-                    float blend = 1.0f - expf(-HOVER_ANIM_SPEED * dt);
-                    cv->hover_t += diff * blend;
-                    if (fabsf(hover_target - cv->hover_t) < 0.001f)
-                        cv->hover_t = hover_target;
-                } else {
-                    cv->hover_t = hover_target;
-                }
-            }
-        }
-    }
+    /* Opponent card hover_t animation removed: selection is by name
+     * indicator, not individual cards (server picks randomly). */
 
-    /* Update transmute button hover state */
-    if (rs->transmute_btn_count > 0 &&
-        (gs->phase == PHASE_PLAYING || gs->phase == PHASE_PASSING)) {
-        Vector2 mouse = GetMousePosition();
-        for (int i = 0; i < rs->transmute_btn_count; i++) {
-            rs->transmute_btns[i].hovered =
-                rs->transmute_btns[i].visible &&
-                !rs->transmute_btns[i].disabled &&
-                CheckCollisionPointRec(mouse, rs->transmute_btns[i].bounds);
-        }
-    }
+    /* Transmute card hover is handled via hit-testing in process_input */
 
     /* Update contract button hover state */
     if (rs->contract_ui_active && gs->phase == PHASE_PASSING) {
@@ -1218,6 +2064,116 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                 rs->contract_options[i].visible &&
                 CheckCollisionPointRec(mouse, rs->contract_options[i].bounds);
         }
+    }
+
+    /* Update online menu button hover state */
+    if (gs->phase == PHASE_ONLINE_MENU) {
+        Vector2 mouse = GetMousePosition();
+        for (int i = 0; i < rs->online_btn_count; i++) {
+            rs->online_btns[i].hovered =
+                rs->online_btns[i].visible &&
+                CheckCollisionPointRec(mouse, rs->online_btns[i].bounds);
+        }
+        rs->btn_online_join_submit.hovered =
+            rs->btn_online_join_submit.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_online_join_submit.bounds);
+        /* Game options hover */
+        #define OPT_HOVER(btn) \
+            (btn).hovered = (btn).visible && !(btn).disabled && \
+                CheckCollisionPointRec(mouse, (btn).bounds)
+        OPT_HOVER(rs->btn_opt_timer_prev);
+        OPT_HOVER(rs->btn_opt_timer_next);
+        OPT_HOVER(rs->btn_opt_points_prev);
+        OPT_HOVER(rs->btn_opt_points_next);
+        OPT_HOVER(rs->btn_opt_mode_prev);
+        OPT_HOVER(rs->btn_opt_mode_next);
+        #undef OPT_HOVER
+
+        rs->btn_online_ai_diff_prev.hovered =
+            rs->btn_online_ai_diff_prev.visible &&
+            !rs->btn_online_ai_diff_prev.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_ai_diff_prev.bounds);
+        rs->btn_online_ai_diff_next.hovered =
+            rs->btn_online_ai_diff_next.visible &&
+            !rs->btn_online_ai_diff_next.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_ai_diff_next.bounds);
+        rs->btn_online_add_ai.hovered =
+            rs->btn_online_add_ai.visible &&
+            !rs->btn_online_add_ai.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_add_ai.bounds);
+        rs->btn_online_remove_ai.hovered =
+            rs->btn_online_remove_ai.visible &&
+            !rs->btn_online_remove_ai.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_remove_ai.bounds);
+        rs->btn_online_start_game.hovered =
+            rs->btn_online_start_game.visible &&
+            !rs->btn_online_start_game.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_online_start_game.bounds);
+        rs->btn_online_cancel.hovered =
+            rs->btn_online_cancel.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_online_cancel.bounds);
+        rs->btn_online_try_again.hovered =
+            rs->btn_online_try_again.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_online_try_again.bounds);
+    }
+
+    /* Update stats button hover state + leaderboard scroll */
+    if (gs->phase == PHASE_STATS) {
+        Vector2 mouse = GetMousePosition();
+        rs->btn_stats_back.hovered =
+            rs->btn_stats_back.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_stats_back.bounds);
+        for (int t = 0; t < STATS_TAB_COUNT; t++) {
+            rs->stats_tab_btns[t].hovered =
+                rs->stats_tab_btns[t].visible &&
+                CheckCollisionPointRec(mouse, rs->stats_tab_btns[t].bounds);
+        }
+        /* Leaderboard scroll */
+        if (rs->stats_tab == STATS_TAB_LEADERBOARDS && rs->leaderboard_loaded) {
+            float wheel = GetMouseWheelMove();
+            if (wheel != 0.0f) {
+                float s = rs->layout.scale;
+                rs->leaderboard_scroll_y -= wheel * 30.0f * s;
+                float row_h = 28.0f * s;
+                float total_h = row_h * (float)rs->leaderboard_data.count;
+                /* Estimate visible height (similar to draw function) */
+                int title_size = (int)(32.0f * s);
+                float tab_h = 36.0f * s;
+                float content_y = 30.0f * s + (float)title_size + 16.0f * s
+                                  + tab_h + 12.0f * s;
+                float scroll_top = content_y + 8.0f * s + 16.0f * s + 6.0f * s
+                                   + 4.0f * s;
+                float footer_h = 50.0f * s;
+                float back_h = 55.0f * s;
+                float scroll_bottom = rs->layout.screen_height - footer_h
+                                      - back_h - 20.0f * s;
+                float visible_h = scroll_bottom - scroll_top;
+                float max_scroll = total_h - visible_h;
+                if (max_scroll < 0) max_scroll = 0;
+                if (rs->leaderboard_scroll_y < 0)
+                    rs->leaderboard_scroll_y = 0;
+                if (rs->leaderboard_scroll_y > max_scroll)
+                    rs->leaderboard_scroll_y = max_scroll;
+            }
+        }
+    }
+
+    /* Update login button hover state */
+    if (gs->phase == PHASE_LOGIN) {
+        Vector2 mouse = GetMousePosition();
+        rs->btn_login_submit.hovered =
+            rs->btn_login_submit.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_login_submit.bounds);
+        rs->btn_login_retry.hovered =
+            rs->btn_login_retry.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_login_retry.bounds);
+        rs->btn_login_import.hovered =
+            rs->btn_login_import.visible &&
+            !rs->btn_login_import.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_login_import.bounds);
+        rs->btn_login_refresh.hovered =
+            rs->btn_login_refresh.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_login_refresh.bounds);
     }
 
     /* Update menu item hover state */
@@ -1256,9 +2212,226 @@ void render_update(const GameState *gs, RenderState *rs, float dt)
                 !rs->settings_rows_next[i].disabled &&
                 CheckCollisionPointRec(mouse, rs->settings_rows_next[i].bounds);
         }
+        /* Account tab buttons */
+        rs->btn_account_export.hovered =
+            rs->btn_account_export.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_export.bounds);
+        rs->btn_account_import.hovered =
+            rs->btn_account_import.visible &&
+            !rs->btn_account_import.disabled &&
+            CheckCollisionPointRec(mouse, rs->btn_account_import.bounds);
+        rs->btn_account_refresh.hovered =
+            rs->btn_account_refresh.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_refresh.bounds);
+        rs->btn_account_confirm_yes.hovered =
+            rs->btn_account_confirm_yes.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_confirm_yes.bounds);
+        rs->btn_account_confirm_no.hovered =
+            rs->btn_account_confirm_no.visible &&
+            CheckCollisionPointRec(mouse, rs->btn_account_confirm_no.bounds);
     }
 
     sync_buttons(gs, rs);
+
+    /* Transmutation tooltip hover detection */
+    {
+        int tid = -1;
+        Vector2 anchor = {0};
+        float aw = 0, ah = 0;
+        Vector2 mouse = GetMousePosition();
+        bool is_ingame = (gs->phase == PHASE_PASSING || gs->phase == PHASE_PLAYING ||
+                          gs->phase == PHASE_SCORING || gs->phase == PHASE_DEALING);
+
+        if (is_ingame) {
+            /* 1. Hand cards (player 0) */
+            if (rs->hover_card_index >= 0) {
+                int hi = rs->hover_card_index;
+                /* hover_card_index is a CardVisual index; find the hand slot */
+                for (int i = 0; i < rs->hand_visual_counts[HUMAN_PLAYER]; i++) {
+                    if (rs->hand_visuals[HUMAN_PLAYER][i] == hi) {
+                        int tmid = rs->hand_transmute_ids[i];
+                        if (tmid >= 0) {
+                            const CardVisual *cv = &rs->cards[hi];
+                            float cw = CARD_WIDTH_REF * cv->scale;
+                            float ch = CARD_HEIGHT_REF * cv->scale;
+                            tid = tmid;
+                            anchor = (Vector2){cv->position.x - cv->origin.x,
+                                               cv->position.y - cv->origin.y};
+                            aw = cw;
+                            ah = ch;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            /* 2. Trick cards */
+            if (tid < 0) {
+                for (int i = 0; i < rs->trick_visual_count; i++) {
+                    int idx = rs->trick_visuals[i];
+                    if (idx < 0 || idx >= rs->card_count) continue;
+                    if (rs->trick_transmute_ids[i] < 0) continue;
+                    const CardVisual *cv = &rs->cards[idx];
+                    float cw = CARD_WIDTH_REF * cv->scale;
+                    float ch = CARD_HEIGHT_REF * cv->scale;
+                    /* Transform mouse into card-local (unrotated) space */
+                    float angle_rad = cv->rotation * DEG2RAD;
+                    float cos_a = cosf(-angle_rad);
+                    float sin_a = sinf(-angle_rad);
+                    float dx = mouse.x - cv->position.x;
+                    float dy = mouse.y - cv->position.y;
+                    float local_x = dx * cos_a - dy * sin_a;
+                    float local_y = dx * sin_a + dy * cos_a;
+                    Rectangle cr = {-cv->origin.x, -cv->origin.y, cw, ch};
+                    if (CheckCollisionPointRec((Vector2){local_x, local_y}, cr)) {
+                        tid = rs->trick_transmute_ids[i];
+                        anchor = (Vector2){cv->position.x - cv->origin.x,
+                                           cv->position.y - cv->origin.y};
+                        aw = cw;
+                        ah = ch;
+                        break;
+                    }
+                }
+            }
+
+            /* 3. Inventory cards (left panel) */
+            if (tid < 0) {
+                for (int i = 0; i < rs->transmute_btn_count; i++) {
+                    if (CheckCollisionPointRec(mouse, rs->transmute_card_rects[i])) {
+                        tid = rs->transmute_btn_ids[i];
+                        anchor = (Vector2){rs->transmute_card_rects[i].x,
+                                           rs->transmute_card_rects[i].y};
+                        aw = rs->transmute_card_rects[i].width;
+                        ah = rs->transmute_card_rects[i].height;
+                        break;
+                    }
+                }
+            }
+
+            /* 4. Contract sprites (left panel) */
+            if (tid < 0) {
+                for (int i = 0; i < rs->info_contract_sprite_count; i++) {
+                    if (CheckCollisionPointRec(mouse, rs->info_contract_sprite_rects[i])) {
+                        tid = rs->info_contract_sprite_ids[i];
+                        anchor = (Vector2){rs->info_contract_sprite_rects[i].x,
+                                           rs->info_contract_sprite_rects[i].y};
+                        aw = rs->info_contract_sprite_rects[i].width;
+                        ah = rs->info_contract_sprite_rects[i].height;
+                        break;
+                    }
+                }
+            }
+        }
+
+        /* 5. Chat log underlined transmutation names */
+        if (tid < 0 && rs->chat_hover_tid >= 0) {
+            tid = rs->chat_hover_tid;
+            anchor = (Vector2){rs->chat_hover_rect.x,
+                               rs->chat_hover_rect.y};
+            aw = rs->chat_hover_rect.width;
+            ah = rs->chat_hover_rect.height;
+        }
+
+        /* Suppress transmute tooltip when help menu tooltip is active */
+        if (rs->help_menu.tooltip_node >= 0) tid = -1;
+
+        /* Update tooltip state */
+        if (tid >= 0) {
+            rs->transmute_tooltip.active = true;
+            rs->transmute_tooltip.transmute_id = tid;
+            rs->transmute_tooltip.anchor = anchor;
+            rs->transmute_tooltip.anchor_w = aw;
+            rs->transmute_tooltip.anchor_h = ah;
+        } else {
+            rs->transmute_tooltip.active = false;
+        }
+
+        /* Animation tick */
+        float speed = 1.0f / TOOLTIP_ANIM_SECS;
+        if (rs->transmute_tooltip.active) {
+            rs->transmute_tooltip.anim_t += speed * dt;
+            if (rs->transmute_tooltip.anim_t > 1.0f)
+                rs->transmute_tooltip.anim_t = 1.0f;
+        } else {
+            rs->transmute_tooltip.anim_t -= speed * dt;
+            if (rs->transmute_tooltip.anim_t < 0.0f) {
+                rs->transmute_tooltip.anim_t = 0.0f;
+                rs->transmute_tooltip.transmute_id = -1;
+            }
+        }
+    }
+
+    /* Trick card tooltip hover detection + animation */
+    {
+        bool trick_active = false;
+        if (rs->chat_hover_trick_num > 0) {
+            int idx = rs->chat_hover_trick_num - 1;
+            if (idx >= 0 && idx < rs->trick_history_count) {
+                trick_active = true;
+                rs->trick_tooltip.active = true;
+                rs->trick_tooltip.trick_num = rs->chat_hover_trick_num;
+                rs->trick_tooltip.anchor = (Vector2){
+                    rs->chat_hover_trick_rect.x,
+                    rs->chat_hover_trick_rect.y
+                };
+                rs->trick_tooltip.anchor_w = rs->chat_hover_trick_rect.width;
+                rs->trick_tooltip.anchor_h = rs->chat_hover_trick_rect.height;
+            }
+        }
+        if (!trick_active) {
+            rs->trick_tooltip.active = false;
+        }
+
+        float speed = 1.0f / TOOLTIP_ANIM_SECS;
+        if (rs->trick_tooltip.active) {
+            rs->trick_tooltip.anim_t += speed * dt;
+            if (rs->trick_tooltip.anim_t > 1.0f)
+                rs->trick_tooltip.anim_t = 1.0f;
+        } else {
+            rs->trick_tooltip.anim_t -= speed * dt;
+            if (rs->trick_tooltip.anim_t < 0.0f) {
+                rs->trick_tooltip.anim_t = 0.0f;
+                rs->trick_tooltip.trick_num = -1;
+            }
+        }
+    }
+
+    /* Help menu update */
+    help_menu_update(&rs->help_menu, rs, dt,
+                     rs->pause_state != PAUSE_INACTIVE);
+
+    /* Contract draft button fade-in */
+    if (rs->contract_ui_active && rs->contract_anim_t < 1.0f) {
+        rs->contract_anim_t += (1.0f / 0.25f) * dt; /* 250ms */
+        if (rs->contract_anim_t > 1.0f)
+            rs->contract_anim_t = 1.0f;
+    }
+
+    /* Opponent indicator: animated border orbit (rogue/duel selection) */
+    if (rs->opponent_hover_active) {
+        rs->opponent_border_t += dt * 0.4f;
+        if (rs->opponent_border_t >= 1.0f)
+            rs->opponent_border_t -= 1.0f;
+    }
+
+    /* Suit indicator: animated border orbit (rogue suit selection) */
+    if (rs->suit_hover_active) {
+        rs->suit_border_t += dt * 0.4f;
+        if (rs->suit_border_t >= 1.0f)
+            rs->suit_border_t -= 1.0f;
+    }
+
+    /* Draft waiting: animated border orbit */
+    if (rs->draft_waiting) {
+        rs->draft_wait_border_t += dt * 0.4f; /* full orbit in ~2.5s */
+        if (rs->draft_wait_border_t >= 1.0f)
+            rs->draft_wait_border_t -= 1.0f;
+        if (rs->draft_fadeout_t > 0.0f) {
+            rs->draft_fadeout_t -= dt * (1.0f / 0.12f); /* 120ms fadeout */
+            if (rs->draft_fadeout_t < 0.0f)
+                rs->draft_fadeout_t = 0.0f;
+        }
+    }
 
     /* Update particles */
     particle_update(&rs->particles, dt);
@@ -1423,20 +2596,39 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
 
         /* (0,0) = card top-left in transformed space */
         Rectangle card_rect = {0, 0, cw, ch};
-        DrawRectangleLinesEx(card_rect, 3.0f * ui_scale, PURPLE);
+        DrawRectangleLinesEx(card_rect, 3.0f * effective_scale, PURPLE);
 
         /* ID badge in top-right corner — only for cards without a custom sprite */
         if (!card_render_has_transmute_sprite(cv->transmute_id)) {
             char id_buf[8];
             snprintf(id_buf, sizeof(id_buf), "%d", cv->transmute_id);
-            int badge_fs = (int)(12.0f * ui_scale);
-            int tw = MeasureText(id_buf, badge_fs);
+            int badge_fs = (int)(14.0f * ui_scale);
+            int tw = hh_measure_text(rs, id_buf, badge_fs);
             int bx = (int)(cw - (float)tw - 4.0f * ui_scale);
             int by = (int)(3.0f * ui_scale);
             DrawRectangle(bx - 2, by - 1, tw + 4, badge_fs + 2,
                           (Color){80, 0, 120, 200});
-            DrawText(id_buf, bx, by, badge_fs, WHITE);
+            hh_draw_text(rs, id_buf, bx, by, badge_fs, WHITE);
         }
+
+        rlPopMatrix();
+    }
+
+    /* Transmute drag drop-target highlight: gold border */
+    if (rs->drag.active && rs->drag.is_transmute_drag &&
+        rs->transmute_drop_target >= 0 &&
+        rs->transmute_drop_target < rs->card_count &&
+        cv == &rs->cards[rs->transmute_drop_target] && cv->opacity > 0.0f) {
+        float cw = CARD_WIDTH_REF * effective_scale;
+        float ch = CARD_HEIGHT_REF * effective_scale;
+
+        rlPushMatrix();
+        rlTranslatef(pos.x, pos.y, 0.0f);
+        rlRotatef(cv->rotation, 0.0f, 0.0f, 1.0f);
+        rlTranslatef(-origin.x, -origin.y, 0.0f);
+
+        Rectangle card_rect = {0, 0, cw, ch};
+        DrawRectangleLinesEx(card_rect, 3.0f * ui_scale, GOLD);
 
         rlPopMatrix();
     }
@@ -1474,7 +2666,8 @@ static void draw_card_visual(const CardVisual *cv, float ui_scale,
     }
 }
 
-static void draw_button(const UIButton *btn, float ui_scale)
+static void draw_button(const RenderState *rs, const UIButton *btn,
+                        float ui_scale)
 {
     if (!btn->visible) return;
 
@@ -1502,25 +2695,28 @@ static void draw_button(const UIButton *btn, float ui_scale)
     DrawRectangleRoundedLines(btn->bounds, 0.3f, 4, border_col);
 
     int font_size = (int)(24.0f * ui_scale);
-    int tw = MeasureText(btn->label, font_size);
+    /* Shrink font for short buttons so text fits */
+    if (font_size > (int)(btn->bounds.height * 0.7f))
+        font_size = (int)(btn->bounds.height * 0.7f);
+    int tw = hh_measure_text(rs, btn->label, font_size);
 
     if (btn->subtitle != NULL) {
         int sub_size = (int)(14.0f * ui_scale);
-        int sw = MeasureText(btn->subtitle, sub_size);
+        int sw = hh_measure_text(rs, btn->subtitle, sub_size);
         int total_h = font_size + (int)(4.0f * ui_scale) + sub_size;
         int y_start = (int)(btn->bounds.y +
                             (btn->bounds.height - (float)total_h) * 0.5f);
 
-        DrawText(btn->label,
+        hh_draw_text(rs, btn->label,
                  (int)(btn->bounds.x + (btn->bounds.width - (float)tw) * 0.5f),
                  y_start, font_size, text_col);
 
         Color sub_col = btn->disabled ? (Color){100, 100, 100, 255} : LIGHTGRAY;
-        DrawText(btn->subtitle,
+        hh_draw_text(rs, btn->subtitle,
                  (int)(btn->bounds.x + (btn->bounds.width - (float)sw) * 0.5f),
                  y_start + font_size + (int)(4.0f * ui_scale), sub_size, sub_col);
     } else {
-        DrawText(btn->label,
+        hh_draw_text(rs, btn->label,
                  (int)(btn->bounds.x + (btn->bounds.width - (float)tw) * 0.5f),
                  (int)(btn->bounds.y +
                        (btn->bounds.height - (float)font_size) * 0.5f),
@@ -1539,14 +2735,709 @@ static const char *pass_direction_string(PassDirection dir)
     }
 }
 
-static const char *player_name(int player_id)
+static const char *player_name(int player_id, const RenderState *rs)
 {
-    static const char *names[] = {"You", "West", "North", "East"};
-    if (player_id >= 0 && player_id < NUM_PLAYERS) return names[player_id];
-    return "???";
+    if (player_id < 0 || player_id >= NUM_PLAYERS) return "???";
+    if (rs->player_names[player_id][0] != '\0')
+        return rs->player_names[player_id];
+    return s_default_names[player_id];
 }
 
 /* ---- Phase-specific drawing ---- */
+
+/* ---- Login Screen ---- */
+
+static void draw_phase_login(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    const LoginUIState *lui = rs->login_ui;
+    float s = rs->layout.scale;
+    float cx = rs->layout.screen_width * 0.5f;
+    float cy = rs->layout.screen_height * 0.5f;
+
+    /* Title */
+    const char *title = "HOLLOW HEARTS";
+    int title_size = (int)(48.0f * s);
+    int tw = hh_measure_text(rs, title, title_size);
+    hh_draw_text(rs, title, (int)(cx - (float)tw * 0.5f),
+             (int)(cy - 160.0f * s), title_size, RAYWHITE);
+
+    if (!lui) return;
+
+    if (lui->show_username_input && !lui->awaiting_response) {
+        /* --- Section 1: Register --- */
+        const char *prompt = "Choose a username to register:";
+        int prompt_size = (int)(22.0f * s);
+        int pw = hh_measure_text(rs, prompt, prompt_size);
+        hh_draw_text(rs, prompt, (int)(cx - (float)pw * 0.5f),
+                 (int)(cy - 80.0f * s), prompt_size, LIGHTGRAY);
+
+        float field_w = 300.0f * s;
+        float field_h = 40.0f * s;
+        float field_x = cx - field_w * 0.5f;
+        float field_y = cy - 45.0f * s;
+        DrawRectangle((int)field_x, (int)field_y,
+                      (int)field_w, (int)field_h,
+                      (Color){40, 40, 50, 255});
+        DrawRectangleLines((int)field_x, (int)field_y,
+                           (int)field_w, (int)field_h, LIGHTGRAY);
+
+        int text_size = (int)(24.0f * s);
+        float text_x = field_x + 8.0f * s;
+        float text_y = field_y + (field_h - (float)text_size) * 0.5f;
+        hh_draw_text(rs, lui->username_buf, (int)text_x, (int)text_y,
+                 text_size, WHITE);
+
+        /* Blinking cursor */
+        if (lui->cursor_blink < 0.5f) {
+            int text_w = hh_measure_text(rs, lui->username_buf, text_size);
+            DrawRectangle((int)(text_x + (float)text_w + 2.0f * s),
+                          (int)text_y, (int)(2.0f * s), text_size, WHITE);
+        }
+
+        /* Register button */
+        draw_button(rs, &rs->btn_login_submit, s);
+
+        /* Username rules hint */
+        const char *hint = "4-31 characters, letters/numbers/underscore";
+        int hint_size = (int)(14.0f * s);
+        int hw = hh_measure_text(rs, hint, hint_size);
+        hh_draw_text(rs, hint, (int)(cx - (float)hw * 0.5f),
+                 (int)(cy + 55.0f * s), hint_size, GRAY);
+
+        /* --- Section 2: Import --- */
+        const char *or_text = "Or import an existing identity:";
+        int or_size = (int)(22.0f * s);
+        int ow = hh_measure_text(rs, or_text, or_size);
+        hh_draw_text(rs, or_text, (int)(cx - (float)ow * 0.5f),
+                 (int)(cy + 90.0f * s), or_size, LIGHTGRAY);
+
+        const char *path_hint = "Reads from ~/hollow-hearts-identity.bak";
+        int ph_size = (int)(14.0f * s);
+        int phw = hh_measure_text(rs, path_hint, ph_size);
+        hh_draw_text(rs, path_hint, (int)(cx - (float)phw * 0.5f),
+                 (int)(cy + 116.0f * s), ph_size, GRAY);
+
+        /* Import identity button + refresh check button */
+        draw_button(rs, &rs->btn_login_import, s);
+        draw_button(rs, &rs->btn_login_refresh, s);
+    } else if (lui->error_text[0]) {
+        /* Error display */
+        int err_size = (int)(20.0f * s);
+        int ew = hh_measure_text(rs, lui->error_text, err_size);
+        hh_draw_text(rs, lui->error_text, (int)(cx - (float)ew * 0.5f),
+                 (int)(cy - 20.0f * s), err_size, RED);
+        draw_button(rs, &rs->btn_login_retry, s);
+    } else {
+        /* Status text (Connecting... / Logging in...) */
+        int status_size = (int)(22.0f * s);
+        int stw = hh_measure_text(rs, lui->status_text, status_size);
+        hh_draw_text(rs, lui->status_text, (int)(cx - (float)stw * 0.5f),
+                 (int)(cy - 10.0f * s), status_size, LIGHTGRAY);
+    }
+}
+
+/* ---- Online Menu ---- */
+
+static void draw_phase_online(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    const OnlineUIState *oui = rs->online_ui;
+    float s = rs->layout.scale;
+    float cx = rs->layout.screen_width * 0.5f;
+    float cy = rs->layout.screen_height * 0.5f;
+
+    /* Title */
+    const char *title = "HOLLOW HEARTS";
+    int title_size = (int)(40.0f * s);
+    int tw = hh_measure_text(rs, title, title_size);
+    hh_draw_text(rs, title, (int)(cx - (float)tw * 0.5f),
+             (int)(cy - 180.0f * s), title_size, RAYWHITE);
+
+    const char *sub = "PLAY";
+    int sub_size = (int)(22.0f * s);
+    int sw = hh_measure_text(rs, sub, sub_size);
+    hh_draw_text(rs, sub, (int)(cx - (float)sw * 0.5f),
+             (int)(cy - 180.0f * s + (float)title_size + 6.0f * s),
+             sub_size, LIGHTGRAY);
+
+    if (!oui) return;
+
+    switch (oui->subphase) {
+    case ONLINE_SUB_MENU:
+        for (int i = 0; i < rs->online_btn_count; i++)
+            draw_button(rs, &rs->online_btns[i], s);
+        break;
+
+    case ONLINE_SUB_CREATE_WAITING: {
+        /* Room code large */
+        const char *code_label = "Room Code:";
+        int label_size = (int)(20.0f * s);
+        int lw = hh_measure_text(rs, code_label, label_size);
+        hh_draw_text(rs, code_label, (int)(cx - (float)lw * 0.5f),
+                 (int)(cy - 80.0f * s), label_size, LIGHTGRAY);
+
+        int code_size = (int)(48.0f * s);
+        int cw = hh_measure_text(rs, oui->created_room_code, code_size);
+        hh_draw_text(rs, oui->created_room_code, (int)(cx - (float)cw * 0.5f),
+                 (int)(cy - 48.0f * s), code_size, GOLD);
+
+        /* Player slots */
+        int name_size = (int)(18.0f * s);
+        float slot_y = cy + 10.0f * s;
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            char slot_text[48];
+            Color slot_color;
+            if (oui->slot_is_ai[i]) {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: %s (AI)",
+                         i + 1, oui->player_names[i]);
+                slot_color = SKYBLUE;
+            } else if (oui->player_names[i][0] != '\0') {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: %s",
+                         i + 1, oui->player_names[i]);
+                slot_color = WHITE;
+            } else {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: ---", i + 1);
+                slot_color = DARKGRAY;
+            }
+            int stw = hh_measure_text(rs, slot_text, name_size);
+            hh_draw_text(rs, slot_text, (int)(cx - (float)stw * 0.5f),
+                     (int)slot_y, name_size, slot_color);
+            slot_y += 24.0f * s;
+        }
+
+        /* Player count summary */
+        char slots[32];
+        snprintf(slots, sizeof(slots), "Players: %d / 4", oui->player_count);
+        int slots_size = (int)(20.0f * s);
+        int sw2 = hh_measure_text(rs, slots, slots_size);
+        hh_draw_text(rs, slots, (int)(cx - (float)sw2 * 0.5f),
+                 (int)(slot_y + 8.0f * s), slots_size, LIGHTGRAY);
+
+        const char *status_msg = (oui->player_count >= 4)
+            ? "Room is ready to start!" : "Waiting for players...";
+        Color status_color = (oui->player_count >= 4) ? GREEN : GRAY;
+        int wait_size = (int)(16.0f * s);
+        int ww = hh_measure_text(rs, status_msg, wait_size);
+        hh_draw_text(rs, status_msg, (int)(cx - (float)ww * 0.5f),
+                 (int)(slot_y + 36.0f * s), wait_size, status_color);
+
+        /* Game options arrow selectors (left panel) */
+        if (rs->btn_opt_timer_prev.visible && oui) {
+            /* Helper macro: draw one arrow-selector row */
+            #define DRAW_OPT_ROW(prev_btn, next_btn, label_str, val_str, val_col) \
+            do { \
+                int _lfs = (int)(14.0f * s); \
+                int _lw = hh_measure_text(rs, (label_str), _lfs); \
+                float _acx = (prev_btn).bounds.x + \
+                    ((next_btn).bounds.x + (next_btn).bounds.width \
+                     - (prev_btn).bounds.x) * 0.5f; \
+                hh_draw_text(rs, (label_str), \
+                    (int)(_acx - (float)_lw * 0.5f), \
+                    (int)((prev_btn).bounds.y - (float)_lfs - 4.0f * s), \
+                    _lfs, LIGHTGRAY); \
+                int _vfs = (int)(14.0f * s); \
+                int _vw = hh_measure_text(rs, (val_str), _vfs); \
+                float _al = (prev_btn).bounds.x + (prev_btn).bounds.width; \
+                float _ar = (next_btn).bounds.x; \
+                float _vcx = (_al + _ar) * 0.5f; \
+                float _vcy = (prev_btn).bounds.y + \
+                    ((prev_btn).bounds.height - (float)_vfs) * 0.5f; \
+                hh_draw_text(rs, (val_str), \
+                    (int)(_vcx - (float)_vw * 0.5f), (int)_vcy, _vfs, (val_col)); \
+                draw_button(rs, &(prev_btn), s); \
+                draw_button(rs, &(next_btn), s); \
+            } while (0)
+
+            /* Timers */
+            {
+                int ti = oui->timer_option;
+                const char *tv = (ti >= 0 && ti < TIMER_OPTION_COUNT)
+                    ? TIMER_LABELS[ti] : TIMER_LABELS[0];
+                Color tc = (ti == 0) ? GOLD : (Color){100, 200, 255, 255};
+                DRAW_OPT_ROW(rs->btn_opt_timer_prev, rs->btn_opt_timer_next,
+                             "Timers", tv, tc);
+            }
+
+            /* Point Goal */
+            {
+                int pi = oui->point_goal;
+                const char *pv = (pi >= 0 && pi < POINT_GOAL_COUNT)
+                    ? POINT_GOAL_LABELS[pi] : POINT_GOAL_LABELS[2];
+                Color pc = (pi == 2) ? GOLD : (Color){100, 200, 255, 255};
+                DRAW_OPT_ROW(rs->btn_opt_points_prev, rs->btn_opt_points_next,
+                             "Point Goal", pv, pc);
+            }
+
+            /* Gamemode — cycler is limited to implemented modes
+             * (Transmutations + Vanilla); Dragon Hearts is hidden until
+             * it's built, so every value we can display here is playable. */
+            {
+                int gi = oui->gamemode;
+                const char *gv = (gi >= 0 && gi < GAMEMODE_DRAGON_HEARTS)
+                    ? GAMEMODE_LABELS[gi] : GAMEMODE_LABELS[0];
+                DRAW_OPT_ROW(rs->btn_opt_mode_prev, rs->btn_opt_mode_next,
+                             "Gamemode", gv, GOLD);
+            }
+
+            #undef DRAW_OPT_ROW
+        }
+
+        /* AI Difficulty arrow selector */
+        if (rs->btn_online_ai_diff_prev.visible) {
+            int diff = rs->online_ui ? rs->online_ui->ai_difficulty : 0;
+            const char *diff_val = diff ? "Competitive" : "Casual";
+            Color diff_val_col = diff ? (Color){255, 180, 60, 255} : GOLD;
+
+            /* "AI Difficulty" label above arrows */
+            int lbl_fs = (int)(14.0f * s);
+            const char *lbl = "AI Difficulty";
+            int lw = hh_measure_text(rs, lbl, lbl_fs);
+            float arrow_center = rs->btn_online_ai_diff_prev.bounds.x +
+                (rs->btn_online_ai_diff_next.bounds.x + rs->btn_online_ai_diff_next.bounds.width
+                 - rs->btn_online_ai_diff_prev.bounds.x) * 0.5f;
+            hh_draw_text(rs, lbl, (int)(arrow_center - (float)lw * 0.5f),
+                     (int)(rs->btn_online_ai_diff_prev.bounds.y - (float)lbl_fs - 4.0f * s),
+                     lbl_fs, LIGHTGRAY);
+
+            /* Value text centered between arrows */
+            int vfs = (int)(14.0f * s);
+            int vw = hh_measure_text(rs, diff_val, vfs);
+            float al = rs->btn_online_ai_diff_prev.bounds.x +
+                       rs->btn_online_ai_diff_prev.bounds.width;
+            float ar = rs->btn_online_ai_diff_next.bounds.x;
+            float vcx = (al + ar) * 0.5f;
+            float vcy = rs->btn_online_ai_diff_prev.bounds.y +
+                        (rs->btn_online_ai_diff_prev.bounds.height - (float)vfs) * 0.5f;
+            hh_draw_text(rs, diff_val, (int)(vcx - (float)vw * 0.5f),
+                     (int)vcy, vfs, diff_val_col);
+
+            draw_button(rs, &rs->btn_online_ai_diff_prev, s);
+            draw_button(rs, &rs->btn_online_ai_diff_next, s);
+        }
+        draw_button(rs, &rs->btn_online_add_ai, s);
+        draw_button(rs, &rs->btn_online_remove_ai, s);
+        draw_button(rs, &rs->btn_online_start_game, s);
+        draw_button(rs, &rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_JOIN_INPUT: {
+        const char *prompt = "Enter Room Code:";
+        int prompt_size = (int)(22.0f * s);
+        int pw = hh_measure_text(rs, prompt, prompt_size);
+        hh_draw_text(rs, prompt, (int)(cx - (float)pw * 0.5f),
+                 (int)(cy - 60.0f * s), prompt_size, LIGHTGRAY);
+
+        /* Text field */
+        float field_w = 200.0f * s;
+        float field_h = 50.0f * s;
+        float field_x = cx - field_w * 0.5f;
+        float field_y = cy - 25.0f * s;
+        DrawRectangle((int)field_x, (int)field_y,
+                      (int)field_w, (int)field_h,
+                      (Color){40, 40, 50, 255});
+        DrawRectangleLines((int)field_x, (int)field_y,
+                           (int)field_w, (int)field_h, LIGHTGRAY);
+
+        int text_size = (int)(30.0f * s);
+        float text_x = field_x + 8.0f * s;
+        float text_y = field_y + (field_h - (float)text_size) * 0.5f;
+        hh_draw_text(rs, oui->room_code_buf, (int)text_x, (int)text_y,
+                 text_size, WHITE);
+
+        /* Blinking cursor */
+        if (oui->cursor_blink < 0.5f) {
+            int text_w = hh_measure_text(rs, oui->room_code_buf, text_size);
+            DrawRectangle((int)(text_x + (float)text_w + 2.0f * s),
+                          (int)text_y, (int)(2.0f * s), text_size, WHITE);
+        }
+
+        draw_button(rs, &rs->btn_online_join_submit, s);
+        draw_button(rs, &rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_JOIN_WAITING: {
+        const char *joining = "Joining room...";
+        int join_size = (int)(24.0f * s);
+        int jw = hh_measure_text(rs, joining, join_size);
+        hh_draw_text(rs, joining, (int)(cx - (float)jw * 0.5f),
+                 (int)(cy - 20.0f * s), join_size, LIGHTGRAY);
+        draw_button(rs, &rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_QUEUE_SEARCHING: {
+        const char *searching = "Searching for match...";
+        int search_size = (int)(24.0f * s);
+        int sw2 = hh_measure_text(rs, searching, search_size);
+        hh_draw_text(rs, searching, (int)(cx - (float)sw2 * 0.5f),
+                 (int)(cy - 20.0f * s), search_size, LIGHTGRAY);
+        draw_button(rs, &rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_MATCH_FOUND: {
+        const char *found = "Game Found!";
+        int found_size = (int)(40.0f * s);
+        int fw = hh_measure_text(rs, found, found_size);
+        hh_draw_text(rs, found, (int)(cx - (float)fw * 0.5f),
+                 (int)(cy - 20.0f * s), found_size, GREEN);
+        break;
+    }
+
+    case ONLINE_SUB_CONNECTING: {
+        const char *connecting = "Connecting to server...";
+        int conn_size = (int)(22.0f * s);
+        int cw2 = hh_measure_text(rs, connecting, conn_size);
+        hh_draw_text(rs, connecting, (int)(cx - (float)cw2 * 0.5f),
+                 (int)(cy - 10.0f * s), conn_size, LIGHTGRAY);
+        break;
+    }
+
+    case ONLINE_SUB_CONNECTED_WAITING: {
+        /* Room code */
+        const char *code_label = "Room Code:";
+        int label_size = (int)(20.0f * s);
+        int lw2 = hh_measure_text(rs, code_label, label_size);
+        hh_draw_text(rs, code_label, (int)(cx - (float)lw2 * 0.5f),
+                 (int)(cy - 80.0f * s), label_size, LIGHTGRAY);
+
+        int code_size = (int)(48.0f * s);
+        int cw3 = hh_measure_text(rs, oui->assigned_room_code, code_size);
+        hh_draw_text(rs, oui->assigned_room_code, (int)(cx - (float)cw3 * 0.5f),
+                 (int)(cy - 48.0f * s), code_size, GOLD);
+
+        /* Player slots */
+        int name_size = (int)(18.0f * s);
+        float slot_y = cy + 10.0f * s;
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            char slot_text[48];
+            Color slot_color;
+            if (oui->slot_is_ai[i]) {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: %s (AI)",
+                         i + 1, oui->player_names[i]);
+                slot_color = SKYBLUE;
+            } else if (oui->player_names[i][0] != '\0') {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: %s",
+                         i + 1, oui->player_names[i]);
+                slot_color = WHITE;
+            } else {
+                snprintf(slot_text, sizeof(slot_text), "Seat %d: ---", i + 1);
+                slot_color = DARKGRAY;
+            }
+            int stw2 = hh_measure_text(rs, slot_text, name_size);
+            hh_draw_text(rs, slot_text, (int)(cx - (float)stw2 * 0.5f),
+                     (int)slot_y, name_size, slot_color);
+            slot_y += 24.0f * s;
+        }
+
+        /* Player count summary */
+        char slots2[32];
+        snprintf(slots2, sizeof(slots2), "Players: %d / 4", oui->player_count);
+        int slots_size = (int)(20.0f * s);
+        int sw3 = hh_measure_text(rs, slots2, slots_size);
+        hh_draw_text(rs, slots2, (int)(cx - (float)sw3 * 0.5f),
+                 (int)(slot_y + 8.0f * s), slots_size, LIGHTGRAY);
+
+        const char *status_msg = (oui->player_count >= 4)
+            ? "Room is ready to start!" : "Waiting for players...";
+        Color status_color = (oui->player_count >= 4) ? GREEN : GRAY;
+        int wait_size = (int)(16.0f * s);
+        int ww = hh_measure_text(rs, status_msg, wait_size);
+        hh_draw_text(rs, status_msg, (int)(cx - (float)ww * 0.5f),
+                 (int)(slot_y + 36.0f * s), wait_size, status_color);
+
+        draw_button(rs, &rs->btn_online_cancel, s);
+        break;
+    }
+
+    case ONLINE_SUB_ERROR: {
+        int err_size = (int)(20.0f * s);
+        int ew = hh_measure_text(rs, oui->error_text, err_size);
+        hh_draw_text(rs, oui->error_text, (int)(cx - (float)ew * 0.5f),
+                 (int)(cy - 20.0f * s), err_size, RED);
+        draw_button(rs, &rs->btn_online_cancel, s);
+        draw_button(rs, &rs->btn_online_try_again, s);
+        break;
+    }
+    }
+
+}
+
+static void draw_stats_game_tab(const RenderState *rs, float s, float cx,
+                                float content_y)
+{
+    if (rs->stats_loading) {
+        const char *msg = "Loading...";
+        int msg_sz = (int)(22.0f * s);
+        int mw = hh_measure_text(rs, msg, msg_sz);
+        hh_draw_text(rs, msg, (int)(cx - (float)mw * 0.5f),
+                     (int)(content_y + 60.0f * s), msg_sz, LIGHTGRAY);
+        return;
+    }
+    if (!rs->stats_loaded) return;
+
+    const PlayerFullStats *st = &rs->stats_data;
+    int label_sz = (int)(18.0f * s);
+    int value_sz = (int)(22.0f * s);
+    float row_h = 38.0f * s;
+    float col_w = 200.0f * s;
+    float left_x = cx - col_w - 10.0f * s;
+    float right_x = cx + 10.0f * s;
+    float y = content_y + 10.0f * s;
+
+    /* ELO prominent display */
+    {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", st->elo_rating);
+        const char *lbl = "ELO Rating";
+        int elo_sz = (int)(32.0f * s);
+        int lbl_sz = (int)(16.0f * s);
+        int lw = hh_measure_text(rs, lbl, lbl_sz);
+        hh_draw_text(rs, lbl, (int)(cx - (float)lw * 0.5f), (int)y,
+                     lbl_sz, LIGHTGRAY);
+        y += (float)lbl_sz + 4.0f * s;
+        int vw = hh_measure_text(rs, buf, elo_sz);
+        hh_draw_text(rs, buf, (int)(cx - (float)vw * 0.5f), (int)y,
+                     elo_sz, GOLD);
+        y += (float)elo_sz + 16.0f * s;
+    }
+
+    /* Two-column stat rows */
+    struct { const char *label; char value[32]; } rows[] = {
+        {"Games Played", ""},  {"Games Won", ""},
+        {"Win Rate", ""},      {"Total Score", ""},
+        {"Avg Score", ""},     {"Avg Placement", ""},
+        {"Moon Shots", ""},    {"QoS Caught", ""},
+        {"Contracts Done", ""}, {"Perfect Rounds", ""},
+        {"Hearts Taken", ""},  {"Tricks Won", ""},
+        {"Best Game", ""},     {"Worst Game", ""},
+    };
+    snprintf(rows[0].value, 32, "%u", st->games_played);
+    snprintf(rows[1].value, 32, "%u", st->games_won);
+    float wpct = st->games_played > 0
+        ? 100.0f * (float)st->games_won / (float)st->games_played : 0.0f;
+    snprintf(rows[2].value, 32, "%.1f%%", wpct);
+    snprintf(rows[3].value, 32, "%d", st->total_score);
+    if (st->games_played > 0)
+        snprintf(rows[4].value, 32, "%.1f",
+                 (float)st->total_score / (float)st->games_played);
+    else
+        snprintf(rows[4].value, 32, "-");
+    snprintf(rows[5].value, 32, "%.2f", st->avg_placement);
+    snprintf(rows[6].value, 32, "%u", st->moon_shots);
+    snprintf(rows[7].value, 32, "%u", st->qos_caught);
+    snprintf(rows[8].value, 32, "%u", st->contracts_fulfilled);
+    snprintf(rows[9].value, 32, "%u", st->perfect_rounds);
+    snprintf(rows[10].value, 32, "%u", st->hearts_collected);
+    snprintf(rows[11].value, 32, "%u", st->tricks_won);
+    if (st->games_played > 0) {
+        snprintf(rows[12].value, 32, "%d", st->best_score);
+        snprintf(rows[13].value, 32, "%d", st->worst_score);
+    } else {
+        snprintf(rows[12].value, 32, "-");
+        snprintf(rows[13].value, 32, "-");
+    }
+    int nrows = 14;
+    for (int i = 0; i < nrows; i += 2) {
+        /* Left column */
+        hh_draw_text(rs, rows[i].label, (int)left_x, (int)y, label_sz,
+                     LIGHTGRAY);
+        int vw = hh_measure_text(rs, rows[i].value, value_sz);
+        hh_draw_text(rs, rows[i].value,
+                     (int)(left_x + col_w - (float)vw), (int)y, value_sz,
+                     WHITE);
+        /* Right column */
+        if (i + 1 < nrows) {
+            hh_draw_text(rs, rows[i + 1].label, (int)right_x, (int)y,
+                         label_sz, LIGHTGRAY);
+            vw = hh_measure_text(rs, rows[i + 1].value, value_sz);
+            hh_draw_text(rs, rows[i + 1].value,
+                         (int)(right_x + col_w - (float)vw), (int)y,
+                         value_sz, WHITE);
+        }
+        y += row_h;
+    }
+}
+
+static void draw_stats_leaderboard_tab(const RenderState *rs, float s,
+                                       float cx, float content_y)
+{
+    float sw = rs->layout.screen_width;
+    float sh = rs->layout.screen_height;
+
+    if (rs->leaderboard_loading) {
+        const char *msg = "Loading...";
+        int msg_sz = (int)(22.0f * s);
+        int mw = hh_measure_text(rs, msg, msg_sz);
+        hh_draw_text(rs, msg, (int)(cx - (float)mw * 0.5f),
+                     (int)(content_y + 60.0f * s), msg_sz, LIGHTGRAY);
+        return;
+    }
+    if (!rs->leaderboard_loaded) return;
+
+    const LeaderboardData *lb = &rs->leaderboard_data;
+    int hdr_sz = (int)(16.0f * s);
+    int row_sz = (int)(18.0f * s);
+    float row_h = 28.0f * s;
+    float table_w = 500.0f * s;
+    float table_x = cx - table_w * 0.5f;
+    float hdr_y = content_y + 8.0f * s;
+
+    /* Column positions (relative to table_x) */
+    float col_rank = 0;
+    float col_name = 40.0f * s;
+    float col_elo = 300.0f * s;
+    float col_wl = 400.0f * s;
+
+    /* Header row */
+    hh_draw_text(rs, "#", (int)(table_x + col_rank), (int)hdr_y, hdr_sz, GOLD);
+    hh_draw_text(rs, "Player", (int)(table_x + col_name), (int)hdr_y, hdr_sz,
+                 GOLD);
+    hh_draw_text(rs, "ELO", (int)(table_x + col_elo), (int)hdr_y, hdr_sz,
+                 GOLD);
+    hh_draw_text(rs, "W / L", (int)(table_x + col_wl), (int)hdr_y, hdr_sz,
+                 GOLD);
+
+    /* Separator line under header */
+    float sep_y = hdr_y + (float)hdr_sz + 6.0f * s;
+    DrawLineEx((Vector2){table_x, sep_y},
+               (Vector2){table_x + table_w, sep_y}, 1.0f * s, GRAY);
+
+    /* Scrollable body */
+    float scroll_top = sep_y + 4.0f * s;
+    float footer_h = 50.0f * s;
+    float back_btn_h = 55.0f * s;
+    float scroll_bottom = sh - footer_h - back_btn_h - 20.0f * s;
+    if (scroll_bottom < scroll_top + row_h)
+        scroll_bottom = scroll_top + row_h;
+    float visible_h = scroll_bottom - scroll_top;
+
+    BeginScissorMode((int)table_x, (int)scroll_top,
+                     (int)table_w, (int)visible_h);
+
+    /* Get own username for highlighting */
+    const LobbyClientInfo *lci = lobby_client_info();
+    const char *own_name = lci ? lci->username : "";
+
+    for (int i = 0; i < lb->count; i++) {
+        float fy = scroll_top + row_h * (float)i - rs->leaderboard_scroll_y;
+        if (fy + row_h < scroll_top || fy > scroll_bottom) continue;
+
+        const LeaderboardEntry *e = &lb->entries[i];
+        bool is_self = (own_name[0] && strcmp(e->username, own_name) == 0);
+        Color row_clr = is_self ? GOLD : RAYWHITE;
+
+        char rank_buf[12];
+        snprintf(rank_buf, sizeof(rank_buf), "%d", i + 1);
+        hh_draw_text(rs, rank_buf, (int)(table_x + col_rank), (int)fy,
+                     row_sz, row_clr);
+        hh_draw_text(rs, e->username, (int)(table_x + col_name), (int)fy,
+                     row_sz, row_clr);
+        char elo_buf[16];
+        snprintf(elo_buf, sizeof(elo_buf), "%d", e->elo_rating);
+        hh_draw_text(rs, elo_buf, (int)(table_x + col_elo), (int)fy,
+                     row_sz, row_clr);
+        char wl_buf[24];
+        uint32_t losses = e->games_played >= e->games_won
+                          ? e->games_played - e->games_won : 0;
+        snprintf(wl_buf, sizeof(wl_buf), "%u / %u", e->games_won, losses);
+        hh_draw_text(rs, wl_buf, (int)(table_x + col_wl), (int)fy,
+                     row_sz, row_clr);
+    }
+
+    EndScissorMode();
+
+    /* Footer separator */
+    float footer_sep_y = scroll_bottom + 4.0f * s;
+    DrawLineEx((Vector2){table_x, footer_sep_y},
+               (Vector2){table_x + table_w, footer_sep_y}, 1.0f * s, GRAY);
+
+    /* Footer: own rank (always visible) */
+    float footer_y = footer_sep_y + 8.0f * s;
+    char rank_buf[8];
+    snprintf(rank_buf, sizeof(rank_buf), "%u", lb->player_rank);
+    hh_draw_text(rs, rank_buf, (int)(table_x + col_rank), (int)footer_y,
+                 row_sz, GOLD);
+    hh_draw_text(rs, own_name, (int)(table_x + col_name), (int)footer_y,
+                 row_sz, GOLD);
+    char elo_buf[16];
+    snprintf(elo_buf, sizeof(elo_buf), "%d", lb->player_elo);
+    hh_draw_text(rs, elo_buf, (int)(table_x + col_elo), (int)footer_y,
+                 row_sz, GOLD);
+    if (lci) {
+        char wl_buf[24];
+        uint32_t losses2 = lci->games_played >= lci->games_won
+                           ? lci->games_played - lci->games_won : 0;
+        snprintf(wl_buf, sizeof(wl_buf), "%u / %u", lci->games_won, losses2);
+        hh_draw_text(rs, wl_buf, (int)(table_x + col_wl), (int)footer_y,
+                     row_sz, GOLD);
+    }
+
+    (void)sw;
+}
+
+static void draw_phase_stats(const GameState *gs, const RenderState *rs)
+{
+    (void)gs;
+    float s = rs->layout.scale;
+    float cx = rs->layout.screen_width * 0.5f;
+
+    /* Title */
+    const char *title = "STATISTICS";
+    int title_size = (int)(32.0f * s);
+    int tw = hh_measure_text(rs, title, title_size);
+    float title_y = 30.0f * s;
+    hh_draw_text(rs, title, (int)(cx - (float)tw * 0.5f),
+                 (int)title_y, title_size, RAYWHITE);
+
+    /* Tab bar (mirrors settings pattern) */
+    float tab_w = 140.0f * s;
+    float tab_h = 36.0f * s;
+    float tab_gap = 8.0f * s;
+    float tab_total_w = STATS_TAB_COUNT * tab_w + (STATS_TAB_COUNT - 1) * tab_gap;
+    float tab_start_x = cx - tab_total_w * 0.5f;
+    float tab_y = title_y + (float)title_size + 16.0f * s;
+
+    const char *tab_labels[] = {"Game Stats", "Leaderboards"};
+    for (int t = 0; t < STATS_TAB_COUNT; t++) {
+        float tx = tab_start_x + (float)t * (tab_w + tab_gap);
+        bool active = ((int)rs->stats_tab == t);
+        bool hov = rs->stats_tab_btns[t].hovered;
+        Color bg = active ? (Color){60, 60, 60, 255}
+                          : (hov ? (Color){50, 50, 50, 255}
+                                 : (Color){35, 35, 35, 255});
+        DrawRectangleRounded((Rectangle){tx, tab_y, tab_w, tab_h}, 0.2f, 4, bg);
+        if (active)
+            DrawRectangle((int)tx, (int)(tab_y + tab_h - 3.0f * s),
+                          (int)tab_w, (int)(3.0f * s), GOLD);
+        Color txt_clr = active ? GOLD : LIGHTGRAY;
+        int tsz = (int)(18.0f * s);
+        int tlw = hh_measure_text(rs, tab_labels[t], tsz);
+        hh_draw_text(rs, tab_labels[t],
+                     (int)(tx + tab_w * 0.5f - (float)tlw * 0.5f),
+                     (int)(tab_y + tab_h * 0.5f - (float)tsz * 0.5f),
+                     tsz, txt_clr);
+    }
+
+    float content_y = tab_y + tab_h + 12.0f * s;
+
+    if (!rs->stats_available) {
+        const char *msg = "Log in to view stats";
+        int msg_size = (int)(22.0f * s);
+        int mw = hh_measure_text(rs, msg, msg_size);
+        hh_draw_text(rs, msg, (int)(cx - (float)mw * 0.5f),
+                     (int)(content_y + 60.0f * s), msg_size, LIGHTGRAY);
+    } else if (rs->stats_tab == STATS_TAB_GAME_STATS) {
+        draw_stats_game_tab(rs, s, cx, content_y);
+    } else {
+        draw_stats_leaderboard_tab(rs, s, cx, content_y);
+    }
+
+    draw_button(rs, &rs->btn_stats_back, s);
+}
 
 static void draw_phase_menu(const GameState *gs, const RenderState *rs)
 {
@@ -1557,30 +3448,141 @@ static void draw_phase_menu(const GameState *gs, const RenderState *rs)
     float title_y = rs->menu_items[0].bounds.y - 90.0f * s;
 
     const char *title = "HOLLOW HEARTS";
-    int title_size = (int)(50.0f * s);
-    int tw = MeasureText(title, title_size);
-    DrawText(title, (int)(screen_cx - (float)tw * 0.5f),
+    int title_size = (int)(48.0f * s);
+    int tw = hh_measure_text(rs, title, title_size);
+    hh_draw_text(rs, title, (int)(screen_cx - (float)tw * 0.5f),
              (int)title_y, title_size, RAYWHITE);
 
-    const char *subtitle = "A deck-building Hearts modification";
-    int sub_size = (int)(20.0f * s);
-    int sw = MeasureText(subtitle, sub_size);
-    DrawText(subtitle, (int)(screen_cx - (float)sw * 0.5f),
-             (int)(title_y + (float)title_size + 10.0f * s), sub_size, LIGHTGRAY);
-
     for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        draw_button(&rs->menu_items[i], s);
+        draw_button(rs, &rs->menu_items[i], s);
+    }
+}
+
+static Color color_alpha(Color c, float a)
+{
+    c.a = (unsigned char)((float)c.a * a);
+    return c;
+}
+
+/* Point on the perimeter of a rounded rect at normalized position t∈[0,1].
+ * Traces clockwise from top-left arc start. */
+static Vector2 rounded_rect_point(Rectangle r, float radius, float t)
+{
+    float arc_len = (PI / 2.0f) * radius;
+    float top_len = r.width - 2.0f * radius;
+    float right_len = r.height - 2.0f * radius;
+    if (top_len < 0.0f) top_len = 0.0f;
+    if (right_len < 0.0f) right_len = 0.0f;
+    float total = 4.0f * arc_len + 2.0f * (top_len + right_len);
+    if (total < 0.001f)
+        return (Vector2){r.x + r.width * 0.5f, r.y + r.height * 0.5f};
+    float d = t * total;
+
+    /* Segment 0: top-left arc */
+    if (d < arc_len) {
+        float a = PI + (PI / 2.0f) * (d / arc_len);
+        return (Vector2){r.x + radius + radius * cosf(a),
+                         r.y + radius + radius * sinf(a)};
+    }
+    d -= arc_len;
+
+    /* Segment 1: top edge */
+    if (d < top_len)
+        return (Vector2){r.x + radius + d, r.y};
+    d -= top_len;
+
+    /* Segment 2: top-right arc */
+    if (d < arc_len) {
+        float a = -PI / 2.0f + (PI / 2.0f) * (d / arc_len);
+        return (Vector2){r.x + r.width - radius + radius * cosf(a),
+                         r.y + radius + radius * sinf(a)};
+    }
+    d -= arc_len;
+
+    /* Segment 3: right edge */
+    if (d < right_len)
+        return (Vector2){r.x + r.width, r.y + radius + d};
+    d -= right_len;
+
+    /* Segment 4: bottom-right arc */
+    if (d < arc_len) {
+        float a = (PI / 2.0f) * (d / arc_len);
+        return (Vector2){r.x + r.width - radius + radius * cosf(a),
+                         r.y + r.height - radius + radius * sinf(a)};
+    }
+    d -= arc_len;
+
+    /* Segment 5: bottom edge */
+    if (d < top_len)
+        return (Vector2){r.x + r.width - radius - d, r.y + r.height};
+    d -= top_len;
+
+    /* Segment 6: bottom-left arc */
+    if (d < arc_len) {
+        float a = PI / 2.0f + (PI / 2.0f) * (d / arc_len);
+        return (Vector2){r.x + radius + radius * cosf(a),
+                         r.y + r.height - radius + radius * sinf(a)};
+    }
+    d -= arc_len;
+
+    /* Segment 7: left edge */
+    float clamped = d < right_len ? d : right_len;
+    return (Vector2){r.x, r.y + r.height - radius - clamped};
+}
+
+/* Draw a highlighted segment on a rounded rect border.
+ * start/end in [0,1]. Handles wrapping. */
+static void draw_border_segment(Rectangle r, float roundness,
+                                float start, float end,
+                                float thickness, Color color)
+{
+    float min_dim = r.width < r.height ? r.width : r.height;
+    float radius = roundness * min_dim * 0.5f;
+    if (radius < 1.0f) radius = 1.0f;
+
+    int steps = 64;
+    float seg_len = end - start;
+    if (seg_len < 0.0f) seg_len += 1.0f;
+
+    Vector2 prev = rounded_rect_point(r, radius, start);
+    for (int i = 1; i <= steps; i++) {
+        float frac = (float)i / (float)steps;
+        float t = fmodf(start + seg_len * frac, 1.0f);
+        Vector2 cur = rounded_rect_point(r, radius, t);
+        DrawLineEx(prev, cur, thickness, color);
+        prev = cur;
     }
 }
 
 static void draw_contract_buttons(const RenderState *rs, float s)
 {
+    if (!rs->phase2_enabled) return;
+    float t = ease_apply(EASE_OUT_BACK, rs->contract_anim_t);
+    float alpha = rs->contract_anim_t; /* linear alpha for smoothness */
+    float scale_f = 0.8f + 0.2f * t;  /* 80% → 100% */
+
     for (int i = 0; i < rs->contract_option_count; i++) {
         const UIButton *btn = &rs->contract_options[i];
-        if (!btn->visible) continue;
+
+        /* Unselected buttons shrink + fade out when waiting */
+        float btn_alpha = alpha;
+        float btn_scale = scale_f;
+        if (rs->draft_waiting && i != rs->selected_contract_idx) {
+            float fo = rs->draft_fadeout_t;
+            btn_alpha = alpha * fo;
+            if (btn_alpha <= 0.001f) continue;
+            float shrink = ease_apply(EASE_IN_QUAD, 1.0f - fo); /* 0→1 as fo goes 1→0 */
+            btn_scale = scale_f * (1.0f - 0.2f * shrink);       /* 100% → 80% */
+        } else if (!btn->visible) {
+            continue;
+        }
 
         Color bg, text_col, border_col;
-        if (i == rs->selected_contract_idx) {
+        if (rs->draft_waiting && i == rs->selected_contract_idx) {
+            bg = (Color){50, 50, 70, 255};
+            text_col = RAYWHITE;
+            border_col = (Color){80, 70, 30, 255}; /* dim; animated segment provides gold */
+        } else if (i == rs->selected_contract_idx) {
             bg = (Color){180, 150, 30, 255};
             text_col = WHITE;
             border_col = GOLD;
@@ -1594,32 +3596,48 @@ static void draw_contract_buttons(const RenderState *rs, float s)
             border_col = GRAY;
         }
 
-        DrawRectangleRounded(btn->bounds, 0.1f, 4, bg);
-        DrawRectangleRoundedLines(btn->bounds, 0.1f, 4, border_col);
+        /* Scale bounds from center */
+        float cx = btn->bounds.x + btn->bounds.width * 0.5f;
+        float cy_center = btn->bounds.y + btn->bounds.height * 0.5f;
+        float sw = btn->bounds.width * btn_scale;
+        float sh = btn->bounds.height * btn_scale;
+        Rectangle scaled = {cx - sw * 0.5f, cy_center - sh * 0.5f, sw, sh};
 
-        float bx = btn->bounds.x;
-        float by = btn->bounds.y;
-        float bw = btn->bounds.width;
-        float pad = 8.0f * s;
+        DrawRectangleRounded(scaled, 0.1f, 4, color_alpha(bg, btn_alpha));
+        DrawRectangleRoundedLines(scaled, 0.1f, 4, color_alpha(border_col, btn_alpha));
 
-        int cond_fs = (int)(13.0f * s);
-        int name_fs = (int)(13.0f * s);
-        int desc_fs = (int)(11.0f * s);
+        /* Animated marching border segment while waiting */
+        if (rs->draft_waiting && i == rs->selected_contract_idx) {
+            float seg_start = rs->draft_wait_border_t;
+            float seg_end = seg_start + 0.20f; /* wrapping handled by draw_border_segment */
+            Color glow = (Color){255, 215, 0,
+                                 (unsigned char)(220.0f * btn_alpha)};
+            draw_border_segment(scaled, 0.1f, seg_start, seg_end,
+                                3.0f, glow);
+        }
+
+        float bx = scaled.x;
+        float by = scaled.y;
+        float bw = scaled.width;
+        float pad = 8.0f * s * scale_f;
+
+        int cond_fs = (int)(14.0f * s * scale_f);
+        int name_fs = (int)(14.0f * s * scale_f);
+        int desc_fs = (int)(14.0f * s * scale_f);
         float max_w = bw - pad * 2.0f;
 
         /* 1. Contract condition (label = description), centered word-wrap */
         float cy = by + pad;
         if (btn->label) {
-            /* Measure to center: draw_text_wrapped is left-aligned,
-             * so just draw from left padding */
-            float h = draw_text_wrapped(btn->label, bx + pad, cy,
-                                         cond_fs, max_w, text_col);
-            cy += h + 4.0f * s;
+            float h = draw_text_wrapped(rs, btn->label, bx + pad, cy,
+                                         cond_fs, max_w,
+                                         color_alpha(text_col, btn_alpha));
+            cy += h + 4.0f * s * scale_f;
         }
 
         /* 2. Transmutation card sprite, centered */
         int tid = rs->draft_transmute_ids[i];
-        float card_scale = 0.65f * s;
+        float card_scale = 0.65f * s * scale_f;
         float card_w = CARD_WIDTH_REF * card_scale;
         float card_h = CARD_HEIGHT_REF * card_scale;
         float card_x = bx + (bw - card_w) * 0.5f;
@@ -1629,22 +3647,20 @@ static void draw_contract_buttons(const RenderState *rs, float s)
             Vector2 origin = {0, 0};
             if (card_render_has_transmute_sprite(tid)) {
                 card_render_transmute_face(tid, pos, card_scale,
-                                           1.0f, false, false, 0.0f, origin);
+                                           btn_alpha, false, false, 0.0f, origin);
             } else {
-                /* Fallback: draw normal card face */
                 const TransmutationDef *td = phase2_get_transmutation(tid);
                 if (td) {
                     Card fallback = {.suit = td->result_suit, .rank = td->result_rank};
                     card_render_face(fallback, pos, card_scale,
-                                     1.0f, false, false, 0.0f, origin);
+                                     btn_alpha, false, false, 0.0f, origin);
                 }
             }
         }
-        cy += card_h + 4.0f * s;
+        cy += card_h + 4.0f * s * scale_f;
 
         /* 3. Transmutation name (left-aligned, GOLD) */
         if (btn->subtitle && btn->subtitle[0] != '\0') {
-            /* subtitle format: "TmuteName\nTmuteDescription" */
             const char *nl = strchr(btn->subtitle, '\n');
             if (nl) {
                 int name_len = (int)(nl - btn->subtitle);
@@ -1654,22 +3670,28 @@ static void draw_contract_buttons(const RenderState *rs, float s)
                 memcpy(name_buf, btn->subtitle, n);
                 name_buf[n] = '\0';
 
-                Color name_col = (i == rs->selected_contract_idx)
+                bool sel_highlight = (i == rs->selected_contract_idx &&
+                                     !rs->draft_waiting);
+                Color name_col = sel_highlight
                                      ? (Color){255, 255, 200, 255} : GOLD;
-                float h = draw_text_wrapped(name_buf, bx + pad, cy,
-                                             name_fs, max_w, name_col);
-                cy += h + 2.0f * s;
+                float h = draw_text_wrapped(rs, name_buf, bx + pad, cy,
+                                             name_fs, max_w,
+                                             color_alpha(name_col, btn_alpha));
+                cy += h + 2.0f * s * scale_f;
 
                 /* 4. Transmutation description (left-aligned, LIGHTGRAY) */
-                Color desc_col = (i == rs->selected_contract_idx)
+                Color desc_col = sel_highlight
                                      ? (Color){255, 255, 200, 200} : LIGHTGRAY;
-                draw_text_wrapped(nl + 1, bx + pad, cy,
-                                   desc_fs, max_w, desc_col);
+                draw_text_wrapped(rs, nl + 1, bx + pad, cy,
+                                   desc_fs, max_w,
+                                   color_alpha(desc_col, btn_alpha));
             } else {
-                Color name_col = (i == rs->selected_contract_idx)
+                Color name_col = (i == rs->selected_contract_idx &&
+                                  !rs->draft_waiting)
                                      ? (Color){255, 255, 200, 255} : GOLD;
-                draw_text_wrapped(btn->subtitle, bx + pad, cy,
-                                   name_fs, max_w, name_col);
+                draw_text_wrapped(rs, btn->subtitle, bx + pad, cy,
+                                   name_fs, max_w,
+                                   color_alpha(name_col, btn_alpha));
             }
         }
     }
@@ -1687,10 +3709,10 @@ static void draw_subphase_timer(const RenderState *rs, float s)
     Color timer_col = (secs <= 3) ? RED : GOLD;
 
     /* Top-right corner of screen (same padding as turn timer) */
-    int tw = MeasureText(timer_text, timer_size);
+    int tw = hh_measure_text(rs, timer_text, timer_size);
     float bx = rs->layout.screen_width - (float)tw - 10.0f * s;
     float by = 6.0f * s;
-    DrawText(timer_text, (int)bx, (int)by, timer_size, timer_col);
+    hh_draw_text(rs, timer_text, (int)bx, (int)by, timer_size, timer_col);
 }
 
 static void draw_phase_passing(const GameState *gs, const RenderState *rs)
@@ -1704,12 +3726,12 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
         /* Status text */
         if (rs->pass_status_text) {
             int st_size = (int)(22.0f * s);
-            int st_w = MeasureText(rs->pass_status_text, st_size);
-            DrawText(rs->pass_status_text,
+            int st_w = hh_measure_text(rs, rs->pass_status_text, st_size);
+            hh_draw_text(rs, rs->pass_status_text,
                      (int)(bc.x - (float)st_w * 0.5f),
                      (int)(bc.y - 120.0f * s), st_size, LIGHTGRAY);
         }
-        if (rs->dealer_ui_active) {
+        if (rs->dealer_ui_active && rs->phase2_enabled) {
             static const char *dir_labels[] = {"Left", "Front", "Right"};
             static const int dir_values[] = {PASS_LEFT, PASS_ACROSS, PASS_RIGHT};
             static const char *amt_labels[] = {"0", "2", "3", "4"};
@@ -1722,8 +3744,8 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
             /* Direction label */
             const char *dir_lbl = "Direction:";
             int dlbl_size = (int)(16.0f * s);
-            int dlbl_w = MeasureText(dir_lbl, dlbl_size);
-            DrawText(dir_lbl, (int)(bc.x - (float)dlbl_w * 0.5f),
+            int dlbl_w = hh_measure_text(rs, dir_lbl, dlbl_size);
+            hh_draw_text(rs, dir_lbl, (int)(bc.x - (float)dlbl_w * 0.5f),
                      (int)(dir_y - 22.0f * s), dlbl_size, GRAY);
 
             for (int i = 0; i < DEALER_DIR_BTN_COUNT; i++) {
@@ -1736,8 +3758,8 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
                 DrawRectangleRec(r, bg);
                 DrawRectangleLinesEx(r, 2.0f, border);
                 int lbl_size = (int)(18.0f * s);
-                int lw = MeasureText(dir_labels[i], lbl_size);
-                DrawText(dir_labels[i],
+                int lw = hh_measure_text(rs, dir_labels[i], lbl_size);
+                hh_draw_text(rs, dir_labels[i],
                          (int)(bx2 + (btn_w - (float)lw) * 0.5f),
                          (int)(dir_y + (btn_h - (float)lbl_size) * 0.5f),
                          lbl_size, WHITE);
@@ -1750,8 +3772,8 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
 
             const char *amt_lbl = "Cards to pass:";
             int albl_size = (int)(16.0f * s);
-            int albl_w = MeasureText(amt_lbl, albl_size);
-            DrawText(amt_lbl, (int)(bc.x - (float)albl_w * 0.5f),
+            int albl_w = hh_measure_text(rs, amt_lbl, albl_size);
+            hh_draw_text(rs, amt_lbl, (int)(bc.x - (float)albl_w * 0.5f),
                      (int)(amt_y - 22.0f * s), albl_size, GRAY);
 
             for (int i = 0; i < DEALER_AMT_BTN_COUNT; i++) {
@@ -1764,8 +3786,8 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
                 DrawRectangleRec(r, bg);
                 DrawRectangleLinesEx(r, 2.0f, border);
                 int lbl_size = (int)(18.0f * s);
-                int lw = MeasureText(amt_labels[i], lbl_size);
-                DrawText(amt_labels[i],
+                int lw = hh_measure_text(rs, amt_labels[i], lbl_size);
+                hh_draw_text(rs, amt_labels[i],
                          (int)(bx2 + (amt_w - (float)lw) * 0.5f),
                          (int)(amt_y + (btn_h - (float)lbl_size) * 0.5f),
                          lbl_size, WHITE);
@@ -1779,8 +3801,8 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
             DrawRectangleLinesEx(cfm_r, 2.0f, SKYBLUE);
             const char *cfm_lbl = "Confirm";
             int cfm_size = (int)(18.0f * s);
-            int cfm_lw = MeasureText(cfm_lbl, cfm_size);
-            DrawText(cfm_lbl,
+            int cfm_lw = hh_measure_text(rs, cfm_lbl, cfm_size);
+            hh_draw_text(rs, cfm_lbl,
                      (int)(bc.x - (float)cfm_lw * 0.5f),
                      (int)(cfm_y + (btn_h - (float)cfm_size) * 0.5f),
                      cfm_size, WHITE);
@@ -1790,16 +3812,44 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
     }
 
     case PASS_SUB_CONTRACT:
-        /* Label */
+        /* Label — animated dots when waiting */
         if (rs->pass_status_text) {
             int ctr_size = (int)(20.0f * s);
-            int ctr_w = MeasureText(rs->pass_status_text, ctr_size);
             float label_y = (rs->contract_option_count > 0)
                                 ? rs->contract_options[0].bounds.y - 28.0f * s
                                 : bc.y - 140.0f * s;
-            DrawText(rs->pass_status_text,
-                     (int)(bc.x - (float)ctr_w * 0.5f),
-                     (int)label_y, ctr_size, LIGHTGRAY);
+            if (rs->draft_waiting) {
+                /* Draw base text without dots */
+                const char *base = "Waiting for other players";
+                int base_w = hh_measure_text(rs, base, ctr_size);
+                int base_x = (int)(bc.x - (float)base_w * 0.5f -
+                              hh_measure_text(rs, "..", ctr_size) * 0.5f);
+                hh_draw_text(rs, base, base_x, (int)label_y,
+                             ctr_size, LIGHTGRAY);
+                /* Draw each dot with staggered fade */
+                float cycle = fmodf((float)GetTime() * 0.8f, 1.0f); /* 1.25s cycle */
+                int dot_x = base_x + base_w;
+                int dot_w = hh_measure_text(rs, ".", ctr_size);
+                for (int d = 0; d < 3; d++) {
+                    float phase = cycle - (float)d * 0.25f;
+                    if (phase < 0.0f) phase += 1.0f;
+                    /* fade in 0→0.3, hold 0.3→0.6, fade out 0.6→0.9, off 0.9→1 */
+                    float a;
+                    if (phase < 0.3f)      a = phase / 0.3f;
+                    else if (phase < 0.6f) a = 1.0f;
+                    else if (phase < 0.9f) a = 1.0f - (phase - 0.6f) / 0.3f;
+                    else                   a = 0.0f;
+                    unsigned char alpha = (unsigned char)(200.0f * a);
+                    hh_draw_text(rs, ".", dot_x, (int)label_y,
+                                 ctr_size, (Color){200, 200, 200, alpha});
+                    dot_x += dot_w;
+                }
+            } else {
+                int ctr_w = hh_measure_text(rs, rs->pass_status_text, ctr_size);
+                hh_draw_text(rs, rs->pass_status_text,
+                         (int)(bc.x - (float)ctr_w * 0.5f),
+                         (int)label_y, ctr_size, LIGHTGRAY);
+            }
         }
         if (rs->contract_ui_active) {
             draw_contract_buttons(rs, s);
@@ -1812,41 +3862,144 @@ static void draw_phase_passing(const GameState *gs, const RenderState *rs)
         Vector2 dir_pos = layout_pass_direction_position(&rs->layout);
         const char *dir_str = pass_direction_string(gs->pass_direction);
         int dir_size = (int)(28.0f * s);
-        int dw = MeasureText(dir_str, dir_size);
-        DrawText(dir_str, (int)(dir_pos.x + (160.0f * s - (float)dw) * 0.5f),
+        int dw = hh_measure_text(rs, dir_str, dir_size);
+        hh_draw_text(rs, dir_str, (int)(dir_pos.x - (float)dw * 0.5f),
                  (int)dir_pos.y, dir_size, GOLD);
 
-        /* Selection count */
-        char sel_text[32];
-        snprintf(sel_text, sizeof(sel_text), "Selected: %d / %d",
-                 rs->selected_count, gs->pass_card_count);
-        int sel_size = (int)(20.0f * s);
-        int sel_w = MeasureText(sel_text, sel_size);
-        DrawText(sel_text, (int)(bc.x - (float)sel_w * 0.5f),
-                 (int)(rs->layout.board_y + 270.0f * s), sel_size, LIGHTGRAY);
+        /* Selection count (hide when no cards to pass or already ready) */
+        if (gs->pass_card_count > 0 && !rs->pass_ready_waiting) {
+            char sel_text[32];
+            snprintf(sel_text, sizeof(sel_text), "Selected: %d / %d",
+                     rs->selected_count, gs->pass_card_count);
+            int sel_size = (int)(20.0f * s);
+            int sel_w = hh_measure_text(rs, sel_text, sel_size);
+            hh_draw_text(rs, sel_text, (int)(bc.x - (float)sel_w * 0.5f),
+                     (int)(bc.y - 55.0f * s), sel_size, LIGHTGRAY);
+        }
+
+        /* Transmutation availability indicator */
+        if (rs->transmute_btn_count > 0) {
+            const char *tmut_text = "Transmutations available - drag onto cards";
+            int tmut_size = (int)(16.0f * s);
+            int tmut_w = hh_measure_text(rs, tmut_text, tmut_size);
+            hh_draw_text(rs, tmut_text,
+                     (int)(bc.x - (float)tmut_w * 0.5f),
+                     (int)(bc.y - 20.0f * s),
+                     tmut_size, MAGENTA);
+        }
 
         draw_subphase_timer(rs, s);
-        draw_button(&rs->btn_confirm_pass, s);
+        if (rs->pass_ready_waiting) {
+            /* Animated "Waiting for others..." — same style as draft waiting */
+            int ctr_size = (int)(20.0f * s);
+            float label_y = bc.y + 40.0f * s;
+            const char *base = "Waiting for others";
+            int base_w = hh_measure_text(rs, base, ctr_size);
+            int base_x = (int)(bc.x - (float)base_w * 0.5f -
+                          hh_measure_text(rs, "..", ctr_size) * 0.5f);
+            hh_draw_text(rs, base, base_x, (int)label_y, ctr_size, LIGHTGRAY);
+            float cycle = fmodf((float)GetTime() * 0.8f, 1.0f);
+            int dot_x = base_x + base_w;
+            int dot_w = hh_measure_text(rs, ".", ctr_size);
+            for (int d = 0; d < 3; d++) {
+                float phase = cycle - (float)d * 0.25f;
+                if (phase < 0.0f) phase += 1.0f;
+                float a;
+                if (phase < 0.3f)      a = phase / 0.3f;
+                else if (phase < 0.6f) a = 1.0f;
+                else if (phase < 0.9f) a = 1.0f - (phase - 0.6f) / 0.3f;
+                else                   a = 0.0f;
+                unsigned char alpha = (unsigned char)(200.0f * a);
+                hh_draw_text(rs, ".", dot_x, (int)label_y,
+                             ctr_size, (Color){200, 200, 200, alpha});
+                dot_x += dot_w;
+            }
+        }
+        draw_button(rs, &rs->btn_confirm_pass, s);
+
+        /* Player labels with "Thinking..." for opponents still choosing */
+        {
+            bool thinking[NUM_PLAYERS] = {false};
+            for (int p = 1; p < NUM_PLAYERS; p++)
+                thinking[p] = !gs->pass_ready[p];
+            draw_player_labels(rs, thinking, -1);
+        }
         break;
     }
 
     case PASS_SUB_TOSS_ANIM:
     case PASS_SUB_TOSS_WAIT:
     case PASS_SUB_REVEAL:
-    case PASS_SUB_RECEIVE:
-        /* No UI overlay during pass animation — just show cards */
+    case PASS_SUB_RECEIVE: {
+        /* Player labels with "Thinking..." for opponents still choosing */
+        bool any_choosing = false;
+        {
+            bool thinking[NUM_PLAYERS] = {false};
+            for (int p = 1; p < NUM_PLAYERS; p++) {
+                thinking[p] = !gs->pass_ready[p];
+                if (thinking[p]) any_choosing = true;
+            }
+            draw_player_labels(rs, thinking, -1);
+        }
+        {
+            if (any_choosing) {
+            /* Animated "Waiting for others..." in center */
+            int ctr_size = (int)(20.0f * s);
+            float label_y = bc.y - 20.0f * s;
+            const char *base = "Waiting for others";
+            int base_w = hh_measure_text(rs, base, ctr_size);
+            int base_x = (int)(bc.x - (float)base_w * 0.5f -
+                          hh_measure_text(rs, "..", ctr_size) * 0.5f);
+            hh_draw_text(rs, base, base_x, (int)label_y, ctr_size, LIGHTGRAY);
+            float cycle = fmodf((float)GetTime() * 0.8f, 1.0f);
+            int dot_x = base_x + base_w;
+            int dot_w2 = hh_measure_text(rs, ".", ctr_size);
+            for (int d = 0; d < 3; d++) {
+                float phase = cycle - (float)d * 0.25f;
+                if (phase < 0.0f) phase += 1.0f;
+                float a;
+                if (phase < 0.3f)      a = phase / 0.3f;
+                else if (phase < 0.6f) a = 1.0f;
+                else if (phase < 0.9f) a = 1.0f - (phase - 0.6f) / 0.3f;
+                else                   a = 0.0f;
+                unsigned char alpha = (unsigned char)(200.0f * a);
+                hh_draw_text(rs, ".", dot_x, (int)label_y,
+                             ctr_size, (Color){200, 200, 200, alpha});
+                dot_x += dot_w2;
+            }
+            }
+        }
         break;
     }
 
-    /* Draw all hands (all subphases) */
-    for (int i = 0; i < rs->card_count; i++) {
-        draw_card_visual(&rs->cards[i], s, rs);
+    default:
+        break;
+    }
+
+    /* Draw all hands (all subphases), sorted by z_order so human cards render on top */
+    {
+        int sorted[MAX_CARD_VISUALS];
+        int n = rs->card_count;
+        for (int i = 0; i < n; i++) sorted[i] = i;
+        for (int i = 1; i < n; i++) {
+            int key = sorted[i];
+            int kz = rs->cards[key].z_order;
+            int j = i - 1;
+            while (j >= 0 && rs->cards[sorted[j]].z_order > kz) {
+                sorted[j + 1] = sorted[j];
+                j--;
+            }
+            sorted[j + 1] = key;
+        }
+        for (int i = 0; i < n; i++) {
+            draw_card_visual(&rs->cards[sorted[i]], s, rs);
+        }
     }
 }
 
 /* ---- Left panel drawing ---- */
 
-static void draw_left_panel_chat(const RenderState *rs)
+static void draw_left_panel_chat(RenderState *rs)
 {
     const LayoutConfig *cfg = &rs->layout;
     if (cfg->board_x < 40.0f * cfg->scale) return;
@@ -1858,7 +4011,7 @@ static void draw_left_panel_chat(const RenderState *rs)
 
     BeginScissorMode((int)r.x, (int)r.y, (int)r.width, (int)r.height);
 
-    int msg_fs = (int)(13.0f * s);
+    int msg_fs = (int)(14.0f * s);
     float text_x = r.x + 6.0f * s;
     float max_w = r.width - 12.0f * s;
 
@@ -1873,27 +4026,66 @@ static void draw_left_panel_chat(const RenderState *rs)
     int first_visible = count; /* index into logical order */
     for (int i = count - 1; i >= 0; i--) {
         int ring_idx = (rs->chat_head + i) % CHAT_LOG_MAX;
-        float h = measure_text_wrapped(rs->chat_msgs[ring_idx],
+        float h = measure_text_wrapped(rs, rs->chat_msgs[ring_idx],
                                        msg_fs, max_w);
         if (total_h + h > avail_h) break;
         total_h += h;
         first_visible = i;
     }
 
-    /* Draw visible messages top-to-bottom */
+    /* Draw visible messages top-to-bottom, collecting highlight rects */
+    Rectangle hl_rects[CHAT_LOG_MAX];
+    int hl_ring_indices[CHAT_LOG_MAX];
+    int hl_count = 0;
+
     float y = content_bot - total_h;
     for (int i = first_visible; i < count; i++) {
         int ring_idx = (rs->chat_head + i) % CHAT_LOG_MAX;
-        float h = draw_text_wrapped(rs->chat_msgs[ring_idx],
-                                    text_x, y, msg_fs, max_w,
-                                    rs->chat_colors[ring_idx]);
-        y += h;
+        bool has_hl = rs->chat_highlight[ring_idx][0] != '\0';
+        if (has_hl) {
+            Rectangle hr = {0};
+            float h = draw_text_wrapped_rich(rs, rs->chat_msgs[ring_idx],
+                                             text_x, y, msg_fs, max_w,
+                                             rs->chat_colors[ring_idx],
+                                             rs->chat_highlight[ring_idx],
+                                             &hr);
+            if (hr.width > 0 && hl_count < CHAT_LOG_MAX) {
+                hl_rects[hl_count] = hr;
+                hl_ring_indices[hl_count] = ring_idx;
+                hl_count++;
+            }
+            y += h;
+        } else {
+            float h = draw_text_wrapped(rs, rs->chat_msgs[ring_idx],
+                                        text_x, y, msg_fs, max_w,
+                                        rs->chat_colors[ring_idx]);
+            y += h;
+        }
     }
 
     EndScissorMode();
+
+    /* Set chat hover info for render_update tooltip handling */
+    rs->chat_hover_tid = -1;
+    rs->chat_hover_trick_num = -1;
+    Vector2 mouse = GetMousePosition();
+    for (int i = 0; i < hl_count; i++) {
+        if (!CheckCollisionPointRec(mouse, hl_rects[i])) continue;
+        int ri = hl_ring_indices[i];
+        if (rs->chat_transmute_id[ri] >= 0) {
+            rs->chat_hover_tid = rs->chat_transmute_id[ri];
+            rs->chat_hover_rect = hl_rects[i];
+            break;
+        }
+        if (rs->chat_trick_num[ri] > 0) {
+            rs->chat_hover_trick_num = rs->chat_trick_num[ri];
+            rs->chat_hover_trick_rect = hl_rects[i];
+            break;
+        }
+    }
 }
 
-static void draw_left_panel_info(const RenderState *rs)
+static void draw_left_panel_info(RenderState *rs)
 {
     const LayoutConfig *cfg = &rs->layout;
     if (cfg->board_x < 40.0f * cfg->scale) return;
@@ -1905,64 +4097,487 @@ static void draw_left_panel_info(const RenderState *rs)
 
     BeginScissorMode((int)r.x, (int)r.y, (int)r.width, (int)r.height);
 
-    int header_fs = (int)(14.0f * s);
-    int body_fs = (int)(12.0f * s);
+    int header_fs = (int)(16.0f * s);
+    int body_fs = (int)(14.0f * s);
     float pad = 6.0f * s;
     float x = r.x + pad;
     float y = r.y + pad;
     float max_w = r.width - pad * 2;
 
     /* Contract section */
-    DrawText("Contracts", (int)x, (int)y, header_fs, GOLD);
+    hh_draw_text(rs, "Contracts", (int)x, (int)y, header_fs, GOLD);
     y += (float)header_fs + 4.0f * s;
+    rs->info_contract_sprite_count = 0;
     if (rs->info_contract_count > 0) {
+        float sprite_scale = 0.3f * s;
+        float sprite_w = CARD_WIDTH_REF * sprite_scale;
+        float sprite_h = CARD_HEIGHT_REF * sprite_scale;
         for (int c = 0; c < rs->info_contract_count; c++) {
-            y += draw_text_wrapped(rs->info_contract_name[c], x, y,
-                                   body_fs, max_w, WHITE);
-            y += draw_text_wrapped(rs->info_contract_desc[c], x, y,
-                                   body_fs, max_w, LIGHTGRAY);
-            y += 2.0f * s;
+            int tid = rs->info_contract_transmute_id[c];
+            float text_x = x;
+            float text_max_w = max_w;
+            float entry_y = y;
+            if (tid >= 0) {
+                card_render_transmute_face(tid, (Vector2){x, y},
+                    sprite_scale, 1.0f, false, false, 0.0f, (Vector2){0,0});
+                if (rs->info_contract_sprite_count < 3) {
+                    int si = rs->info_contract_sprite_count++;
+                    rs->info_contract_sprite_rects[si] =
+                        (Rectangle){x, y, sprite_w, sprite_h};
+                    rs->info_contract_sprite_ids[si] = tid;
+                }
+                text_x = x + sprite_w + 4.0f * s;
+                text_max_w = max_w - sprite_w - 4.0f * s;
+            }
+            y += draw_text_wrapped(rs, rs->info_contract_name[c], text_x, y,
+                                   body_fs, text_max_w, WHITE);
+            y += draw_text_wrapped(rs, rs->info_contract_desc[c], text_x, y,
+                                   body_fs, text_max_w, LIGHTGRAY);
+            /* Ensure y advances past the sprite if text was shorter */
+            if (tid >= 0 && y < entry_y + sprite_h)
+                y = entry_y + sprite_h;
+            y += 4.0f * s;
         }
     } else {
-        DrawText("None", (int)x, (int)y, body_fs, GRAY);
+        hh_draw_text(rs, "None", (int)x, (int)y, body_fs, GRAY);
         y += (float)body_fs + 2.0f * s;
     }
 
     y += 6.0f * s;
 
-    /* Transmutation inventory section */
+    /* Transmutation inventory section (card visuals) */
     if (rs->transmute_btn_count > 0) {
-        DrawText("Transmutations", (int)x, (int)y, header_fs, GOLD);
+        hh_draw_text(rs, "Transmutations", (int)x, (int)y, header_fs, GOLD);
         y += (float)header_fs + 4.0f * s;
 
         if (rs->pending_transmutation_id >= 0) {
-            DrawText("Click a card to apply", (int)x, (int)y, body_fs, YELLOW);
+            hh_draw_text(rs, "Click a card to apply", (int)x, (int)y, body_fs, YELLOW);
             y += (float)body_fs + 4.0f * s;
         }
 
+        /* Compute card rects at the current y position */
+        float card_scale = 0.45f * s;
+        float card_w = CARD_WIDTH_REF * card_scale;
+        float card_h = CARD_HEIGHT_REF * card_scale;
+        float card_gap = 4.0f * s;
+        int cols_per_row = (int)((max_w + card_gap) / (card_w + card_gap));
+        if (cols_per_row < 1) cols_per_row = 1;
         for (int i = 0; i < rs->transmute_btn_count; i++) {
-            draw_button(&rs->transmute_btns[i], s);
+            int row = i / cols_per_row;
+            int col = i % cols_per_row;
+            rs->transmute_card_rects[i] = (Rectangle){
+                x + (float)col * (card_w + card_gap),
+                y + (float)row * (card_h + card_gap),
+                card_w, card_h
+            };
         }
-        /* Advance y past buttons */
-        const UIButton *last = &rs->transmute_btns[rs->transmute_btn_count - 1];
-        y = last->bounds.y + last->bounds.height + 6.0f * s;
-    }
+        rs->transmute_card_y = y;
 
-    /* Transmutation card descriptions */
-    if (rs->transmute_info_count > 0) {
-        y += 2.0f * s;
-        DrawText("Card Effects", (int)x, (int)y, header_fs, GOLD);
-        y += (float)header_fs + 4.0f * s;
-        for (int i = 0; i < rs->transmute_info_count; i++) {
-            y += draw_text_wrapped(rs->transmute_info_text[i], x, y,
-                                   body_fs, max_w,
-                                   (Color){200, 160, 255, 255});
+        Vector2 mouse = GetMousePosition();
+        int display_count = rs->transmute_btn_count;
+        bool dragging_transmute = rs->drag.active && rs->drag.is_transmute_drag;
+
+        for (int i = 0; i < display_count; i++) {
+            /* Skip the dragged card */
+            if (dragging_transmute && i == rs->drag.transmute_slot_origin)
+                continue;
+
+            /* Compute display position: during drag, shift cards around the gap */
+            Rectangle cr = rs->transmute_card_rects[i];
+            if (dragging_transmute) {
+                int src = rs->drag.transmute_slot_origin;
+                int dst = rs->drag.transmute_slot_current;
+                /* Compute where this card should visually appear */
+                int visual_slot = i;
+                if (src < dst) {
+                    /* Source removed, cards after src shift left, gap at dst */
+                    if (i > src && i <= dst) visual_slot = i - 1;
+                } else if (src > dst) {
+                    /* Source removed, cards before src shift right, gap at dst */
+                    if (i >= dst && i < src) visual_slot = i + 1;
+                }
+                cr.x = rs->transmute_card_rects[visual_slot].x;
+                cr.y = rs->transmute_card_rects[visual_slot].y;
+            }
+
+            int tid = rs->transmute_btn_ids[i];
+            bool selected = (rs->pending_transmutation_id >= 0 &&
+                             tid == rs->pending_transmutation_id);
+            bool hovered = !dragging_transmute && CheckCollisionPointRec(mouse, cr);
+            float card_scale = cr.width / (float)CARD_WIDTH_REF;
+            Vector2 pos = {cr.x, cr.y};
+            Vector2 origin = {0, 0};
+
+            if (card_render_has_transmute_sprite(tid)) {
+                card_render_transmute_face(tid, pos, card_scale,
+                                          1.0f, hovered, selected,
+                                          0.0f, origin);
+            } else {
+                /* Fallback: draw a colored rectangle with the transmutation name */
+                Color bg = selected ? (Color){80, 80, 160, 255}
+                                    : (Color){40, 40, 60, 255};
+                if (hovered) bg = (Color){60, 60, 120, 255};
+                DrawRectangleRec(cr, bg);
+                DrawRectangleLinesEx(cr, 1.0f, selected ? GOLD : LIGHTGRAY);
+                const TransmutationDef *td = phase2_get_transmutation(tid);
+                if (td) {
+                    int fs = (int)(9.0f * s);
+                    hh_draw_text(rs, td->name, (int)(cr.x + 2*s), (int)(cr.y + 2*s),
+                             fs, WHITE);
+                }
+            }
+
+            if (selected) {
+                DrawRectangleLinesEx(cr, 2.0f, GOLD);
+            }
         }
+        /* Dragged transmute card drawn at top level (render_draw)
+         * so it appears above the board and hand cards. */
+
+        /* Advance y past cards */
+        Rectangle last_cr = rs->transmute_card_rects[rs->transmute_btn_count - 1];
+        y = last_cr.y + last_cr.height + 6.0f * s;
     }
 
     y += 6.0f * s;
 
     EndScissorMode();
+}
+
+/* ---- Player labels: permanent username + optional "Thinking..." ---- */
+static void draw_player_labels(const RenderState *rs,
+                                const bool show_thinking[NUM_PLAYERS],
+                                int timer_secs)
+{
+    float s = rs->layout.scale;
+    const LayoutConfig *cfg = &rs->layout;
+    float bx  = cfg->board_x;
+    float by  = cfg->board_y;
+    float bsz = cfg->board_size;
+
+    int name_fs = (int)(18.0f * s);
+    int think_fs = (int)(14.0f * s);
+
+    for (int p = 1; p < NUM_PLAYERS; p++) {
+        PlayerPosition spos = player_screen_pos(p);
+        float lx, ly;
+        switch (spos) {
+        case POS_TOP:
+            lx = bx + bsz * 0.62f;
+            ly = by + bsz * 0.15f;
+            break;
+        case POS_LEFT:
+            lx = bx + bsz * 0.06f;
+            ly = by + bsz * 0.32f;
+            break;
+        case POS_RIGHT:
+            lx = bx + bsz * 0.88f;
+            ly = by + bsz * 0.62f;
+            break;
+        default:
+            lx = 0; ly = 0; break;
+        }
+
+        /* Cache indicator rect (layout data, safe to write from draw path) */
+        {
+            RenderState *rs_mut = (RenderState *)rs;
+            int tw = hh_measure_text(rs, player_name(p, rs), name_fs);
+            float pad = 8.0f * s;
+            rs_mut->opponent_indicator_rects[p] = (Rectangle){
+                lx - pad, ly - pad,
+                (float)tw + pad * 2.0f,
+                (float)name_fs + pad * 2.0f
+            };
+        }
+
+        /* Opponent indicator: background panel + orbiting gold border */
+        if (rs->opponent_hover_active) {
+            Rectangle ir = rs->opponent_indicator_rects[p];
+            bool hovered = (p == rs->opponent_hover_player);
+
+            /* Semi-transparent dark background */
+            DrawRectangleRounded(ir, 0.2f, 8,
+                                 (Color){30, 30, 30,
+                                         hovered ? (unsigned char)180
+                                                 : (unsigned char)120});
+
+            /* Orbiting gold border segment */
+            float speed_mult = hovered ? 2.0f : 1.0f;
+            float seg_start = fmodf(rs->opponent_border_t * speed_mult, 1.0f);
+            float seg_end = seg_start + 0.20f;
+            unsigned char alpha = hovered ? 255 : 120;
+            Color glow = (Color){255, 215, 0, alpha};
+            draw_border_segment(ir, 0.2f, seg_start, seg_end, 3.0f, glow);
+        }
+
+        /* Username — always visible */
+        hh_draw_text(rs, player_name(p, rs), (int)lx, (int)ly, name_fs, GOLD);
+
+        /* "Thinking..." — conditional, with animated dots */
+        if (show_thinking[p]) {
+            float ty = ly + (float)name_fs + 2.0f * s;
+            const char *base = "Thinking";
+            int bw = hh_measure_text(rs, base, think_fs);
+            hh_draw_text(rs, base, (int)lx, (int)ty, think_fs, GRAY);
+
+            float cycle = fmodf((float)GetTime() * 0.8f, 1.0f);
+            int dx = (int)lx + bw;
+            int single_dot_w = hh_measure_text(rs, ".", think_fs);
+            for (int d = 0; d < 3; d++) {
+                float phase = cycle - (float)d * 0.25f;
+                if (phase < 0.0f) phase += 1.0f;
+                float a;
+                if (phase < 0.3f)      a = phase / 0.3f;
+                else if (phase < 0.6f) a = 1.0f;
+                else if (phase < 0.9f) a = 1.0f - (phase - 0.6f) / 0.3f;
+                else                   a = 0.0f;
+                unsigned char alpha = (unsigned char)(200.0f * a);
+                hh_draw_text(rs, ".", dx, (int)ty, think_fs,
+                             (Color){200, 200, 200, alpha});
+                dx += single_dot_w;
+            }
+
+            if (timer_secs >= 0) {
+                char tbuf[16];
+                snprintf(tbuf, sizeof(tbuf), " (%d)", timer_secs);
+                hh_draw_text(rs, tbuf, dx, (int)ty, think_fs, GRAY);
+            }
+        }
+    }
+}
+
+/* ---- Rogue reveal border (growing gold segment around revealed cards) ---- */
+static void draw_rogue_reveal_border(const RenderState *rs)
+{
+    if (!rs->phase2_enabled) return;
+    if (!rs->rogue_border_active || rs->rogue_border_progress <= 0.0f) return;
+    if (rs->staged_rogue_cv_count <= 0) return;
+
+    /* Compute bounding rect matching draw_card_visual's exact layout:
+     * drawn size = CARD_{W,H}_REF * effective_scale
+     * drawn top-left = position - origin
+     * (origin was set at base scale, doesn't change with cv->scale) */
+    float base_cw = rs->layout.card_width / rs->layout.scale;  /* CARD_WIDTH_REF */
+    float base_ch = rs->layout.card_height / rs->layout.scale;  /* CARD_HEIGHT_REF */
+    float min_x = 1e9f, max_x = -1e9f, min_y = 1e9f, max_y = -1e9f;
+    for (int i = 0; i < rs->staged_rogue_cv_count; i++) {
+        int idx = rs->staged_rogue_cv_indices[i];
+        if (idx < 0 || idx >= rs->card_count) continue;
+        const CardVisual *cv = &rs->cards[idx];
+        float eff_scale = cv->scale; /* no hover on these cards */
+        float cw = base_cw * eff_scale;
+        float ch = base_ch * eff_scale;
+        /* Card is drawn at position - origin, with size cw x ch */
+        float left  = cv->position.x - cv->origin.x;
+        float top   = cv->position.y - cv->origin.y;
+        if (left < min_x) min_x = left;
+        if (left + cw > max_x) max_x = left + cw;
+        if (top < min_y) min_y = top;
+        if (top + ch > max_y) max_y = top + ch;
+    }
+
+    float pad = 12.0f * rs->layout.scale;
+    Rectangle r = { min_x - pad, min_y - pad,
+                    (max_x - min_x) + pad * 2.0f,
+                    (max_y - min_y) + pad * 2.0f };
+
+    float min_dim = r.width < r.height ? r.width : r.height;
+    float roundness = (rs->layout.card_width * 0.08f) / (min_dim * 0.5f);
+    if (roundness > 0.3f) roundness = 0.3f;
+
+    float thickness = 3.0f * rs->layout.scale;
+    Color gold = (Color){255, 215, 0, 220};
+    draw_border_segment(r, roundness, 0.0f, rs->rogue_border_progress,
+                        thickness, gold);
+}
+
+/* ---- Duel countdown timer + border around revealed card ---- */
+static void draw_duel_overlay(const RenderState *rs)
+{
+    if (!rs->phase2_enabled) return;
+    if (rs->duel_time_remaining < 0.0f) return;
+
+    float s = rs->layout.scale;
+    int secs = (int)ceilf(rs->duel_time_remaining);
+    if (secs < 0) secs = 0;
+
+    /* Border around revealed card (Phase 2 only) */
+    bool has_card = rs->duel_border_active &&
+                    rs->duel_border_progress > 0.0f &&
+                    rs->staged_duel_cv_idx >= 0 &&
+                    rs->staged_duel_cv_idx < rs->card_count;
+
+    float card_bottom = 0.0f;
+    if (has_card) {
+        const CardVisual *cv = &rs->cards[rs->staged_duel_cv_idx];
+        float base_cw = rs->layout.card_width / s;
+        float base_ch = rs->layout.card_height / s;
+        float eff_scale = cv->scale;
+        float cw = base_cw * eff_scale;
+        float ch = base_ch * eff_scale;
+        float left = cv->position.x - cv->origin.x;
+        float top  = cv->position.y - cv->origin.y;
+
+        float pad = 12.0f * s;
+        Rectangle r = { left - pad, top - pad, cw + pad * 2.0f, ch + pad * 2.0f };
+
+        float min_dim = r.width < r.height ? r.width : r.height;
+        float roundness = (rs->layout.card_width * 0.08f) / (min_dim * 0.5f);
+        if (roundness > 0.3f) roundness = 0.3f;
+
+        float thickness = 3.0f * s;
+        Color gold = (Color){255, 215, 0, 220};
+        draw_border_segment(r, roundness, 0.0f, rs->duel_border_progress,
+                            thickness, gold);
+        card_bottom = top + ch + pad;
+    }
+
+    /* Numeric timer below the card (or at board center if no card yet) */
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", secs);
+
+    int fs = (int)(36.0f * s);
+    int tw = hh_measure_text(rs, buf, fs);
+    float pad = 12.0f * s;
+
+    float tx, ty;
+    if (has_card) {
+        /* Below the card, horizontally centered with it */
+        const CardVisual *cv = &rs->cards[rs->staged_duel_cv_idx];
+        float base_cw2 = (rs->layout.card_width / s) * cv->scale;
+        float card_cx = (cv->position.x - cv->origin.x) + base_cw2 * 0.5f;
+        tx = card_cx - (float)tw * 0.5f;
+        ty = card_bottom + 20.0f * s;
+    } else {
+        /* Phase 1: centered on board */
+        Vector2 center = layout_board_center(&rs->layout);
+        tx = center.x - (float)tw * 0.5f;
+        ty = center.y - (float)fs * 0.5f;
+    }
+
+    /* Background pill */
+    Rectangle bg = {
+        tx - pad,
+        ty - pad * 0.5f,
+        (float)tw + pad * 2.0f,
+        (float)fs + pad
+    };
+    DrawRectangleRounded(bg, 0.4f, 8, (Color){0, 0, 0, 180});
+
+    /* Timer text */
+    Color col = (secs <= 3) ? RED : GOLD;
+    hh_draw_text(rs, buf, (int)tx, (int)ty, fs, col);
+}
+
+/* ---- Suit selection overlay (Rogue: pick a suit) ---- */
+static void draw_suit_selection(const RenderState *rs)
+{
+    if (!rs->phase2_enabled) return;
+    if (!rs->suit_hover_active) return;
+
+    float s = rs->layout.scale;
+    Vector2 center = layout_board_center(&rs->layout);
+
+    static const char *suit_names[] = {"Clubs", "Diamonds", "Spades", "Hearts"};
+    int fs = (int)(18.0f * s);
+    float pad = 10.0f * s;
+    float gap = 8.0f * s;
+
+    /* Measure widths for centering */
+    float widths[SUIT_COUNT];
+    float total_w = 0;
+    for (int i = 0; i < SUIT_COUNT; i++) {
+        char label[32];
+        snprintf(label, sizeof(label), "%s %s",
+                 card_suit_symbol((Suit)i), suit_names[i]);
+        widths[i] = (float)hh_measure_text(rs, label, fs) + pad * 2.0f;
+        total_w += widths[i];
+    }
+    total_w += gap * (SUIT_COUNT - 1);
+    float h = (float)fs + pad * 2.0f;
+
+    float x = center.x - total_w * 0.5f;
+    float y = center.y - h * 0.5f - 40.0f * s; /* slightly above center */
+
+    RenderState *rs_mut = (RenderState *)rs;
+
+    for (int i = 0; i < SUIT_COUNT; i++) {
+        Rectangle ir = { x, y, widths[i], h };
+        rs_mut->suit_indicator_rects[i] = ir;
+
+        bool hovered = (i == rs->suit_hover_idx);
+
+        /* Semi-transparent dark background */
+        DrawRectangleRounded(ir, 0.2f, 8,
+                             (Color){30, 30, 30,
+                                     hovered ? (unsigned char)180
+                                             : (unsigned char)120});
+
+        /* Orbiting gold border segment */
+        float speed_mult = hovered ? 2.0f : 1.0f;
+        float seg_start = fmodf(rs->suit_border_t * speed_mult, 1.0f);
+        float seg_end = seg_start + 0.20f;
+        unsigned char alpha = hovered ? 255 : 120;
+        Color glow = (Color){255, 215, 0, alpha};
+        draw_border_segment(ir, 0.2f, seg_start, seg_end, 3.0f, glow);
+
+        /* Suit symbol + name */
+        char label[32];
+        snprintf(label, sizeof(label), "%s %s",
+                 card_suit_symbol((Suit)i), suit_names[i]);
+        Color text_col = card_suit_color((Suit)i);
+        if (!hovered) {
+            text_col.a = 180;
+        }
+        hh_draw_text(rs, label,
+                     (int)(ir.x + pad), (int)(ir.y + pad),
+                     fs, text_col);
+
+        x += widths[i] + gap;
+    }
+}
+
+/* ---- Scoreboard HUD (upper-left, right of the left column) ---- */
+static void draw_scoreboard_hud(const GameState *gs, const RenderState *rs)
+{
+    float s = rs->layout.scale;
+    const LayoutConfig *cfg = &rs->layout;
+
+    /* Position: just to the right of the left panel, at the top.
+     * Use same margin as the left panel (4*scale from screen edge). */
+    float panel_w = (cfg->screen_width - cfg->board_size) * 0.5f;
+    float margin = 4.0f * s;
+    float pad = 10.0f * s;
+    float x = panel_w + margin + pad;
+    float y = margin + pad;
+
+    int font_header = (int)(16.0f * s);
+    int font_row    = (int)(14.0f * s);
+    float row_h     = 22.0f * s;
+
+    /* Background — matches left panel lower style */
+    float bg_w = 160.0f * s;
+    float bg_h = row_h * NUM_PLAYERS + (float)font_header + 4.0f * s + pad * 2;
+    DrawRectangleRec((Rectangle){x - pad, y - pad, bg_w, bg_h},
+                     (Color){15, 25, 15, 200});
+
+    /* Header */
+    hh_draw_text(rs, "Scores", (int)x, (int)y, font_header, GOLD);
+    y += (float)font_header + 4.0f * s;
+
+    /* Right-align score column inside the box */
+    float score_x = x + bg_w - pad * 3;
+
+    /* Player rows */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        hh_draw_text(rs, player_name(i, rs), (int)x, (int)y, font_row, LIGHTGRAY);
+
+        char pts[16];
+        snprintf(pts, sizeof(pts), "%d", gs->players[i].total_score);
+        int pw = hh_measure_text(rs, pts, font_row);
+        hh_draw_text(rs, pts, (int)(score_x - (float)pw), (int)y, font_row, LIGHTGRAY);
+        y += row_h;
+    }
 }
 
 static void draw_phase_playing(const GameState *gs, const RenderState *rs)
@@ -1971,17 +4586,32 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
     const LayoutConfig *cfg = &rs->layout;
 
     /* Left column panels */
-    draw_left_panel_chat(rs);
-    draw_left_panel_info(rs);
+    draw_left_panel_chat((RenderState *)rs);
+    draw_left_panel_info((RenderState *)rs);
 
     /* Draw pile cards (underneath trick/hand cards) */
     for (int i = 0; i < rs->pile_card_count; i++) {
         draw_card_visual(&rs->pile_cards[i], s, rs);
     }
 
-    /* Draw hands */
-    for (int i = 0; i < rs->card_count; i++) {
-        draw_card_visual(&rs->cards[i], s, rs);
+    /* Draw hands, sorted by z_order so human cards render on top */
+    {
+        int sorted[MAX_CARD_VISUALS];
+        int n = rs->card_count;
+        for (int i = 0; i < n; i++) sorted[i] = i;
+        for (int i = 1; i < n; i++) {
+            int key = sorted[i];
+            int kz = rs->cards[key].z_order;
+            int j = i - 1;
+            while (j >= 0 && rs->cards[sorted[j]].z_order > kz) {
+                sorted[j + 1] = sorted[j];
+                j--;
+            }
+            sorted[j + 1] = key;
+        }
+        for (int i = 0; i < n; i++) {
+            draw_card_visual(&rs->cards[sorted[i]], s, rs);
+        }
     }
 
     /* Shield indicators next to player piles */
@@ -2024,22 +4654,28 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
         /* Number in shield color */
         char shield_txt[4];
         snprintf(shield_txt, sizeof(shield_txt), "%d", rs->shield_remaining[p]);
-        int stfs = (int)(13.0f * s);
-        int stw = MeasureText(shield_txt, stfs);
+        int stfs = (int)(14.0f * s);
+        int stw = hh_measure_text(rs, shield_txt, stfs);
         float text_cy = (top_y + mid_y) * 0.5f + 2.0f * s; /* slightly below rect center */
-        DrawText(shield_txt, (int)(ox - (float)stw * 0.5f),
+        hh_draw_text(rs, shield_txt, (int)(ox - (float)stw * 0.5f),
                  (int)(text_cy - (float)stfs * 0.5f), stfs, edge);
     }
 
-    /* Turn indicator + timer (top-right of board) */
+    /* Turn indicator + timer (top-right of board).
+     * game_state_current_player returns -1 when gs->phase != PHASE_PLAYING
+     * (e.g. during PHASE_SETTINGS overlay). Derive from trick state directly. */
     int current = game_state_current_player(gs);
+    if (current < 0 && gs->phase == PHASE_SETTINGS &&
+        !trick_is_complete(&gs->current_trick)) {
+        current = (gs->lead_player + gs->current_trick.num_played) % NUM_PLAYERS;
+    }
     if (current >= 0) {
         char turn_text[48];
         if (current == HUMAN_PLAYER) {
             snprintf(turn_text, sizeof(turn_text), "Your turn");
         } else {
             snprintf(turn_text, sizeof(turn_text), "%s's turn",
-                     player_name(current));
+                     player_name(current, rs));
         }
 
         int secs = (int)ceilf(rs->turn_time_remaining);
@@ -2050,22 +4686,51 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
 
         int timer_size = (int)(24.0f * s);
         Color col = (secs <= 5) ? RED : (current == HUMAN_PLAYER ? GREEN : GOLD);
-        int tw = MeasureText(full_text, timer_size);
+        int tw = hh_measure_text(rs, full_text, timer_size);
         float tx = cfg->screen_width - (float)tw - 10.0f * s;
         float ty = 6.0f * s;
-        DrawText(full_text, (int)tx, (int)ty, timer_size, col);
+        hh_draw_text(rs, full_text, (int)tx, (int)ty, timer_size, col);
     }
 
-    /* Trick count */
-    char trick_text[32];
-    snprintf(trick_text, sizeof(trick_text), "Trick %d/13", gs->tricks_played + 1);
-    int trick_size = (int)(18.0f * s);
-    int trick_tw = MeasureText(trick_text, trick_size);
-    DrawText(trick_text,
-             (int)(cfg->screen_width - (float)trick_tw - 10.0f * s),
-             (int)(cfg->board_y + 38.0f * s), trick_size, LIGHTGRAY);
+    /* Trick count — positioned just below the scoreboard HUD */
+    {
+        float margin = 4.0f * s;
+        float pad = 10.0f * s;
+        float panel_w = (cfg->screen_width - cfg->board_size) * 0.5f;
+        float sb_x = panel_w + margin;
+        float row_h = 22.0f * s;
+        float font_h = 16.0f * s;
+        float sb_bottom = margin + row_h * NUM_PLAYERS + font_h + 4.0f * s + pad * 2;
+
+        char trick_text[32];
+        snprintf(trick_text, sizeof(trick_text), "Trick %d/13", gs->tricks_played + 1);
+        int trick_size = (int)(16.0f * s);
+        float btn_offset = 80.0f * s + 8.0f * s; /* skip past Help button + gap */
+        hh_draw_text(rs, trick_text, (int)(sb_x + btn_offset),
+                 (int)(sb_bottom + 4.0f * s), trick_size, LIGHTGRAY);
+    }
 
     /* Dim unplayable cards — handled inside draw_card_visual via cv->dimmed */
+
+    /* Player labels with "Thinking..." for opponent whose turn it is */
+    {
+        bool thinking[NUM_PLAYERS] = {false};
+        int think_timer = -1;
+        if (current >= 0 && current != HUMAN_PLAYER) {
+            thinking[current] = true;
+            int secs = (int)ceilf(rs->turn_time_remaining);
+            if (secs < 0) secs = 0;
+            think_timer = secs;
+        }
+        draw_player_labels(rs, thinking, think_timer);
+        draw_suit_selection(rs);
+        draw_duel_overlay(rs);
+        draw_rogue_reveal_border(rs);
+    }
+
+    /* Scoreboard HUD */
+    draw_scoreboard_hud(gs, rs);
+    help_menu_draw(&rs->help_menu, rs);
 }
 
 /* Draw the contracts results panel: 3 columns (Player | Reward | Contract).
@@ -2073,12 +4738,13 @@ static void draw_phase_playing(const GameState *gs, const RenderState *rs)
 static void draw_contracts_panel(const RenderState *rs, float s,
                                   const LayoutConfig *cfg)
 {
+    if (!rs->phase2_enabled) return;
     ContractsTableLayout tbl;
     layout_contracts_table(cfg, &tbl);
 
     Vector2 bc = layout_board_center(cfg);
     int font22 = (int)(22.0f * s);
-    int font13 = (int)(13.0f * s);
+    int font14 = (int)(14.0f * s);
     int font11 = (int)(11.0f * s);
     int table_x = (int)tbl.table_x;
     int col2_x  = (int)tbl.col2_x;
@@ -2089,22 +4755,22 @@ static void draw_contracts_panel(const RenderState *rs, float s,
     /* Title */
     const char *title = "Rewards Obtained";
     int title_size = (int)(36.0f * s);
-    int tw = MeasureText(title, title_size);
-    DrawText(title, (int)(bc.x - (float)tw * 0.5f),
+    int tw = hh_measure_text(rs, title, title_size);
+    hh_draw_text(rs, title, (int)(bc.x - (float)tw * 0.5f),
              (int)tbl.title_y, title_size, GOLD);
 
     /* Header */
     int header_y = (int)tbl.header_y;
-    DrawText("Player", table_x, header_y, font22, LIGHTGRAY);
-    DrawText("Reward", col2_x, header_y, font22, LIGHTGRAY);
-    DrawText("Contract", col3_x, header_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Player", table_x, header_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Reward", col2_x, header_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Contract", col3_x, header_y, font22, LIGHTGRAY);
 
     DrawLine(table_x, (int)tbl.line_y,
              table_x + (int)tbl.table_w, (int)tbl.line_y, GRAY);
 
     if (rs->contract_result_count == 0 && rs->contract_reveal_count > 0) {
         int y = (int)tbl.first_row_y;
-        DrawText("No contracts completed this round", table_x, y, font22, GRAY);
+        hh_draw_text(rs, "Nobody achieved a contract this round.", table_x, y, font22, GRAY);
         return;
     }
 
@@ -2145,25 +4811,25 @@ static void draw_contracts_panel(const RenderState *rs, float s,
             Color tdesc_col = (Color){100, 200, 100, 180};
 
             /* Column 1: Player name */
-            DrawText(rs->contract_result_text[i], table_x, y, font22, row_col);
+            hh_draw_text(rs, rs->contract_result_text[i], table_x, y, font22, row_col);
 
             /* Column 2: Transmutation name + transmutation description */
-            DrawText(rs->contract_result_name[i], col2_x, y, font22, row_col);
-            draw_text_wrapped(rs->contract_result_tdesc[i],
+            hh_draw_text(rs, rs->contract_result_name[i], col2_x, y, font22, row_col);
+            draw_text_wrapped(rs, rs->contract_result_tdesc[i],
                               (float)col2_x, (float)(y + font22 + (int)(2.0f * s)),
                               font11, col2_w, tdesc_col);
 
             /* Column 3: Contract condition */
-            draw_text_wrapped(rs->contract_result_desc[i],
+            draw_text_wrapped(rs, rs->contract_result_desc[i],
                               (float)col3_x, (float)y,
-                              font13, (float)col3_w, LIGHTGRAY);
+                              font14, (float)col3_w, LIGHTGRAY);
         } else {
             /* Not yet revealed */
-            DrawText(rs->contract_result_text[i], table_x, y, font22, LIGHTGRAY);
-            DrawText(rs->contract_result_name[i], col2_x, y, font22, LIGHTGRAY);
-            draw_text_wrapped(rs->contract_result_desc[i],
+            hh_draw_text(rs, rs->contract_result_text[i], table_x, y, font22, LIGHTGRAY);
+            hh_draw_text(rs, rs->contract_result_name[i], col2_x, y, font22, LIGHTGRAY);
+            draw_text_wrapped(rs, rs->contract_result_desc[i],
                               (float)col3_x, (float)y,
-                              font13, (float)col3_w, DARKGRAY);
+                              font14, (float)col3_w, DARKGRAY);
         }
     }
 
@@ -2199,26 +4865,28 @@ static void draw_scoring_table(const RenderState *rs, float s,
     BeginScissorMode((int)br.x, (int)br.y, (int)br.width, (int)br.height);
 
     Vector2 bc = layout_board_center(cfg);
-    int col_w = (int)tbl.col_w;
     int table_x = (int)tbl.table_x;
+    int col_total_x = (int)tbl.col_total_x;
+    int col_round_x = (int)tbl.col_round_x;
+    int col_cards_x = (int)tbl.col_cards_x;
     int table_y = (int)tbl.header_y;
     int font22 = (int)(22.0f * s);
 
     /* Title */
     const char *title = "Round Complete";
     int title_size = (int)(36.0f * s);
-    int tw = MeasureText(title, title_size);
-    DrawText(title, (int)(bc.x - (float)tw * 0.5f),
+    int tw = hh_measure_text(rs, title, title_size);
+    hh_draw_text(rs, title, (int)(bc.x - (float)tw * 0.5f),
              (int)tbl.title_y, title_size, RAYWHITE);
 
     /* Header */
-    DrawText("Player", table_x, table_y, font22, LIGHTGRAY);
-    DrawText("Total", table_x + col_w, table_y, font22, LIGHTGRAY);
-    DrawText("Round", table_x + col_w * 2, table_y, font22, LIGHTGRAY);
-    DrawText("Cards", table_x + col_w * 3, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Player", table_x, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Total", col_total_x, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Round", col_round_x, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Cards", col_cards_x, table_y, font22, LIGHTGRAY);
 
     DrawLine(table_x, (int)tbl.line_y,
-             table_x + col_w * tbl.num_cols, (int)tbl.line_y, GRAY);
+             table_x + (int)tbl.table_w, (int)tbl.line_y, GRAY);
 
     /* Find best/worst for highlighting (use displayed totals for animation) */
     int best_score = 999, worst_score = -1;
@@ -2234,14 +4902,14 @@ static void draw_scoring_table(const RenderState *rs, float s,
         if (rs->displayed_total_scores[i] == best_score) row_col = GREEN;
         if (rs->displayed_total_scores[i] == worst_score) row_col = RED;
 
-        DrawText(player_name(i), table_x, y, font22, row_col);
+        hh_draw_text(rs, player_name(i, rs), table_x, y, font22, row_col);
 
         char pts[16];
         snprintf(pts, sizeof(pts), "%d", rs->displayed_total_scores[i]);
-        DrawText(pts, table_x + col_w, y, font22, row_col);
+        hh_draw_text(rs, pts, col_total_x, y, font22, row_col);
 
         snprintf(pts, sizeof(pts), "+%d", rs->displayed_round_points[i]);
-        DrawText(pts, table_x + col_w * 2, y, font22, row_col);
+        hh_draw_text(rs, pts, col_round_x, y, font22, row_col);
     }
 
     EndScissorMode();
@@ -2264,18 +4932,172 @@ static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
         /* Scoring table */
         draw_scoring_table(rs, s, cfg);
 
-        /* Draw scoring pile cards (flying cards drawn on top of overlay) */
-        card_render_set_filter(TEXTURE_FILTER_BILINEAR);
-        for (int i = 0; i < rs->pile_card_count; i++) {
-            if (rs->pile_cards[i].opacity > 0.0f) {
-                draw_card_visual(&rs->pile_cards[i], s, rs);
+        /* Draw scoring pile cards sorted by z_order so overlapping
+         * cards render in the correct front-to-back order. */
+        {
+            const CardVisual *sorted[MAX_PILE_CARDS];
+            int sort_count = 0;
+            for (int i = 0; i < rs->pile_card_count; i++) {
+                const CardVisual *pv = &rs->pile_cards[i];
+                if (pv->opacity <= 0.0f) continue;
+                if (pv->scoring_hidden) continue;
+                if (pv->transmute_id >= 0) {
+                    const TransmutationDef *td =
+                        phase2_get_transmutation(pv->transmute_id);
+                    if (td && td->hide_in_scoring) continue;
+                }
+                sorted[sort_count++] = pv;
+            }
+            /* Insertion sort by z_order (small array, stable) */
+            for (int i = 1; i < sort_count; i++) {
+                const CardVisual *key = sorted[i];
+                int j = i - 1;
+                while (j >= 0 && sorted[j]->z_order > key->z_order) {
+                    sorted[j + 1] = sorted[j];
+                    j--;
+                }
+                sorted[j + 1] = key;
+            }
+            card_render_set_filter(TEXTURE_FILTER_BILINEAR);
+            for (int i = 0; i < sort_count; i++)
+                draw_card_visual(sorted[i], s, rs);
+            card_render_set_filter(TEXTURE_FILTER_POINT);
+        }
+
+        /* Round-end effect modifier cards (Gatherer/Pendulum then Martyr) */
+        if (rs->score_cards_landed) {
+            ScoringTableLayout stbl;
+            layout_scoring_table(cfg, rs->score_menu_slide_y, &stbl);
+
+            for (int p = 0; p < NUM_PLAYERS; p++) {
+                bool has_gatherer = (rs->scoring_gatherer[p] != 0);
+                bool has_martyr = (rs->scoring_martyr[p] > 0);
+                if (!has_gatherer && !has_martyr) continue;
+
+                int ci = rs->scoring_cards_per_player[p];
+                Vector2 base_pos = layout_scoring_card_position(p, ci, cfg, &stbl);
+                float gap = 40.0f * s;
+                float between = 20.0f * s;
+                float cur_x = base_pos.x + gap;
+
+                float card_scale = 0.5f * s;
+                float cw = CARD_WIDTH_REF * card_scale;
+                float ch = CARD_HEIGHT_REF * card_scale;
+                int font_sz = (int)(28.0f * s);
+
+                /* Helper: draw one modifier card with label */
+                #define DRAW_MODIFIER(card_val, tid, lbl, lbl_col) do { \
+                    Vector2 mpos = {cur_x, base_pos.y}; \
+                    CardVisual ind = {0}; \
+                    ind.card = (card_val); \
+                    ind.position = mpos; \
+                    ind.target = mpos; \
+                    ind.scale = card_scale; \
+                    ind.origin = (Vector2){cw * 0.5f, ch * 0.5f}; \
+                    ind.rotation = 10.0f; \
+                    ind.face_up = true; \
+                    ind.opacity = 190.0f / 255.0f; \
+                    ind.transmute_id = (tid); \
+                    ind.z_order = 300 + p; \
+                    card_render_set_filter(TEXTURE_FILTER_BILINEAR); \
+                    draw_card_visual(&ind, s, rs); \
+                    card_render_set_filter(TEXTURE_FILTER_POINT); \
+                    int tw2 = hh_measure_text(rs, (lbl), font_sz); \
+                    int lx = (int)(mpos.x - (float)tw2 * 0.5f); \
+                    int ly = (int)(mpos.y - (float)font_sz * 0.5f); \
+                    hh_draw_text(rs, (lbl), lx + 1, ly + 1, font_sz, \
+                                 (Color){0, 0, 0, 200}); \
+                    hh_draw_text(rs, (lbl), lx, ly, font_sz, (lbl_col)); \
+                    cur_x += cw + between; \
+                } while (0)
+
+                /* Gatherer/Pendulum first (leftmost) */
+                if (has_gatherer) {
+                    int red = rs->scoring_gatherer[p];
+                    char gbuf[16];
+                    snprintf(gbuf, sizeof(gbuf), "%+d", -red);
+                    /* Use Gatherer card if |reduction| >= 3, else Pendulum */
+                    int tid;
+                    Card ec;
+                    if (red >= 3 || red <= -3) {
+                        tid = 4; /* The Gatherer */
+                        ec = (Card){SUIT_DIAMONDS, RANK_J};
+                    } else {
+                        tid = 6; /* The Pendulum */
+                        ec = (Card){SUIT_HEARTS, RANK_8};
+                    }
+                    DRAW_MODIFIER(ec, tid, gbuf,
+                                  ((Color){100, 255, 100, 255}));
+                }
+
+                /* Martyr last (rightmost) */
+                if (has_martyr) {
+                    int count = rs->scoring_martyr[p];
+                    int mult = 1 << count; /* 2^count */
+                    char mbuf[8];
+                    snprintf(mbuf, sizeof(mbuf), "x%d", mult);
+                    DRAW_MODIFIER(((Card){SUIT_HEARTS, RANK_K}), 3, mbuf,
+                                  ((Color){255, 80, 80, 255}));
+                }
+
+                #undef DRAW_MODIFIER
             }
         }
-        card_render_set_filter(TEXTURE_FILTER_POINT);
     }
 
     /* Buttons drawn outside scissor so they're always visible */
-    draw_button(&rs->btn_continue, s);
+    if (rs->scoring_ready_sent) {
+        /* Animated "Waiting for others..." — same style as pass waiting */
+        const LayoutConfig *cfg2 = &rs->layout;
+        float cx = cfg2->board_x + cfg2->board_size * 0.5f;
+        float btn_y = rs->btn_continue.bounds.y +
+                       rs->btn_continue.bounds.height * 0.5f;
+        int ctr_size = (int)(20.0f * s);
+        const char *base = "Waiting for others";
+        int base_w = hh_measure_text(rs, base, ctr_size);
+        int dot_full = hh_measure_text(rs, "..", ctr_size);
+        int base_x = (int)(cx - (float)(base_w + dot_full) * 0.5f);
+        hh_draw_text(rs, base, base_x, (int)btn_y, ctr_size, LIGHTGRAY);
+        float cycle = fmodf((float)GetTime() * 0.8f, 1.0f);
+        int dot_x = base_x + base_w;
+        int dot_w = hh_measure_text(rs, ".", ctr_size);
+        for (int d = 0; d < 3; d++) {
+            float phase = cycle - (float)d * 0.25f;
+            if (phase < 0.0f) phase += 1.0f;
+            float a;
+            if (phase < 0.3f)      a = phase / 0.3f;
+            else if (phase < 0.6f) a = 1.0f;
+            else if (phase < 0.9f) a = 1.0f - (phase - 0.6f) / 0.3f;
+            else                   a = 0.0f;
+            unsigned char alpha = (unsigned char)(200.0f * a);
+            hh_draw_text(rs, ".", dot_x, (int)btn_y, ctr_size,
+                         (Color){200, 200, 200, alpha});
+            dot_x += dot_w;
+        }
+    } else {
+        draw_button(rs, &rs->btn_continue, s);
+    }
+
+    /* Online auto-advance timer (top-right corner) */
+    if (rs->score_auto_timer > 0.0f && !rs->scoring_ready_sent) {
+        bool awaiting =
+            (rs->score_subphase == SCORE_SUB_DISPLAY) ||
+            (rs->score_subphase == SCORE_SUB_DONE) ||
+            (rs->score_subphase == SCORE_SUB_CONTRACTS &&
+             rs->contract_reveal_count >= rs->contract_result_count);
+        if (awaiting) {
+            int secs = (int)ceilf(rs->score_auto_limit - rs->score_auto_timer);
+            if (secs < 0) secs = 0;
+            char timer_text[16];
+            snprintf(timer_text, sizeof(timer_text), "%d", secs);
+            int timer_size = (int)(32.0f * s);
+            Color timer_col = (secs <= 3) ? RED : GOLD;
+            int tw = hh_measure_text(rs, timer_text, timer_size);
+            float bx = cfg->screen_width - (float)tw - 10.0f * s;
+            float by = 6.0f * s;
+            hh_draw_text(rs, timer_text, (int)bx, (int)by, timer_size, timer_col);
+        }
+    }
 }
 
 static void draw_phase_game_over(const GameState *gs, const RenderState *rs)
@@ -2292,8 +5114,8 @@ static void draw_phase_game_over(const GameState *gs, const RenderState *rs)
 
     const char *title = "Game Over";
     int title_size = (int)(48.0f * s);
-    int tw = MeasureText(title, title_size);
-    DrawText(title, (int)(cx - (float)tw * 0.5f),
+    int tw = hh_measure_text(rs, title, title_size);
+    hh_draw_text(rs, title, (int)(cx - (float)tw * 0.5f),
              (int)(cy - 180.0f * s), title_size, GOLD);
 
     /* Winner announcement */
@@ -2303,25 +5125,29 @@ static void draw_phase_game_over(const GameState *gs, const RenderState *rs)
     char winner_text[128];
     if (win_count == 1) {
         snprintf(winner_text, sizeof(winner_text), "%s wins!",
-                 player_name(winners[0]));
+                 player_name(winners[0], rs));
     } else {
         snprintf(winner_text, sizeof(winner_text), "Tie!");
     }
     int win_size = (int)(36.0f * s);
-    int ww = MeasureText(winner_text, win_size);
-    DrawText(winner_text, (int)(cx - (float)ww * 0.5f),
+    int ww = hh_measure_text(rs, winner_text, win_size);
+    hh_draw_text(rs, winner_text, (int)(cx - (float)ww * 0.5f),
              (int)(cy - 100.0f * s), win_size, RAYWHITE);
 
-    /* Final scores */
-    int score_col_w = (int)(150.0f * s);
-    int table_w = (int)(300.0f * s);
-    int table_x = (int)(cx - (float)table_w * 0.5f);
-    int table_y = (int)(cy - 20.0f * s);
-    int row_h = (int)(35.0f * s);
-    int font22 = (int)(22.0f * s);
+    /* Final scores + ELO table */
+    int col_score = (int)(130.0f * s);
+    int col_prev  = (int)(220.0f * s);
+    int col_new   = (int)(330.0f * s);
+    int table_w   = (int)(420.0f * s);
+    int table_x   = (int)(cx - (float)table_w * 0.5f);
+    int table_y   = (int)(cy - 20.0f * s);
+    int row_h     = (int)(35.0f * s);
+    int font22    = (int)(22.0f * s);
 
-    DrawText("Player", table_x, table_y, font22, LIGHTGRAY);
-    DrawText("Score", table_x + score_col_w, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Player", table_x, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Score",  table_x + col_score, table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "Prev",   table_x + col_prev,  table_y, font22, LIGHTGRAY);
+    hh_draw_text(rs, "New",    table_x + col_new,   table_y, font22, LIGHTGRAY);
     DrawLine(table_x, table_y + (int)(28.0f * s),
              table_x + table_w, table_y + (int)(28.0f * s), GRAY);
 
@@ -2332,14 +5158,31 @@ static void draw_phase_game_over(const GameState *gs, const RenderState *rs)
             if (winners[w] == i) { col = GREEN; break; }
         }
 
-        DrawText(player_name(i), table_x, y, font22, col);
+        hh_draw_text(rs, player_name(i, rs), table_x, y, font22, col);
 
         char pts[16];
         snprintf(pts, sizeof(pts), "%d", gs->players[i].total_score);
-        DrawText(pts, table_x + score_col_w, y, font22, col);
+        hh_draw_text(rs, pts, table_x + col_score, y, font22, col);
+
+        /* ELO columns */
+        if (rs->elo_has_data && rs->elo_prev[i] >= 0) {
+            char elo_str[16];
+            snprintf(elo_str, sizeof(elo_str), "%d", rs->elo_prev[i]);
+            hh_draw_text(rs, elo_str, table_x + col_prev, y, font22, LIGHTGRAY);
+
+            snprintf(elo_str, sizeof(elo_str), "%d", rs->elo_new[i]);
+            Color elo_col = RAYWHITE;
+            if (rs->elo_new[i] > rs->elo_prev[i]) elo_col = GREEN;
+            else if (rs->elo_new[i] < rs->elo_prev[i]) elo_col = RED;
+            hh_draw_text(rs, elo_str, table_x + col_new, y, font22, elo_col);
+        } else {
+            const char *ph = rs->elo_has_data ? "-" : "---";
+            hh_draw_text(rs, ph, table_x + col_prev, y, font22, GRAY);
+            hh_draw_text(rs, ph, table_x + col_new,  y, font22, GRAY);
+        }
     }
 
-    draw_button(&rs->btn_continue, s);
+    draw_button(rs, &rs->btn_continue, s);
 }
 
 static void draw_phase_settings(const GameState *gs, const RenderState *rs)
@@ -2351,9 +5194,9 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
     /* Title */
     const char *title = "SETTINGS";
     int title_size = (int)(40.0f * s);
-    int tw = MeasureText(title, title_size);
+    int tw = hh_measure_text(rs, title, title_size);
     float title_y = rs->settings_tab_btns[0].bounds.y - 50.0f * s;
-    DrawText(title, (int)(screen_cx - (float)tw * 0.5f),
+    hh_draw_text(rs, title, (int)(screen_cx - (float)tw * 0.5f),
              (int)title_y, title_size, RAYWHITE);
 
     /* Draw tab bar */
@@ -2376,8 +5219,8 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
 
         /* Tab label */
         Color lbl = active ? GOLD : LIGHTGRAY;
-        int lw = MeasureText(tab->label, tab_fs);
-        DrawText(tab->label,
+        int lw = hh_measure_text(rs, tab->label, tab_fs);
+        hh_draw_text(rs, tab->label,
                  (int)(r.x + (r.width - (float)lw) * 0.5f),
                  (int)(r.y + (r.height - (float)tab_fs) * 0.5f),
                  tab_fs, lbl);
@@ -2404,7 +5247,7 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
                             : GOLD;
 
         /* Label */
-        DrawText(rs->settings_labels[i],
+        hh_draw_text(rs, rs->settings_labels[i],
                  (int)label_x,
                  (int)(row_top + (row_h - (float)label_fs) * 0.5f),
                  label_fs, lbl_col);
@@ -2412,24 +5255,61 @@ static void draw_phase_settings(const GameState *gs, const RenderState *rs)
         /* Value text centered between arrows */
         const char *val = rs->settings_value_bufs[i];
         if (val[0] != '\0') {
-            int vw = MeasureText(val, value_fs);
+            int vw = hh_measure_text(rs, val, value_fs);
             float arrow_left = rs->settings_rows_prev[i].bounds.x +
                                rs->settings_rows_prev[i].bounds.width;
             float arrow_right = rs->settings_rows_next[i].bounds.x;
             float center_x = (arrow_left + arrow_right) * 0.5f;
-            DrawText(val, (int)(center_x - (float)vw * 0.5f),
+            hh_draw_text(rs, val, (int)(center_x - (float)vw * 0.5f),
                      (int)(row_top + (row_h - (float)value_fs) * 0.5f),
                      value_fs, val_col);
         }
 
         /* Arrow buttons */
-        draw_button(&rs->settings_rows_prev[i], s);
-        draw_button(&rs->settings_rows_next[i], s);
+        draw_button(rs, &rs->settings_rows_prev[i], s);
+        draw_button(rs, &rs->settings_rows_next[i], s);
+    }
+
+    /* Account tab content */
+    if (rs->settings_tab == SETTINGS_TAB_ACCOUNT) {
+        if (rs->account_confirm_active) {
+            /* Confirmation prompt */
+            const char *prompt = "This will replace your current identity.";
+            const char *prompt2 = "Continue?";
+            int prompt_fs = (int)(20.0f * s);
+            int pw = hh_measure_text(rs, prompt, prompt_fs);
+            int pw2 = hh_measure_text(rs, prompt2, prompt_fs);
+            float prompt_y = rs->btn_account_confirm_yes.bounds.y - 60.0f * s;
+            hh_draw_text(rs, prompt, (int)(screen_cx - (float)pw * 0.5f),
+                     (int)prompt_y, prompt_fs, (Color){255, 200, 80, 255});
+            hh_draw_text(rs, prompt2, (int)(screen_cx - (float)pw2 * 0.5f),
+                     (int)(prompt_y + (float)prompt_fs + 4.0f * s), prompt_fs, (Color){255, 200, 80, 255});
+
+            draw_button(rs, &rs->btn_account_confirm_yes, s);
+            draw_button(rs, &rs->btn_account_confirm_no, s);
+        } else {
+            draw_button(rs, &rs->btn_account_export, s);
+            draw_button(rs, &rs->btn_account_import, s);
+            draw_button(rs, &rs->btn_account_refresh, s);
+        }
+
+        /* Status text with fade */
+        if (rs->account_status_timer > 0.0f) {
+            int st_fs = (int)(18.0f * s);
+            float alpha = rs->account_status_timer < 1.0f
+                              ? rs->account_status_timer : 1.0f;
+            uint8_t a = (uint8_t)(alpha * 255.0f);
+            int stw = hh_measure_text(rs, rs->account_status_text, st_fs);
+            float st_y = rs->btn_settings_back.bounds.y - 30.0f * s;
+            hh_draw_text(rs, rs->account_status_text,
+                     (int)(screen_cx - (float)stw * 0.5f),
+                     (int)st_y, st_fs, (Color){200, 255, 200, a});
+        }
     }
 
     /* Apply and Back buttons */
-    draw_button(&rs->btn_settings_apply, s);
-    draw_button(&rs->btn_settings_back, s);
+    draw_button(rs, &rs->btn_settings_apply, s);
+    draw_button(rs, &rs->btn_settings_back, s);
 }
 
 /* ---- Pause overlay ---- */
@@ -2445,30 +5325,29 @@ static void draw_pause_overlay(const RenderState *rs)
                   (Color){0, 0, 0, 200});
 
     if (rs->pause_state == PAUSE_MENU) {
-        /* "PAUSED" title */
-        const char *title = "PAUSED";
+        const char *title = "MENU";
         int title_size = (int)(48.0f * s);
-        int tw = MeasureText(title, title_size);
+        int tw = hh_measure_text(rs, title, title_size);
         float title_y = rs->pause_btns[0].bounds.y - 60.0f * s;
-        DrawText(title, (int)(cx - (float)tw * 0.5f),
+        hh_draw_text(rs, title, (int)(cx - (float)tw * 0.5f),
                  (int)title_y, title_size, GOLD);
 
         /* 4 buttons */
         for (int i = 0; i < PAUSE_BTN_COUNT; i++)
-            draw_button(&rs->pause_btns[i], s);
+            draw_button(rs, &rs->pause_btns[i], s);
     } else {
         /* Confirmation dialog */
         const char *prompt = (rs->pause_state == PAUSE_CONFIRM_MENU)
                                  ? "Return to Main Menu?"
                                  : "Quit Game?";
         int prompt_size = (int)(36.0f * s);
-        int pw = MeasureText(prompt, prompt_size);
+        int pw = hh_measure_text(rs, prompt, prompt_size);
         float prompt_y = rs->pause_confirm_yes.bounds.y - 60.0f * s;
-        DrawText(prompt, (int)(cx - (float)pw * 0.5f),
+        hh_draw_text(rs, prompt, (int)(cx - (float)pw * 0.5f),
                  (int)prompt_y, prompt_size, RAYWHITE);
 
-        draw_button(&rs->pause_confirm_yes, s);
-        draw_button(&rs->pause_confirm_no, s);
+        draw_button(rs, &rs->pause_confirm_yes, s);
+        draw_button(rs, &rs->pause_confirm_no, s);
     }
 }
 
@@ -2481,8 +5360,8 @@ static void draw_ingame_phase(const GameState *gs, const RenderState *rs,
         float s = rs->layout.scale;
         Vector2 bc = layout_board_center(&rs->layout);
 
-        draw_left_panel_chat(rs);
-        draw_left_panel_info(rs);
+        draw_left_panel_chat((RenderState *)rs);
+        draw_left_panel_info((RenderState *)rs);
 
         int cards_in_flight = 0;
         for (int i = 0; i < rs->card_count; i++) {
@@ -2521,8 +5400,8 @@ static void draw_ingame_phase(const GameState *gs, const RenderState *rs,
         if (!rs->deal_complete) {
             const char *deal_text = "Dealing...";
             int deal_size = (int)(22.0f * s);
-            int dw = MeasureText(deal_text, deal_size);
-            DrawText(deal_text, (int)(bc.x - (float)dw * 0.5f),
+            int dw = hh_measure_text(rs, deal_text, deal_size);
+            hh_draw_text(rs, deal_text, (int)(bc.x - (float)dw * 0.5f),
                      (int)(bc.y + rs->layout.card_height * 0.5f + 20.0f * s),
                      deal_size, LIGHTGRAY);
         }
@@ -2530,28 +5409,245 @@ static void draw_ingame_phase(const GameState *gs, const RenderState *rs,
         char round_text[32];
         snprintf(round_text, sizeof(round_text), "Round %d", gs->round_number);
         int round_size = (int)(30.0f * s);
-        int rw = MeasureText(round_text, round_size);
-        DrawText(round_text, (int)(bc.x - (float)rw * 0.5f),
+        int rw = hh_measure_text(rs, round_text, round_size);
+        hh_draw_text(rs, round_text, (int)(bc.x - (float)rw * 0.5f),
                  (int)(rs->layout.board_y + 20.0f * s), round_size, GOLD);
+        {
+            bool no_thinking[NUM_PLAYERS] = {false};
+            draw_player_labels(rs, no_thinking, -1);
+        }
+        draw_scoreboard_hud(gs, rs);
+        help_menu_draw(&rs->help_menu, rs);
         break;
     }
     case PHASE_PASSING:
-        draw_left_panel_chat(rs);
-        draw_left_panel_info(rs);
+        draw_left_panel_chat((RenderState *)rs);
+        draw_left_panel_info((RenderState *)rs);
         draw_phase_passing(gs, rs);
+        draw_scoreboard_hud(gs, rs);
+        help_menu_draw(&rs->help_menu, rs);
         break;
     case PHASE_PLAYING:
         draw_phase_playing(gs, rs);
         particle_draw(&rs->particles);
         break;
     case PHASE_SCORING:
-        draw_left_panel_chat(rs);
-        draw_left_panel_info(rs);
+        draw_left_panel_chat((RenderState *)rs);
+        draw_left_panel_info((RenderState *)rs);
         draw_phase_scoring(gs, rs);
+        help_menu_draw(&rs->help_menu, rs);
         particle_draw(&rs->particles);
         break;
     default:
         break;
+    }
+}
+
+/* ---- Transmutation tooltip ---- */
+
+static void draw_transmute_tooltip(const RenderState *rs)
+{
+    if (!rs->phase2_enabled) return;
+    if (rs->transmute_tooltip.transmute_id < 0 ||
+        rs->transmute_tooltip.anim_t <= 0.0f)
+        return;
+
+    const TransmutationDef *td =
+        phase2_get_transmutation(rs->transmute_tooltip.transmute_id);
+    if (!td) return;
+
+    float s = rs->layout.scale;
+    float raw_t = rs->transmute_tooltip.anim_t;
+    float t = ease_apply(EASE_OUT_QUAD, raw_t);
+
+    int name_fs = (int)(14.0f * s);
+    int desc_fs = (int)(14.0f * s);
+    float tooltip_max_w = 220.0f * s;
+    float inner_pad = 8.0f * s;
+
+    /* Measure text to determine tooltip size */
+    float name_h = measure_text_wrapped(rs, td->name, name_fs, tooltip_max_w - inner_pad * 2);
+    float desc_h = measure_text_wrapped(rs, td->description, desc_fs, tooltip_max_w - inner_pad * 2);
+    float gap_between = 3.0f * s;
+
+    float full_w = tooltip_max_w;
+    float full_h = inner_pad + name_h + gap_between + desc_h + inner_pad;
+
+    /* Scale dimensions by animation progress */
+    float w = full_w * t;
+    float h = full_h * t;
+
+    /* Position: prefer above the card, centered horizontally */
+    float screen_w = rs->layout.screen_width;
+    float screen_h = rs->layout.screen_height;
+    float margin = 4.0f * s;
+    float gap = 4.0f * s;
+
+    float ax = rs->transmute_tooltip.anchor.x;
+    float ay = rs->transmute_tooltip.anchor.y;
+    float aw = rs->transmute_tooltip.anchor_w;
+    float ah = rs->transmute_tooltip.anchor_h;
+
+    float tx = ax + aw * 0.5f - w * 0.5f;
+    float ty = ay - h - gap;
+
+    /* If above doesn't fit, try below */
+    if (ty < margin) ty = ay + ah + gap;
+    /* Clamp to screen */
+    if (tx < margin) tx = margin;
+    if (tx + w > screen_w - margin) tx = screen_w - margin - w;
+    if (ty < margin) ty = margin;
+    if (ty + h > screen_h - margin) ty = screen_h - margin - h;
+
+    unsigned char bg_alpha = (unsigned char)(245 * t);
+    unsigned char border_alpha = (unsigned char)(200 * t);
+
+    /* Background */
+    DrawRectangleRounded((Rectangle){tx, ty, w, h}, 0.1f, 4,
+                         (Color){20, 30, 20, bg_alpha});
+    /* Border */
+    DrawRectangleRoundedLines((Rectangle){tx, ty, w, h}, 0.1f, 4,
+                              (Color){180, 160, 80, border_alpha});
+
+    /* Only draw text when animation is far enough to be legible */
+    if (t > 0.3f) {
+        float text_alpha_f = (t - 0.3f) / 0.7f; /* fade in text after 30% */
+        unsigned char text_alpha = (unsigned char)(255 * text_alpha_f);
+
+        /* Scale text position to track the growing box */
+        float text_x = tx + inner_pad * t;
+        float text_y = ty + inner_pad * t;
+        float text_max = (full_w - inner_pad * 2) * t;
+        if (text_max < 1.0f) text_max = 1.0f;
+
+        int draw_name_fs = (int)(name_fs * t);
+        int draw_desc_fs = (int)(desc_fs * t);
+        if (draw_name_fs < 1) draw_name_fs = 1;
+        if (draw_desc_fs < 1) draw_desc_fs = 1;
+
+        float nh = draw_text_wrapped(rs, td->name, text_x, text_y,
+                                     draw_name_fs, text_max,
+                                     (Color){255, 255, 255, text_alpha});
+        draw_text_wrapped(rs, td->description, text_x, text_y + nh + gap_between * t,
+                          draw_desc_fs, text_max,
+                          (Color){200, 200, 200, text_alpha});
+    }
+}
+
+/* ---- Trick card tooltip ---- */
+
+static void draw_trick_tooltip(const RenderState *rs)
+{
+    if (rs->trick_tooltip.trick_num <= 0 ||
+        rs->trick_tooltip.anim_t <= 0.0f)
+        return;
+
+    int idx = rs->trick_tooltip.trick_num - 1;
+    if (idx < 0 || idx >= rs->trick_history_count) return;
+    const TrickRecord *rec = &rs->trick_history[idx];
+    if (rec->num_played < CARDS_PER_TRICK) return;
+
+    /* Find winner's play-order index early so we can bail before drawing */
+    int winner_slot = -1;
+    for (int i = 0; i < rec->num_played; i++) {
+        if (rec->player_ids[i] == rec->winner) {
+            winner_slot = i;
+            break;
+        }
+    }
+    if (winner_slot < 0) return;
+
+    float s = rs->layout.scale;
+    float raw_t = rs->trick_tooltip.anim_t;
+    float t = ease_apply(EASE_OUT_QUAD, raw_t);
+
+    /* Card layout: small cards */
+    float card_scale = 0.65f * s;
+    float card_w = CARD_WIDTH_REF * card_scale;
+    float card_h = CARD_HEIGHT_REF * card_scale;
+    float card_gap = 4.0f * s;
+    float sep_gap = 6.0f * s;
+    float sep_w = 2.0f * s;
+    float pad = 8.0f * s;
+
+    /* Total width: pad + winner + sep_gap + sep + sep_gap + 3*(card+gap) - gap + pad */
+    float full_w = pad + card_w + sep_gap + sep_w + sep_gap
+                 + 3.0f * (card_w + card_gap) - card_gap + pad;
+    float full_h = pad + card_h + pad;
+
+    float w = full_w * t;
+    float h = full_h * t;
+
+    /* Position: prefer above anchor, fallback below, clamp to screen */
+    float screen_w = rs->layout.screen_width;
+    float screen_h = rs->layout.screen_height;
+    float margin = 4.0f * s;
+    float anchor_gap = 4.0f * s;
+
+    float ax = rs->trick_tooltip.anchor.x;
+    float ay = rs->trick_tooltip.anchor.y;
+    float aw = rs->trick_tooltip.anchor_w;
+    float ah = rs->trick_tooltip.anchor_h;
+
+    float tx = ax + aw * 0.5f - w * 0.5f;
+    float ty = ay - h - anchor_gap;
+    if (ty < margin) ty = ay + ah + anchor_gap;
+    if (tx < margin) tx = margin;
+    if (tx + w > screen_w - margin) tx = screen_w - margin - w;
+    if (ty < margin) ty = margin;
+    if (ty + h > screen_h - margin) ty = screen_h - margin - h;
+
+    unsigned char bg_alpha = (unsigned char)(245 * t);
+    unsigned char border_alpha = (unsigned char)(200 * t);
+
+    DrawRectangleRounded((Rectangle){tx, ty, w, h}, 0.1f, 4,
+                         (Color){20, 30, 20, bg_alpha});
+    DrawRectangleRoundedLines((Rectangle){tx, ty, w, h}, 0.1f, 4,
+                              (Color){180, 160, 80, border_alpha});
+
+    if (t > 0.3f) {
+        float alpha_f = (t - 0.3f) / 0.7f;
+        float opacity = alpha_f;
+
+        float draw_scale = card_scale * t;
+        float dw = CARD_WIDTH_REF * draw_scale;
+        float dh = CARD_HEIGHT_REF * draw_scale;
+        float d_gap = card_gap * t;
+        float d_sep_gap = sep_gap * t;
+        float d_sep_w = sep_w * t;
+        float d_pad = pad * t;
+
+        float cx = tx + d_pad;
+        float cy = ty + (h - dh) * 0.5f;
+        Vector2 origin = {0, 0};
+
+        /* Helper: draw a card, using transmute sprite if available */
+        #define DRAW_TRICK_CARD(slot) do { \
+            int _tid = rec->transmute_ids[(slot)]; \
+            if (_tid >= 0 && card_render_has_transmute_sprite(_tid)) \
+                card_render_transmute_face(_tid, (Vector2){cx, cy}, draw_scale, \
+                                           opacity, false, false, 0.0f, origin); \
+            else \
+                card_render_face(rec->cards[(slot)], (Vector2){cx, cy}, draw_scale, \
+                                 opacity, false, false, 0.0f, origin); \
+        } while (0)
+
+        /* Winner's card (leftmost) */
+        DRAW_TRICK_CARD(winner_slot);
+
+        /* Vertical separator */
+        cx += dw + d_sep_gap;
+        DrawRectangle((int)cx, (int)cy, (int)(d_sep_w > 1 ? d_sep_w : 1), (int)dh,
+                      (Color){180, 160, 80, (unsigned char)(border_alpha * alpha_f)});
+        cx += d_sep_w + d_sep_gap;
+
+        /* Remaining 3 cards in play order */
+        for (int i = 0; i < rec->num_played; i++) {
+            if (i == winner_slot) continue;
+            DRAW_TRICK_CARD(i);
+            cx += dw + d_gap;
+        }
+        #undef DRAW_TRICK_CARD
     }
 }
 
@@ -2563,8 +5659,20 @@ void render_draw(const GameState *gs, const RenderState *rs)
     ClearBackground((Color){20, 60, 20, 255});
 
     switch (gs->phase) {
+    case PHASE_LOGIN:
+        draw_phase_login(gs, rs);
+        break;
+
+    case PHASE_ONLINE_MENU:
+        draw_phase_online(gs, rs);
+        break;
+
     case PHASE_MENU:
         draw_phase_menu(gs, rs);
+        break;
+
+    case PHASE_STATS:
+        draw_phase_stats(gs, rs);
         break;
 
     case PHASE_DEALING:
@@ -2593,9 +5701,80 @@ void render_draw(const GameState *gs, const RenderState *rs)
         break;
     }
 
+    /* Friend panel — visible in all pre-game phases (after login) */
+    if (rs->friend_panel) {
+        bool show_panel = (gs->phase == PHASE_MENU ||
+                           gs->phase == PHASE_ONLINE_MENU ||
+                           gs->phase == PHASE_STATS ||
+                           (gs->phase == PHASE_SETTINGS &&
+                            !is_ingame_phase(rs->settings_return_phase)));
+        if (show_panel) {
+            float s15 = rs->layout.scale / 1.5f;
+            float fpw = FRIEND_PANEL_WIDTH * s15;
+            float panel_h = (rs->layout.screen_height - 120.0f * s15) / 2.0f;
+            float margin = 10.0f * s15;
+            Rectangle friend_rect = {
+                margin, rs->layout.screen_height - margin - panel_h,
+                fpw, panel_h
+            };
+            friend_panel_render_input(rs->friend_panel, friend_rect);
+            friend_panel_render_draw(rs->friend_panel, friend_rect, rs);
+        }
+    }
+
+    /* Todo panel — visible only on main menu, top-right */
+    if (rs->todo_panel && rs->todo_panel->loaded && gs->phase == PHASE_MENU) {
+        float s15 = rs->layout.scale / 1.5f;
+        float tpw = TODO_PANEL_WIDTH * s15;
+        float todo_h = todo_panel_height(rs->todo_panel, s15);
+        float margin = 10.0f * s15;
+        Rectangle todo_rect = {
+            rs->layout.screen_width - tpw - margin,
+            margin,
+            tpw,
+            todo_h
+        };
+        todo_panel_draw(rs->todo_panel, todo_rect, rs);
+    }
+
     /* Pause overlay (drawn on top of the game scene, but not during settings) */
     if (rs->pause_state != PAUSE_INACTIVE && gs->phase != PHASE_SETTINGS) {
         draw_pause_overlay(rs);
+    }
+
+    /* Dragged transmute card — drawn on top of all game elements */
+    if (rs->drag.active && rs->drag.is_transmute_drag) {
+        float s = rs->layout.scale;
+        int drag_slot = rs->drag.transmute_slot_origin;
+        if (drag_slot >= 0 && drag_slot < rs->transmute_btn_count) {
+            int tid = rs->transmute_btn_ids[drag_slot];
+            Rectangle cr = rs->transmute_card_rects[drag_slot];
+            float card_scale = cr.width / (float)CARD_WIDTH_REF;
+            Vector2 pos = {rs->drag.current_pos.x, rs->drag.current_pos.y};
+            Vector2 origin = {0, 0};
+
+            if (card_render_has_transmute_sprite(tid)) {
+                card_render_transmute_face(tid, pos, card_scale,
+                                          0.9f, false, true,
+                                          0.0f, origin);
+            } else {
+                Rectangle dr = {pos.x, pos.y, cr.width, cr.height};
+                DrawRectangleRec(dr, (Color){80, 80, 160, 230});
+                DrawRectangleLinesEx(dr, 2.0f, GOLD);
+                const TransmutationDef *td = phase2_get_transmutation(tid);
+                if (td) {
+                    int fs = (int)(9.0f * s);
+                    hh_draw_text(rs, td->name, (int)(pos.x + 2*s),
+                             (int)(pos.y + 2*s), fs, WHITE);
+                }
+            }
+        }
+    }
+
+    if (is_ingame_phase(gs->phase) && rs->pause_state == PAUSE_INACTIVE) {
+        draw_transmute_tooltip(rs);
+        draw_trick_tooltip(rs);
+        help_menu_draw_tooltip(&rs->help_menu, rs);
     }
 
     DrawFPS(10, 10);
@@ -2723,6 +5902,9 @@ void render_cancel_drag(RenderState *rs)
     rs->drag.hand_slot_origin = -1;
     rs->drag.hand_slot_current = -1;
     rs->drag.is_play_drag = false;
+    rs->drag.is_transmute_drag = false;
+    rs->drag.transmute_slot_origin = -1;
+    rs->drag.transmute_slot_current = -1;
     rs->drag.rearrange_count = 0;
 }
 
@@ -2743,9 +5925,14 @@ void render_start_card_drag(RenderState *rs, int cv_idx, int hand_slot,
     rs->drag.original_z = cv->z_order;
     rs->drag.prev_pos = cv->position;
     rs->drag.velocity = (Vector2){0, 0};
+    rs->drag.vel_ring_idx = 0;
+    rs->drag.vel_ring_count = 0;
     rs->drag.hand_slot_origin = hand_slot;
     rs->drag.hand_slot_current = hand_slot;
     rs->drag.is_play_drag = is_play_drag;
+    rs->drag.is_transmute_drag = false;
+    rs->drag.transmute_slot_origin = -1;
+    rs->drag.transmute_slot_current = -1;
     cv->z_order = 200;
 
     /* Build initial rearrange_map */
@@ -2776,6 +5963,26 @@ void render_commit_hand_reorder(GameState *gs, RenderState *rs,
         }
         rs->hand_transmute_ids[dst] = saved_id;
 
+        /* Shift hand_visuals so the visual mapping stays correct even
+         * when sync_hands is blocked (e.g. pass_anim_in_progress). */
+        {
+            int saved_vis = rs->hand_visuals[HUMAN_PLAYER][src];
+            int saved_fog = rs->hand_fog_mode[src];
+            if (src < dst) {
+                for (int i = src; i < dst; i++) {
+                    rs->hand_visuals[HUMAN_PLAYER][i] = rs->hand_visuals[HUMAN_PLAYER][i + 1];
+                    rs->hand_fog_mode[i] = rs->hand_fog_mode[i + 1];
+                }
+            } else {
+                for (int i = src; i > dst; i--) {
+                    rs->hand_visuals[HUMAN_PLAYER][i] = rs->hand_visuals[HUMAN_PLAYER][i - 1];
+                    rs->hand_fog_mode[i] = rs->hand_fog_mode[i - 1];
+                }
+            }
+            rs->hand_visuals[HUMAN_PLAYER][dst] = saved_vis;
+            rs->hand_fog_mode[dst] = saved_fog;
+        }
+
         /* Shift authoritative phase2 hand transmute slots to stay in sync */
         if (p2 && p2->enabled) {
             TransmuteSlot *slots = p2->players[0].hand_transmutes.slots;
@@ -2794,6 +6001,70 @@ void render_commit_hand_reorder(GameState *gs, RenderState *rs,
     }
 }
 
+void render_start_transmute_drag(RenderState *rs, int slot, Vector2 mouse)
+{
+    Rectangle cr = rs->transmute_card_rects[slot];
+    rs->drag.active = true;
+    rs->drag.card_visual_idx = -1; /* no CardVisual for transmute cards */
+    rs->drag.grab_offset = (Vector2){
+        mouse.x - cr.x,
+        mouse.y - cr.y,
+    };
+    rs->drag.current_pos = (Vector2){cr.x, cr.y};
+    rs->drag.has_release_pos = false;
+    rs->drag.original_pos = (Vector2){cr.x, cr.y};
+    rs->drag.original_rot = 0.0f;
+    rs->drag.original_z = 0;
+    rs->drag.prev_pos = (Vector2){cr.x, cr.y};
+    rs->drag.velocity = (Vector2){0, 0};
+    rs->drag.vel_ring_idx = 0;
+    rs->drag.vel_ring_count = 0;
+    rs->drag.hand_slot_origin = -1;
+    rs->drag.hand_slot_current = -1;
+    rs->drag.is_play_drag = false;
+    rs->drag.is_transmute_drag = true;
+    rs->drag.transmute_slot_origin = slot;
+    rs->drag.transmute_slot_current = slot;
+    rs->drag.rearrange_count = 0;
+}
+
+void render_commit_transmute_reorder(RenderState *rs, Phase2State *p2)
+{
+    int src = rs->drag.transmute_slot_origin;
+    int dst = rs->drag.transmute_slot_current;
+    int count = rs->transmute_btn_count;
+    if (src != dst && src >= 0 && dst >= 0 && src < count && dst < count) {
+        /* Reorder the render-side ID array */
+        int saved_id = rs->transmute_btn_ids[src];
+        if (src < dst) {
+            for (int i = src; i < dst; i++)
+                rs->transmute_btn_ids[i] = rs->transmute_btn_ids[i + 1];
+        } else {
+            for (int i = src; i > dst; i--)
+                rs->transmute_btn_ids[i] = rs->transmute_btn_ids[i - 1];
+        }
+        rs->transmute_btn_ids[dst] = saved_id;
+
+        /* Reorder the authoritative inventory */
+        if (p2 && p2->enabled) {
+            TransmuteInventory *inv = &p2->players[0].transmute_inv;
+            if (src < inv->count && dst < inv->count) {
+                int saved_item = inv->items[src];
+                if (src < dst) {
+                    for (int i = src; i < dst; i++)
+                        inv->items[i] = inv->items[i + 1];
+                } else {
+                    for (int i = src; i > dst; i--)
+                        inv->items[i] = inv->items[i - 1];
+                }
+                inv->items[dst] = saved_item;
+            }
+        }
+
+        rs->sync_needed = true;
+    }
+}
+
 void render_update_snap_target(RenderState *rs)
 {
     int slot = rs->drag.hand_slot_current;
@@ -2806,12 +6077,34 @@ void render_update_snap_target(RenderState *rs)
     if (slot >= 0 && slot < out_count) {
         rs->drag.original_pos = positions[slot];
         rs->drag.original_rot = rotations[slot];
+        rs->drag.original_z = 50 + slot;
+    }
+}
+
+void render_snap_all_hand_cards(RenderState *rs)
+{
+    int count = rs->hand_visual_counts[HUMAN_PLAYER];
+    Vector2 positions[MAX_HAND_SIZE];
+    float rotations[MAX_HAND_SIZE];
+    int out_count = 0;
+    layout_hand_positions(POS_BOTTOM, count, &rs->layout,
+                          positions, rotations, &out_count);
+    for (int i = 0; i < count && i < out_count; i++) {
+        int cv_idx = rs->hand_visuals[HUMAN_PLAYER][i];
+        if (cv_idx == rs->drag.card_visual_idx) continue;
+        if (cv_idx < 0 || cv_idx >= rs->card_count) continue;
+        CardVisual *cv = &rs->cards[cv_idx];
+        if (cv->animating) continue;
+        cv->position = positions[i];
+        cv->rotation = rotations[i];
+        cv->z_order = 50 + i;
     }
 }
 
 int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos)
 {
     if (!rs->contract_ui_active) return -1;
+    if (rs->contract_anim_t < 1.0f) return -1; /* still animating */
     for (int i = 0; i < rs->contract_option_count; i++) {
         if (render_hit_test_button(&rs->contract_options[i], mouse_pos)) {
             return i;
@@ -2822,10 +6115,8 @@ int render_hit_test_contract(const RenderState *rs, Vector2 mouse_pos)
 
 int render_hit_test_transmute(const RenderState *rs, Vector2 mouse_pos)
 {
-    for (int i = 0; i < rs->transmute_btn_count; i++) {
-        if (rs->transmute_btns[i].visible &&
-            !rs->transmute_btns[i].disabled &&
-            CheckCollisionPointRec(mouse_pos, rs->transmute_btns[i].bounds)) {
+    for (int i = rs->transmute_btn_count - 1; i >= 0; i--) {
+        if (CheckCollisionPointRec(mouse_pos, rs->transmute_card_rects[i])) {
             return i;
         }
     }
@@ -2839,6 +6130,7 @@ void render_set_contract_options(RenderState *rs, const int ids[], int count,
     rs->contract_option_count = count;
     rs->selected_contract_idx = -1;
     rs->contract_ui_active = (count > 0);
+    rs->contract_anim_t = 0.0f;
 
     Rectangle rects[4];
     layout_contract_options(&rs->layout, count, rects);
@@ -2855,7 +6147,28 @@ void render_set_contract_options(RenderState *rs, const int ids[], int count,
     }
 }
 
+void render_chat_log_clear(RenderState *rs)
+{
+    rs->chat_head = 0;
+    rs->chat_count = 0;
+    for (int i = 0; i < CHAT_LOG_MAX; i++) {
+        rs->chat_transmute_id[i] = -1;
+        rs->chat_trick_num[i] = -1;
+    }
+}
+
 void render_chat_log_push_color(RenderState *rs, const char *msg, Color color)
+{
+    render_chat_log_push_rich(rs, msg, color, NULL, -1);
+}
+
+void render_chat_log_push(RenderState *rs, const char *msg)
+{
+    render_chat_log_push_rich(rs, msg, LIGHTGRAY, NULL, -1);
+}
+
+void render_chat_log_push_rich(RenderState *rs, const char *msg, Color color,
+                               const char *highlight, int transmute_id)
 {
     int slot;
     if (rs->chat_count < CHAT_LOG_MAX) {
@@ -2867,10 +6180,34 @@ void render_chat_log_push_color(RenderState *rs, const char *msg, Color color)
     }
     snprintf(rs->chat_msgs[slot], CHAT_MSG_LEN, "%s", msg);
     rs->chat_colors[slot] = color;
+    if (highlight && highlight[0])
+        snprintf(rs->chat_highlight[slot], sizeof(rs->chat_highlight[slot]),
+                 "%s", highlight);
+    else
+        rs->chat_highlight[slot][0] = '\0';
+    rs->chat_transmute_id[slot] = transmute_id;
+    rs->chat_trick_num[slot] = -1;
 }
 
-void render_chat_log_push(RenderState *rs, const char *msg)
+void render_chat_log_push_trick(RenderState *rs, const char *msg, Color color,
+                                const char *highlight, int trick_num)
 {
-    render_chat_log_push_color(rs, msg, LIGHTGRAY);
+    int slot;
+    if (rs->chat_count < CHAT_LOG_MAX) {
+        slot = (rs->chat_head + rs->chat_count) % CHAT_LOG_MAX;
+        rs->chat_count++;
+    } else {
+        slot = rs->chat_head;
+        rs->chat_head = (rs->chat_head + 1) % CHAT_LOG_MAX;
+    }
+    snprintf(rs->chat_msgs[slot], CHAT_MSG_LEN, "%s", msg);
+    rs->chat_colors[slot] = color;
+    if (highlight && highlight[0])
+        snprintf(rs->chat_highlight[slot], sizeof(rs->chat_highlight[slot]),
+                 "%s", highlight);
+    else
+        rs->chat_highlight[slot][0] = '\0';
+    rs->chat_transmute_id[slot] = -1;
+    rs->chat_trick_num[slot] = trick_num;
 }
 

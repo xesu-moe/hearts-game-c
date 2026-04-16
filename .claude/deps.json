@@ -1,0 +1,2777 @@
+{
+  "version": 1,
+  "last_updated": "2026-04-16T18:11:11Z",
+  "files": {
+    "src/render/card_dimens.h": {
+      "exports": [
+        "CARD_WIDTH_REF",
+        "CARD_HEIGHT_REF",
+        "CARD_OVERLAP_REF",
+        "CARD_SELECT_LIFT_REF"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/render/card_dimens.c",
+        "src/render/layout.c",
+        "src/render/card_render.c"
+      ]
+    },
+    "src/core/input_cmd.h": {
+      "exports": [
+        "enum InputCmdType (INPUT_CMD_NONE, INPUT_CMD_CONFIRM, INPUT_CMD_CANCEL, INPUT_CMD_SELECT_CARD, INPUT_CMD_PLAY_CARD, INPUT_CMD_START_GAME, INPUT_CMD_QUIT, INPUT_CMD_CLICK, INPUT_CMD_SELECT_CONTRACT, INPUT_CMD_SELECT_TRANSMUTATION, INPUT_CMD_APPLY_TRANSMUTATION, INPUT_CMD_OPEN_SETTINGS, INPUT_CMD_SETTING_PREV, INPUT_CMD_SETTING_NEXT, INPUT_CMD_APPLY_DISPLAY, INPUT_CMD_ROGUE_PICK, INPUT_CMD_ROGUE_REVEAL, INPUT_CMD_DUEL_PICK, INPUT_CMD_DUEL_GIVE, INPUT_CMD_DUEL_RETURN, INPUT_CMD_DEALER_DIR, INPUT_CMD_DEALER_AMT, INPUT_CMD_DEALER_CONFIRM, INPUT_CMD_RETURN_TO_MENU, INPUT_CMD_LOGIN_SUBMIT, INPUT_CMD_LOGIN_RETRY, INPUT_CMD_OPEN_PLAY, INPUT_CMD_ONLINE_CREATE, INPUT_CMD_ONLINE_JOIN, INPUT_CMD_ONLINE_QUICKMATCH, INPUT_CMD_ONLINE_CANCEL, INPUT_CMD_ONLINE_RECONNECT, INPUT_CMD_ONLINE_ADD_AI, INPUT_CMD_ONLINE_REMOVE_AI, INPUT_CMD_ONLINE_START, INPUT_CMD_OPEN_STATS, INPUT_CMD_IDENTITY_EXPORT, INPUT_CMD_IDENTITY_IMPORT, INPUT_CMD_IDENTITY_IMPORT_CONFIRM, INPUT_CMD_IDENTITY_IMPORT_CANCEL, INPUT_CMD_COUNT)",
+        "struct InputCmd (type, source_player, union members: card, mouse_pos, contract, transmute_select, transmute_apply, rogue_pick, rogue_reveal, duel_pick, duel_give, setting, dealer_dir, dealer_amt)",
+        "struct InputCmdQueue",
+        "INPUT_CMD_QUEUE_CAPACITY",
+        "input_cmd_push()",
+        "input_cmd_pop()",
+        "input_cmd_queue_empty()",
+        "input_cmd_queue_clear()"
+      ],
+      "requires": [
+        "src/core/card.h (Card)",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/core/input_cmd.c",
+        "src/core/input.h",
+        "src/net/protocol.c",
+        "src/game/update.c",
+        "src/game/process_input.c",
+        "src/server/server_game.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added INPUT_CMD_IDENTITY_EXPORT, INPUT_CMD_IDENTITY_IMPORT, INPUT_CMD_IDENTITY_IMPORT_CONFIRM, INPUT_CMD_IDENTITY_IMPORT_CANCEL enum values"
+    },
+    "src/core/input_cmd.c": {
+      "implements": "src/core/input_cmd.h",
+      "requires": [
+        "src/core/input_cmd.h"
+      ]
+    },
+    "src/core/game_mode.h": {
+      "exports": [
+        "enum GameMode (GAMEMODE_TRANSMUTATIONS, GAMEMODE_VANILLA, GAMEMODE_DRAGON_HEARTS, GAMEMODE_COUNT)",
+        "extern const char *GAMEMODE_LABELS[]",
+        "gamemode_uses_phase2() [static inline]"
+      ],
+      "requires": [
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/core/game_mode.c",
+        "src/net/protocol.h",
+        "src/server/server_game.h",
+        "src/server/room.h",
+        "src/server/server_net.c",
+        "src/game/online_ui.h"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: added direct consumers in server_game.h, room.h, server_net.c, online_ui.h"
+    },
+    "src/core/game_mode.c": {
+      "implements": "src/core/game_mode.h",
+      "requires": [
+        "src/core/game_mode.h"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 1: introduced GAMEMODE_LABELS array with transmutations/vanilla/dragon_hearts labels"
+    },
+    "src/net/protocol.h": {
+      "exports": [
+        "enum NetMsgType (NET_MSG_HANDSHAKE, NET_MSG_HANDSHAKE_ACK, NET_MSG_HANDSHAKE_REJECT, NET_MSG_PING, NET_MSG_PONG, NET_MSG_DISCONNECT, NET_MSG_ERROR, NET_MSG_CHAT, NET_MSG_ROOM_STATUS, NET_MSG_INPUT_CMD, NET_MSG_STATE_UPDATE, NET_MSG_ROUND_START, NET_MSG_TRICK_RESULT, NET_MSG_GAME_OVER, NET_MSG_PHASE_CHANGE, NET_MSG_REQUEST_ADD_AI, NET_MSG_REQUEST_REMOVE_AI, NET_MSG_REQUEST_START_GAME, NET_MSG_PASS_CONFIRMED, NET_MSG_REGISTER, NET_MSG_LOGIN, NET_MSG_LOGIN_ACK, NET_MSG_LOGOUT, NET_MSG_CREATE_ROOM, NET_MSG_JOIN_ROOM, NET_MSG_ROOM_ASSIGNED, NET_MSG_QUEUE_MATCHMAKE, NET_MSG_QUEUE_CANCEL, NET_MSG_QUEUE_STATUS, NET_MSG_LOGIN_CHALLENGE, NET_MSG_LOGIN_RESPONSE, NET_MSG_REGISTER_ACK, NET_MSG_CHANGE_USERNAME, NET_MSG_SERVER_REGISTER, NET_MSG_SERVER_CREATE_ROOM, NET_MSG_SERVER_RESULT, NET_MSG_SERVER_HEARTBEAT, NET_MSG_SERVER_ROOM_CREATED, NET_MSG_SERVER_ROOM_DESTROYED, NET_MSG_SERVER_ELO_RESULT, NET_MSG_TYPE_COUNT)",
+        "enum NetRejectReason",
+        "enum NetDisconnectReason",
+        "struct NetCard",
+        "net_card_from_game()",
+        "net_card_to_game()",
+        "struct NetMsgHandshake",
+        "struct NetMsgHandshakeAck",
+        "struct NetMsgHandshakeReject",
+        "struct NetMsgPing",
+        "struct NetMsgPong",
+        "struct NetMsgDisconnect",
+        "struct NetMsgError",
+        "struct NetMsgChat",
+        "struct NetMsgRoomStatus",
+        "struct NetInputCmd",
+        "struct NetMsgRoundStart",
+        "struct NetMsgTrickResult",
+        "struct NetMsgGameOver (extended with has_elo, prev_elo[4], new_elo[4])",
+        "struct NetMsgServerEloResult (room_code, prev_elo[4], new_elo[4])",
+        "struct NetMsgPhaseChange",
+        "struct NetMsgStartGame (ai_difficulty, timer_option, point_goal_idx, gamemode)",
+        "struct NetMsgRegister",
+        "struct NetMsgLogin",
+        "struct NetMsgLoginChallenge",
+        "struct NetMsgLoginResponse",
+        "struct NetMsgLoginAck",
+        "struct NetMsgCreateRoom",
+        "struct NetMsgJoinRoom",
+        "struct NetMsgRoomAssigned",
+        "struct NetMsgQueueMatchmake",
+        "struct NetMsgQueueStatus",
+        "struct NetMsgChangeUsername",
+        "struct NetMsgServerRegister",
+        "struct NetMsgServerCreateRoom",
+        "struct NetMsgServerResult",
+        "struct NetMsgServerHeartbeat",
+        "struct NetMsgServerRoomCreated",
+        "struct NetMsgServerRoomDestroyed",
+        "struct NetTrickView",
+        "struct NetTransmuteSlotView",
+        "struct NetContractView",
+        "struct NetDraftPair",
+        "struct NetDraftPlayerView",
+        "struct NetActiveEffectView",
+        "struct NetTrickTransmuteView",
+        "struct NetOpponentContracts",
+        "struct NetPlayerView (turn_time_limit field)",
+        "struct NetMsgPassConfirmed",
+        "struct NetMsg (union includes server_elo_result member)",
+        "net_frame_write()",
+        "net_frame_read()",
+        "net_msg_serialize()",
+        "net_msg_deserialize()",
+        "net_msg_write_framed()",
+        "net_input_cmd_is_relevant()",
+        "net_input_cmd_to_local()",
+        "net_input_cmd_from_local()",
+        "net_build_player_view()",
+        "PROTOCOL_VERSION",
+        "NET_MAX_MSG_SIZE",
+        "NET_FRAME_HEADER_SIZE",
+        "NET_MAX_PLAYERS",
+        "NET_MAX_HAND_SIZE",
+        "NET_MAX_PASS_CARDS",
+        "NET_MAX_CONTRACTS",
+        "NET_MAX_TRANSMUTE_INV",
+        "NET_MAX_EFFECTS",
+        "NET_DRAFT_GROUP_SIZE",
+        "NET_DRAFT_PICKS",
+        "NET_MAX_CHAT_LEN",
+        "NET_MAX_NAME_LEN",
+        "NET_AUTH_TOKEN_LEN",
+        "NET_ROOM_CODE_LEN",
+        "NET_ADDR_LEN",
+        "NET_PASSWORD_HASH_LEN"
+      ],
+      "requires": [
+        "src/core/card.h (Card, Suit, Rank, NUM_PLAYERS, SUIT_COUNT, CARDS_PER_TRICK)",
+        "src/core/game_mode.h (GameMode, GAMEMODE_COUNT, GAMEMODE_LABELS, gamemode_uses_phase2)",
+        "src/core/input_cmd.h (InputCmd, InputCmdType)",
+        "stdint.h",
+        "stddef.h",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/net/protocol.c",
+        "src/net/socket.c",
+        "src/net/client_net.c",
+        "src/net/state_recv.c",
+        "src/server/server_game.c",
+        "src/server/server_net.c",
+        "src/lobby/lobby_net.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-15 \u2014 Rewired GAME_OPT_MODE_MAX to reference GAMEMODE_COUNT from core/game_mode.h"
+    },
+    "src/net/protocol.c": {
+      "implements": "src/net/protocol.h",
+      "requires": [
+        "src/net/protocol.h",
+        "src/core/game_state.h (GameState, Phase, PassSubphase)",
+        "src/phase2/phase2_state.h (Phase2State, last_played_transmuted_card)",
+        "src/core/input_cmd.h (INPUT_CMD_IDENTITY_EXPORT, INPUT_CMD_IDENTITY_IMPORT, INPUT_CMD_IDENTITY_IMPORT_CONFIRM, INPUT_CMD_IDENTITY_IMPORT_CANCEL)",
+        "string.h"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added identity commands (EXPORT, IMPORT, IMPORT_CONFIRM, IMPORT_CANCEL) to INPUT_RELEVANT table"
+    },
+    "src/core/game_state.h": {
+      "exports": [
+        "enum GamePhase (PHASE_MENU, PHASE_DEALING, PHASE_PASSING, PHASE_PLAYING, PHASE_SCORING, PHASE_GAME_OVER, PHASE_SETTINGS, PHASE_LOGIN, PHASE_ONLINE_MENU, PHASE_STATS, PHASE_COUNT)",
+        "is_ingame_phase()",
+        "enum PassDirection",
+        "enum PassSubphase (PASS_SUB_DEALER, PASS_SUB_CONTRACT, PASS_SUB_CARD_PASS, PASS_SUB_TOSS_ANIM, PASS_SUB_TOSS_WAIT, PASS_SUB_REVEAL, PASS_SUB_RECEIVE)",
+        "struct GameState (moon_shot bool, moon_shooter int, pass_selection_hints[NUM_PLAYERS][MAX_PASS_CARD_COUNT], score_limit int)",
+        "PASS_CARD_COUNT",
+        "GAME_OVER_SCORE",
+        "game_state_init()",
+        "game_state_start_game()",
+        "game_state_reset_to_menu()",
+        "game_state_new_round()",
+        "game_state_find_two_of_clubs()",
+        "game_state_select_pass()",
+        "game_state_all_passes_ready()",
+        "game_state_execute_pass()",
+        "game_state_current_player()",
+        "game_state_play_card()",
+        "game_state_complete_trick()",
+        "game_state_complete_trick_with()",
+        "game_state_is_valid_play()",
+        "game_state_is_game_over()",
+        "game_state_advance_scoring()",
+        "game_state_get_winners()"
+      ],
+      "requires": [
+        "src/core/player.h",
+        "src/core/deck.h",
+        "src/core/trick.h"
+      ],
+      "used_by": [
+        "src/core/game_state.c",
+        "src/render/render.h",
+        "src/render/render.c",
+        "src/core/ai.h",
+        "src/game/play_phase.h",
+        "src/game/play_phase.c",
+        "src/game/pass_phase.h",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.h",
+        "src/game/turn_flow.c",
+        "src/game/process_input.h",
+        "src/game/process_input.c",
+        "src/game/update.h",
+        "src/game/update.c",
+        "src/game/info_sync.h",
+        "src/game/info_sync.c",
+        "src/game/phase_transitions.h",
+        "src/game/phase_transitions.c",
+        "src/main.c",
+        "src/server/server_game.h",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added score_limit field to GameState for configurable game-over score"
+    },
+    "src/server/ai_competitive.h": {
+      "exports": [
+        "enum QSStatus (QS_IN_MY_HAND, QS_PLAYED, QS_PASSED_TO, QS_RECEIVED_FROM, QS_LOCATION_UNKNOWN)",
+        "struct CompetitiveAIState (my_seat, played[], player_void[][], qs_status, qs_related_player, remaining_in_suit[], hearts_taken[], has_queen[], game_score[], cards_passed[], cards_received[], num_passed, num_received, pass_direction, moon_alarm, moon_suspect, attempting_moon, active_contract_ids[], num_active_contracts, contract_abandoned[])",
+        "struct AIWeights (w_safety[], w_void[], w_shed[], w_queen[], w_moon[], w_target[], w_info[], w_endgame[])",
+        "struct AIThresholds (moon_score_threshold, moon_commit_threshold, moon_alarm_with_queen, moon_alarm_no_queen, spade_buffer_safe, spade_buffer_min, low_heart_max_rank, endgame_start_trick, desperate_score_gap, cooperative_moon_lead)",
+        "comp_ai_init_hand()",
+        "comp_ai_on_trick_complete()",
+        "comp_ai_on_pass_execute()",
+        "comp_ai_pick_direction()",
+        "comp_ai_pick_amount()",
+        "comp_ai_draft_pick()",
+        "comp_ai_select_pass()",
+        "comp_ai_play_card()",
+        "comp_ai_apply_transmutations()",
+        "comp_ai_rogue_pick()",
+        "comp_ai_duel_pick()"
+      ],
+      "requires": [
+        "src/core/card.h (Card, DECK_SIZE, SUIT_COUNT, NUM_PLAYERS)",
+        "src/core/game_state.h (GameState, PassDirection, MAX_PASS_CARD_COUNT)",
+        "src/phase2/phase2_state.h (Phase2State, MAX_ACTIVE_CONTRACTS)",
+        "src/phase2/contract.h (DraftPlayerState)",
+        "src/phase2/transmutation.h (TransmuteInventory, HandTransmuteState)",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/server/ai_competitive.c",
+        "src/server/server_game.h",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-04-04 \u2014 Changed comp_ai_rogue_pick signature: *out_idx parameter became *out_suit"
+    },
+    "src/server/ai_competitive.c": {
+      "implements": "src/server/ai_competitive.h",
+      "requires": [
+        "src/server/ai_competitive.h",
+        "src/server/server_game.h (ServerGame)",
+        "src/core/card.h",
+        "src/core/hand.h (Hand)",
+        "src/core/trick.h (Trick)",
+        "src/core/game_state.h",
+        "src/phase2/phase2_state.h",
+        "src/phase2/phase2_defs.h",
+        "src/phase2/contract.h",
+        "src/phase2/transmutation.h",
+        "src/phase2/transmutation_logic.h",
+        "stdlib.h",
+        "string.h"
+      ],
+      "last_changed": "2026-04-02 \u2014 New file: Implements competitive AI heuristics for passing, leading, following, moon detection, and Phase 2 mechanics"
+    },
+    "src/server/server_game.h": {
+      "exports": [
+        "enum ServerPassSubstate (SV_PASS_IDLE, SV_PASS_DEALER_DIR, SV_PASS_DEALER_AMT, SV_PASS_DEALER_CONFIRM, SV_PASS_CONTRACT_DRAFT, SV_PASS_CARD_SELECT, SV_PASS_EXECUTE, SV_PASS_TRANSMUTE)",
+        "enum ServerPlaySubstate (SV_PLAY_IDLE, SV_PLAY_WAIT_TURN, SV_PLAY_TRICK_BROADCAST, SV_PLAY_TRICK_DONE, SV_PLAY_ROGUE_WAIT, SV_PLAY_DUEL_PICK_WAIT, SV_PLAY_DUEL_GIVE_WAIT)",
+        "struct ServerGame (gs, p2, current_tti, dealer_player, pass_done, contracts_done, game_active, hearts_broken_at_trick_start, prev_round_points[], pass_substate, play_substate, draft_round, draft_initialized, state_dirty, scoring_evaluated[bool], scoring_ready[NUM_PLAYERS], scoring_wait_timer, duel_target_player, duel_target_hand_index, duel_timer, last_trick_winner, selected_transmute_slot[NUM_PLAYERS], pass_phase_timer, ai_pass_delay[NUM_PLAYERS], ai_play_delay, ai_play_timer, turn_timer, turn_timer_seq, prev_pass_ready[NUM_PLAYERS], ai_difficulty, timer_option, point_goal_idx, gamemode, player_names[4][32], chat_queue[8][128], chat_colors[8][3], chat_transmute_ids[8], chat_highlights[8][32], chat_count, comp_ai[NUM_PLAYERS])",
+        "server_game_init()",
+        "server_game_start()",
+        "server_game_tick()",
+        "server_game_is_over()",
+        "server_game_apply_cmd()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/core/game_mode.h (GameMode, gamemode_uses_phase2)",
+        "src/core/input_cmd.h (InputCmd)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/server/ai_competitive.h (CompetitiveAIState)",
+        "src/phase2/transmutation.h (TrickTransmuteInfo, TransmuteEffect)",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/server/server_game.c",
+        "src/server/server_main.c",
+        "src/server/room.h",
+        "src/server/server_net.c"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: include core/game_mode.h for GameMode/gamemode_uses_phase2"
+    },
+    "src/server/server_game.c": {
+      "implements": "src/server/server_game.h",
+      "requires": [
+        "src/server/server_game.h",
+        "src/core/game_state.h",
+        "src/core/hand.h",
+        "src/core/trick.h",
+        "src/core/card.h",
+        "src/core/input_cmd.h",
+        "src/phase2/phase2_state.h (Phase2State, last_played_transmuted_card)",
+        "src/phase2/phase2_defs.h",
+        "src/phase2/contract_logic.h",
+        "src/phase2/transmutation_logic.h (transmute_trick_count_points now takes Phase2State*)",
+        "stdio.h",
+        "stdlib.h",
+        "string.h"
+      ],
+      "last_changed": "2026-04-16 \u2014 Added static sv_timer_bonus(const ServerGame*) function; modified sv_full_turn_time() to call it"
+    },
+    "src/server/server_net.h": {
+      "exports": [
+        "server_net_init()",
+        "server_net_shutdown()",
+        "server_net_listen()",
+        "server_net_update()"
+      ],
+      "requires": [
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/server/server_net.c",
+        "src/server/server_main.c"
+      ]
+    },
+    "src/server/server_net.c": {
+      "implements": "src/server/server_net.h",
+      "requires": [
+        "src/server/server_net.h",
+        "src/server/room.h (Room, ConnSlotInfo, room_manager_init, room_create, room_join, room_leave, room_find_by_code, room_get, room_tick_all, room_cleanup_finished, MAX_ROOMS)",
+        "src/server/server_game.h (ServerGame, server_game_apply_cmd)",
+        "src/net/socket.h (NetSocket, net_socket_init, net_socket_shutdown, net_socket_listen, net_socket_update, net_socket_accept, net_socket_state, NET_CONN_DISCONNECTED)",
+        "src/net/protocol.h (NetMsg, NetMsgType, NetPlayerView, net_build_player_view, net_input_cmd_to_local)",
+        "src/core/game_state.h (PassSubphase, game_state_current_player)",
+        "src/core/game_mode.h (GAME_OPT_MODE_MAX via GAMEMODE_COUNT)",
+        "src/core/input_cmd.h (InputCmd)",
+        "stdio.h",
+        "stdlib.h",
+        "string.h"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: include core/game_mode.h for GAME_OPT_MODE_MAX clamping"
+    },
+    "src/server/server_main.c": {
+      "implements": "game server entry point",
+      "requires": [
+        "src/server/server_game.h",
+        "src/server/server_net.h (server_net_init, server_net_listen, server_net_update, server_net_shutdown)",
+        "src/server/lobby_link.h (lobby_link_init, lobby_link_connect, lobby_link_update, lobby_link_shutdown, lobby_link_is_connected)",
+        "src/core/clock.h",
+        "signal.h",
+        "stdio.h",
+        "stdlib.h",
+        "time.h"
+      ]
+    },
+    "src/server/lobby_link.h": {
+      "exports": [
+        "lobby_link_init()",
+        "lobby_link_connect()",
+        "lobby_link_update()",
+        "lobby_link_shutdown()",
+        "lobby_link_is_connected()",
+        "lobby_link_send_result()",
+        "lobby_link_notify_room_destroyed()"
+      ],
+      "requires": [
+        "src/net/protocol.h (NET_MAX_PLAYERS, NET_AUTH_TOKEN_LEN, NetMsgServerResult)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/server/lobby_link.c",
+        "src/server/server_main.c",
+        "src/server/room.c"
+      ],
+      "last_changed": "2026-03-27 \u2014 Step 23: Added lobby_link_notify_room_destroyed()"
+    },
+    "src/server/lobby_link.c": {
+      "implements": "src/server/lobby_link.h",
+      "requires": [
+        "src/server/lobby_link.h",
+        "src/server/room.h (room_create_with_code, room_active_count, NET_MAX_PLAYERS, MAX_ROOMS, Room)",
+        "src/net/socket.h (NetSocket, net_socket_init, net_socket_connect, net_socket_update, net_socket_send_msg, net_socket_recv_msg, net_socket_is_connected)",
+        "src/net/protocol.h (NetMsg, NetMsgType, NET_MSG_SERVER_REGISTER, NET_MSG_SERVER_HEARTBEAT, NET_MSG_SERVER_ROOM_CREATED, NET_MSG_SERVER_RESULT, NetMsgServerResult, NET_ADDR_LEN, NET_MAX_PLAYERS, NET_AUTH_TOKEN_LEN, FIXED_DT)",
+        "stdio.h",
+        "string.h",
+        "time.h"
+      ],
+      "last_changed": "2026-03-27 \u2014 Step 23: Implemented lobby_link_notify_room_destroyed()"
+    },
+    "src/server/room.h": {
+      "exports": [
+        "struct Room (status, code, slots[], game, connected_count, ai_difficulty, timer_option, point_goal_idx, gamemode, last_broadcast, force_broadcast, elo_received, elo_prev[4], elo_new[4])",
+        "struct PlayerSlot (includes name[NET_MAX_NAME_LEN])",
+        "struct ConnSlotInfo",
+        "enum SlotStatus",
+        "enum RoomStatus",
+        "room_manager_init()",
+        "room_create()",
+        "room_create_with_code()",
+        "room_destroy()",
+        "room_join(room_index, conn_id, auth_token, name)",
+        "room_add_ai()",
+        "room_remove_ai()",
+        "room_start()",
+        "room_leave()",
+        "room_find_by_code()",
+        "room_find_by_conn()",
+        "room_get()",
+        "room_active_count()",
+        "room_tick()",
+        "room_tick_all()",
+        "room_cleanup_finished()",
+        "room_update_timers()",
+        "room_reconnect()",
+        "ROOM_CODE_LEN",
+        "MAX_ROOMS",
+        "DISCONNECT_GRACE_SEC"
+      ],
+      "requires": [
+        "src/server/server_game.h (ServerGame, server_game_init, server_game_start, server_game_tick, server_game_is_over)",
+        "src/net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_ROOM_CODE_LEN, NET_MAX_NAME_LEN)",
+        "src/core/game_mode.h (GameMode)"
+      ],
+      "used_by": [
+        "src/server/room.c",
+        "src/server/lobby_link.c",
+        "src/server/server_net.c"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: include core/game_mode.h for GameMode"
+    },
+    "src/server/room.c": {
+      "implements": "src/server/room.h",
+      "requires": [
+        "src/server/room.h",
+        "src/server/server_game.h",
+        "src/server/lobby_link.h (lobby_link_send_result)",
+        "src/net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS)",
+        "src/core/game_state.h (game_state_get_winners)",
+        "stdio.h",
+        "stdlib.h",
+        "string.h",
+        "fcntl.h",
+        "unistd.h"
+      ],
+      "last_changed": "2026-03-27 \u2014 Step 23: Calls lobby_link_notify_room_destroyed() when empty waiting room destroyed"
+    },
+    "src/lobby/db.h": {
+      "exports": [
+        "LobbyDB",
+        "LobbyStmtID (LOBBY_STMT_REGISTER_ACCOUNT, LOBBY_STMT_FIND_BY_USERNAME, LOBBY_STMT_FIND_BY_PUBKEY, LOBBY_STMT_UPDATE_LAST_LOGIN, LOBBY_STMT_CREATE_SESSION, LOBBY_STMT_DELETE_SESSION, LOBBY_STMT_DELETE_EXPIRED, LOBBY_STMT_FIND_SESSION, LOBBY_STMT_INIT_STATS, LOBBY_STMT_GET_STATS, LOBBY_STMT_CHANGE_USERNAME, LOBBY_STMT_INSERT_ROOM, LOBBY_STMT_FIND_ROOM, LOBBY_STMT_UPDATE_ROOM_STATUS, LOBBY_STMT_CLEANUP_ROOMS, LOBBY_STMT_UPSERT_SERVER, LOBBY_STMT_DELETE_SERVER, LOBBY_STMT_UPDATE_HEARTBEAT, LOBBY_STMT_PICK_SERVER, LOBBY_STMT_INSERT_MATCH, LOBBY_STMT_INSERT_MATCH_PLAYER, LOBBY_STMT_UPDATE_STATS, LOBBY_STMT_UPDATE_ELO)",
+        "lobbydb_open()",
+        "lobbydb_close()",
+        "lobbydb_stmt()",
+        "lobbydb_handle()"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/lobby/db.c",
+        "src/lobby/lobby_main.c",
+        "src/lobby/lobby_net.c",
+        "src/lobby/auth.c",
+        "src/lobby/auth.h",
+        "src/lobby/rooms.c",
+        "src/lobby/server_registry.c"
+      ]
+    },
+    "src/lobby/db.c": {
+      "implements": "src/lobby/db.h",
+      "requires": [
+        "src/lobby/db.h",
+        "sqlite3.h",
+        "stdio.h",
+        "string.h",
+        "stdlib.h"
+      ]
+    },
+    "src/lobby/lobby_net.h": {
+      "exports": [
+        "lobby_net_init()",
+        "lobby_net_shutdown()",
+        "lobby_net_listen()",
+        "lobby_net_update()"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/lobby/lobby_main.c"
+      ]
+    },
+    "src/lobby/lobby_net.c": {
+      "implements": "src/lobby/lobby_net.h",
+      "requires": [
+        "src/lobby/lobby_net.h",
+        "src/lobby/db.h (LobbyDB, lobbydb_stmt, LobbyStmtID, LOBBY_STMT_INSERT_MATCH, LOBBY_STMT_INSERT_MATCH_PLAYER, LOBBY_STMT_UPDATE_STATS, LOBBY_STMT_UPDATE_ELO)",
+        "src/lobby/auth.h (AuthResult, auth_register, auth_find_account, auth_generate_challenge, auth_verify_and_login, auth_logout)",
+        "src/lobby/rooms.h (lobby_rooms_generate_code, lobby_rooms_insert, lobby_rooms_lookup, lobby_rooms_set_status, lobby_rooms_cleanup, lobby_pending_*)",
+        "src/lobby/server_registry.h (svreg_register, svreg_unregister, svreg_heartbeat, svreg_pick_server, svreg_find_by_conn, svreg_init, RegisteredServer)",
+        "src/lobby/stats.h (stats_calc_elo_deltas)",
+        "src/net/socket.h (NetSocket)",
+        "src/net/protocol.h (NetMsg, NetMsgType, NET_MSG_*, NetMsgServerResult)",
+        "sqlite3.h",
+        "stdio.h",
+        "stdlib.h",
+        "string.h",
+        "time.h"
+      ],
+      "last_changed": "2026-03-27 \u2014 Step 23: Added handler for NET_MSG_SERVER_ROOM_DESTROYED"
+    },
+    "src/lobby/auth.h": {
+      "exports": [
+        "enum AuthResult (AUTH_OK, AUTH_ERR_USERNAME_TAKEN, AUTH_ERR_PUBKEY_TAKEN, AUTH_ERR_UNKNOWN_USER, AUTH_ERR_INVALID_SIG, AUTH_ERR_DB_ERROR, AUTH_ERR_INVALID_INPUT)",
+        "struct AuthAccountInfo (account_id[int32_t], elo_rating[int32_t], games_played[uint32_t], games_won[uint32_t])",
+        "AUTH_PK_LEN, AUTH_SIG_LEN, AUTH_CHALLENGE_LEN, AUTH_TOKEN_LEN, AUTH_SESSION_TTL",
+        "auth_register()",
+        "auth_find_account()",
+        "auth_generate_challenge()",
+        "auth_verify_and_login()",
+        "auth_validate_token()",
+        "auth_logout()",
+        "auth_cleanup_expired()",
+        "auth_change_username()"
+      ],
+      "requires": [
+        "src/lobby/db.h (LobbyDB)"
+      ],
+      "used_by": [
+        "src/lobby/auth.c",
+        "src/lobby/lobby_net.c"
+      ],
+      "last_changed": "2026-03-26 \u2014 Step 22.5: Changed AuthAccountInfo.elo_rating from uint16_t to int32_t"
+    },
+    "src/lobby/auth.c": {
+      "implements": "src/lobby/auth.h",
+      "requires": [
+        "src/lobby/auth.h",
+        "src/lobby/db.h (LobbyDB, lobbydb_stmt)",
+        "src/vendor/tweetnacl.h (crypto_sign_open)",
+        "sqlite3.h",
+        "stdio.h",
+        "string.h",
+        "sys/random.h"
+      ]
+    },
+    "src/lobby/rooms.h": {
+      "exports": [
+        "struct PendingRoomRequest (active, room_code, client_conn_id, server_conn_id, created_at)",
+        "LOBBY_ROOM_CODE_LEN, LOBBY_ROOM_EXPIRY_SEC, LOBBY_MAX_PENDING, LOBBY_PENDING_TIMEOUT",
+        "lobby_rooms_generate_code()",
+        "lobby_rooms_insert()",
+        "lobby_rooms_lookup()",
+        "lobby_rooms_set_status()",
+        "lobby_rooms_cleanup()",
+        "lobby_pending_init()",
+        "lobby_pending_add()",
+        "lobby_pending_find_by_code()",
+        "lobby_pending_remove()",
+        "lobby_pending_remove_by_client()",
+        "lobby_pending_remove_by_server()",
+        "lobby_pending_expire()",
+        "lobby_pending_get()",
+        "PendingTimeoutCb"
+      ],
+      "requires": [
+        "src/lobby/db.h (LobbyDB, LobbyStmtID, lobbydb_stmt, lobbydb_handle)",
+        "src/net/protocol.h (NET_ADDR_LEN, NET_ROOM_CODE_LEN)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/lobby/rooms.c",
+        "src/lobby/lobby_net.c"
+      ]
+    },
+    "src/lobby/rooms.c": {
+      "implements": "src/lobby/rooms.h",
+      "requires": [
+        "src/lobby/rooms.h",
+        "src/lobby/db.h (LobbyDB, LobbyStmtID, lobbydb_stmt, lobbydb_handle)",
+        "sqlite3.h",
+        "stdio.h",
+        "stdlib.h",
+        "string.h",
+        "sys/random.h"
+      ]
+    },
+    "src/lobby/server_registry.h": {
+      "exports": [
+        "struct RegisteredServer (active, id, addr, port, max_rooms, current_rooms, conn_id, last_heartbeat)",
+        "LOBBY_MAX_GAME_SERVERS, SVREG_HEARTBEAT_TIMEOUT",
+        "SvregDeadCb",
+        "svreg_init()",
+        "svreg_register()",
+        "svreg_unregister()",
+        "svreg_heartbeat()",
+        "svreg_expire_dead()",
+        "svreg_pick_server()",
+        "svreg_find_by_conn()",
+        "svreg_count()"
+      ],
+      "requires": [
+        "src/lobby/db.h (LobbyDB, LobbyStmtID, lobbydb_stmt)",
+        "src/net/protocol.h (NetMsgServerRegister, NetMsgServerHeartbeat, NET_ADDR_LEN)",
+        "stdbool.h",
+        "stdint.h",
+        "time.h"
+      ],
+      "used_by": [
+        "src/lobby/server_registry.c",
+        "src/lobby/lobby_net.c"
+      ]
+    },
+    "src/lobby/server_registry.c": {
+      "implements": "src/lobby/server_registry.h",
+      "requires": [
+        "src/lobby/server_registry.h",
+        "src/lobby/db.h (LobbyDB, LobbyStmtID, lobbydb_stmt)",
+        "src/net/protocol.h (NetMsgServerRegister, NET_ADDR_LEN)",
+        "sqlite3.h",
+        "stdio.h",
+        "string.h",
+        "time.h"
+      ]
+    },
+    "src/lobby/stats.h": {
+      "exports": [
+        "stats_calc_elo_deltas()",
+        "ELO_K_FACTOR",
+        "ELO_DEFAULT",
+        "ELO_MIN",
+        "ELO_MAX"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/lobby/stats.c",
+        "src/lobby/lobby_net.c"
+      ]
+    },
+    "src/lobby/stats.c": {
+      "implements": "src/lobby/stats.h",
+      "requires": [
+        "src/lobby/stats.h (ELO_K_FACTOR)",
+        "math.h"
+      ]
+    },
+    "src/net/identity.h": {
+      "exports": [
+        "struct Identity (secret_key, public_key, loaded)",
+        "IDENTITY_PK_LEN, IDENTITY_SK_LEN",
+        "identity_load_or_create()",
+        "identity_sign()",
+        "identity_load_username()",
+        "identity_save_username()",
+        "identity_export()",
+        "identity_import()",
+        "identity_backup_exists()"
+      ],
+      "requires": [
+        "src/vendor/tweetnacl.h (crypto_sign_*)",
+        "stdbool.h",
+        "stddef.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/net/identity.c",
+        "src/net/lobby_client.c",
+        "src/main.c",
+        "src/render/render.c"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added identity_export(), identity_import(), identity_backup_exists() functions"
+    },
+    "src/net/lobby_client.h": {
+      "exports": [
+        "enum LobbyClientState (LOBBY_DISCONNECTED, LOBBY_CONNECTING, LOBBY_CONNECTED, LOBBY_REGISTERING, LOBBY_LOGGING_IN, LOBBY_CHALLENGED, LOBBY_AUTHENTICATED, LOBBY_CREATING_ROOM, LOBBY_JOINING_ROOM, LOBBY_QUEUED, LOBBY_ERROR)",
+        "struct LobbyClientInfo (auth_token[32], elo_rating[int32_t], games_played[uint32_t], games_won[uint32_t], username[32])",
+        "lobby_client_init()",
+        "lobby_client_shutdown()",
+        "lobby_client_connect()",
+        "lobby_client_disconnect()",
+        "lobby_client_update()",
+        "lobby_client_register()",
+        "lobby_client_login()",
+        "lobby_client_change_username()",
+        "lobby_client_create_room()",
+        "lobby_client_join_room()",
+        "lobby_client_queue_matchmake()",
+        "lobby_client_queue_cancel()",
+        "lobby_client_state()",
+        "lobby_client_info()",
+        "lobby_client_error_msg()",
+        "lobby_client_clear_error()",
+        "lobby_client_has_room_assignment()",
+        "lobby_client_consume_room_assignment()",
+        "lobby_client_cancel_create()",
+        "lobby_client_cancel_join()"
+      ],
+      "requires": [
+        "src/net/identity.h (Identity)",
+        "src/net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN, NET_CHALLENGE_LEN, NET_ROOM_CODE_LEN, NET_ADDR_LEN)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/net/lobby_client.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-03-30 \u2014 Added lobby_client_clear_error() function to clear error state"
+    },
+    "src/net/lobby_client.c": {
+      "implements": "src/net/lobby_client.h",
+      "requires": [
+        "src/net/lobby_client.h",
+        "src/net/socket.h (NetSocket, net_socket_*)",
+        "src/net/protocol.h (NetMsg, NetMsgType, NET_MSG_*, NET_*_LEN)",
+        "src/net/identity.h (Identity, identity_sign)",
+        "stdio.h",
+        "string.h"
+      ],
+      "last_changed": "2026-03-27 \u2014 Step 23: Implemented lobby_client_cancel_create/join()"
+    },
+    "src/game/login_ui.h": {
+      "exports": [
+        "struct LoginUIState (username_buf, username_len, cursor_blink, show_username_input, has_stored_username, status_text, error_text, awaiting_response)",
+        "login_ui_init()",
+        "login_ui_update_text_input()"
+      ],
+      "requires": [
+        "src/net/protocol.h (NET_MAX_NAME_LEN)",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/game/login_ui.c",
+        "src/main.c",
+        "src/game/update.c",
+        "src/render/render.c"
+      ]
+    },
+    "src/game/login_ui.c": {
+      "implements": "src/game/login_ui.h",
+      "requires": [
+        "src/game/login_ui.h (LoginUIState)",
+        "raylib.h (GetCharPressed, IsKeyPressed, IsKeyDown, KEY_BACKSPACE, GetFrameTime)",
+        "stdio.h",
+        "string.h"
+      ]
+    },
+    "src/game/online_ui.h": {
+      "exports": [
+        "enum OnlineSubphase (ONLINE_SUB_MENU, ONLINE_SUB_CREATE_WAITING, ONLINE_SUB_JOIN_INPUT, ONLINE_SUB_JOIN_WAITING, ONLINE_SUB_QUEUE_SEARCHING, ONLINE_SUB_MATCH_FOUND, ONLINE_SUB_CONNECTING, ONLINE_SUB_CONNECTED_WAITING, ONLINE_SUB_ERROR)",
+        "struct OnlineUIState (subphase, room_code_buf, room_code_len, cursor_blink, created_room_code, status_text, error_text, match_found_timer, player_count, player_names[4][32], slot_is_ai[4], ai_difficulty, timer_option, point_goal, gamemode, server_addr, server_port, assigned_room_code, assigned_auth_token, room_assigned, has_reconnect)",
+        "extern const int TIMER_BONUS_VALUES[]",
+        "extern const char *TIMER_LABELS[]",
+        "extern const int TIMER_OPTION_COUNT",
+        "extern const int POINT_GOAL_VALUES[]",
+        "extern const char *POINT_GOAL_LABELS[]",
+        "extern const int POINT_GOAL_COUNT",
+        "MATCH_FOUND_DURATION",
+        "online_ui_init()",
+        "online_ui_update_text_input()"
+      ],
+      "requires": [
+        "src/net/protocol.h (NET_ROOM_CODE_LEN, NET_ADDR_LEN, NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)",
+        "src/core/game_mode.h (GameMode, GAMEMODE_COUNT, GAMEMODE_LABELS)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/game/online_ui.c",
+        "src/main.c",
+        "src/game/update.c",
+        "src/render/render.c"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: direct include of core/game_mode.h"
+    },
+    "src/game/online_ui.c": {
+      "implements": "src/game/online_ui.h",
+      "requires": [
+        "src/game/online_ui.h (OnlineUIState)",
+        "raylib.h (GetCharPressed, IsKeyPressed, IsKeyDown, KEY_BACKSPACE, GetFrameTime)",
+        "stdio.h",
+        "string.h"
+      ]
+    },
+    "src/net/identity.c": {
+      "implements": "src/net/identity.h",
+      "requires": [
+        "src/net/identity.h",
+        "src/vendor/tweetnacl.h (crypto_sign, crypto_sign_keypair)",
+        "stdio.h",
+        "stdlib.h",
+        "string.h",
+        "sys/stat.h",
+        "errno.h"
+      ]
+    },
+    "src/vendor/tweetnacl.h": {
+      "exports": [
+        "crypto_sign_* (keypair, sign, open macros and constants)",
+        "crypto_auth_* (hmacsha512256 macros)",
+        "crypto_box_* (curve25519xsalsa20poly1305 macros)",
+        "randombytes()"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/vendor/tweetnacl.c",
+        "src/net/identity.h",
+        "src/lobby/auth.c"
+      ]
+    },
+    "src/vendor/tweetnacl.c": {
+      "implements": "src/vendor/tweetnacl.h",
+      "requires": [
+        "src/vendor/tweetnacl.h",
+        "sys/random.h",
+        "stdint.h"
+      ]
+    },
+    "src/lobby/lobby_main.c": {
+      "implements": "lobby server entry point",
+      "requires": [
+        "src/lobby/db.h",
+        "src/lobby/lobby_net.h",
+        "signal.h",
+        "stdio.h",
+        "stdlib.h",
+        "time.h"
+      ]
+    },
+    "src/render/render.h": {
+      "exports": [
+        "struct DragState (hand_slot_origin, hand_slot_current, is_play_drag, rearrange_map[], rearrange_count, is_transmute_drag, transmute_slot_origin, transmute_slot_current)",
+        "struct TrickRecord (cards[], player_ids[], winner, num_played)",
+        "struct RenderState (score_subphase, score_wipe_progress, score_contracts_rt, score_contracts_rt_loaded, score_advance_pending, scoring_screen_done[bool], score_auto_timer[float], pile_cards[], pile_card_count, pass_staged[], pass_staged_count, contract_reveal_count, contract_reveal_timer, draft_btn_labels[][], draft_btn_subtitles[][], draft_round_display, draft_picks_made, draft_waiting[bool], draft_wait_border_t[float], contract_result_text[], contract_result_name[], contract_result_desc[], contract_result_success[], contract_result_count, MAX_CONTRACT_RESULTS, info_contract_name[][], info_contract_desc[][], info_contract_count, settings_tab, settings_tab_btns[], pause_state, pause_btns[], pause_confirm_yes, pause_confirm_no, settings_return_phase, settings_return_paused, opponent_hover_active, online_btns[], btn_online_join_submit, btn_online_cancel, btn_online_try_again, btn_opt_timer_prev, btn_opt_timer_next, btn_opt_points_prev, btn_opt_points_next, btn_opt_mode_prev, btn_opt_mode_next, online_ui, phase2_enabled[bool], stat_elo[int32_t], stat_games_played[uint32_t], stat_games_won[uint32_t], transmute_btn_ids[], transmute_btn_count, pending_transmutation_id, transmute_card_rects[], transmute_card_y, transmute_info_text[][], transmute_info_count, hand_transmute_ids[], trick_transmute_ids[], mirror_source_tid, deal_complete[bool], online_deal_anim[bool], suit_hover_active[bool], suit_indicator_rects[SUIT_COUNT], suit_hover_idx[int], suit_border_t[float], rogue_target_player[int], staged_rogue_cv_count[int], staged_rogue_cv_indices[MAX_HAND_SIZE], chat_trick_num[], chat_hover_trick_num, chat_hover_trick_rect, trick_history[], trick_history_count, trick_tooltip, elo_has_data[bool], elo_prev[4], elo_new[4], btn_account_export, btn_account_import, btn_account_confirm_yes, btn_account_confirm_no, account_confirm_active, account_status_text[], account_status_timer, btn_login_import)",
+        "struct PassStagedCard",
+        "enum ScoringSubphase (SCORE_SUB_CARDS_FLY, SCORE_SUB_DISPLAY, SCORE_SUB_COUNT_UP, SCORE_SUB_DONE, SCORE_SUB_CONTRACTS)",
+        "enum PauseState (PAUSE_INACTIVE, PAUSE_MENU, PAUSE_CONFIRM_MENU, PAUSE_CONFIRM_QUIT)",
+        "PAUSE_BTN_COUNT",
+        "enum SettingsTab (SETTINGS_TAB_DISPLAY, SETTINGS_TAB_GAMEPLAY, SETTINGS_TAB_AUDIO, SETTINGS_TAB_ACCOUNT)",
+        "SETTINGS_TAB_COUNT",
+        "MAX_PASS_STAGED",
+        "MAX_TRICKS_PER_ROUND",
+        "enum MenuItem",
+        "struct UIButton",
+        "TOSS_CLICK",
+        "TOSS_FLICK",
+        "TOSS_DROP",
+        "TOSS_CANCEL",
+        "SETTINGS_ROW_COUNT",
+        "SETTINGS_ACTIVE_COUNT",
+        "ONLINE_BTN_MAX",
+        "render_init()",
+        "render_update()",
+        "render_draw()",
+        "hh_draw_text()",
+        "hh_measure_text()",
+        "render_hit_test_card()",
+        "render_hit_test_opponent_card()",
+        "render_hit_test_transmute()",
+        "render_hit_test_button()",
+        "render_toggle_card_selection()",
+        "render_clear_selection()",
+        "render_cancel_drag()",
+        "render_start_card_drag()",
+        "render_commit_hand_reorder()",
+        "render_update_snap_target()",
+        "render_alloc_card_visual()",
+        "render_hit_test_contract()",
+        "render_set_contract_options()",
+        "render_start_transmute_drag()",
+        "render_commit_transmute_reorder()",
+        "render_clear_piles()",
+        "render_chat_log_clear()",
+        "render_chat_log_push()",
+        "render_chat_log_push_color()",
+        "render_chat_log_push_rich()",
+        "render_chat_log_push_trick()",
+        "render_reset_to_menu()",
+        "CHAT_LOG_MAX",
+        "CHAT_MSG_LEN",
+        "const TodoPanelState *todo_panel (field in RenderState)"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Steps 1-9: Added phase2_enabled (bool) field to RenderState for gating phase2 UI widgets in vanilla mode",
+      "requires": [
+        "raylib.h (Rectangle, Vector2, Color, RenderTexture2D, Shader)",
+        "src/render/particle.h",
+        "src/render/anim.h (CardVisual, MAX_CARD_VISUALS, ANIM_CONTRACT_REVEAL_STAGGER)",
+        "src/render/layout.h (LayoutConfig)",
+        "src/render/card_dimens.h (CARD_WIDTH_REF, CARD_HEIGHT_REF, CARD_OVERLAP_REF)",
+        "src/core/card.h (NUM_PLAYERS, MAX_HAND_SIZE, CARDS_PER_TRICK, PASS_CARD_COUNT)",
+        "src/core/game_state.h (GamePhase, PHASE_DEALING, PHASE_PASSING, PHASE_PLAYING, PHASE_SCORING, PHASE_ONLINE_MENU)",
+        "src/phase2/effect.h",
+        "src/game/online_ui.h (OnlineUIState)",
+        "src/render/help_menu.h (HelpMenuState)",
+        "src/render/todo_panel.h (TodoPanelState)"
+      ],
+      "used_by": [
+        "src/render/render.c",
+        "src/game/ai.c",
+        "src/game/play_phase.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/game/process_input.c",
+        "src/game/update.c",
+        "src/game/settings_ui.c",
+        "src/game/info_sync.c",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ]
+    },
+    "src/render/easing.h": {
+      "exports": [
+        "enum EaseType",
+        "ease_apply()",
+        "lerpf()"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/render/easing.c",
+        "src/render/anim.h"
+      ]
+    },
+    "src/render/easing.c": {
+      "implements": "src/render/easing.h",
+      "requires": [
+        "src/render/easing.h"
+      ]
+    },
+    "src/render/anim.h": {
+      "exports": [
+        "struct CardVisual (start_scale, target_scale, anim_scale fields)",
+        "MAX_CARD_VISUALS",
+        "anim_start()",
+        "anim_start_scaled()",
+        "anim_update()",
+        "anim_toss_enabled()",
+        "anim_setup_toss()",
+        "anim_set_speed()",
+        "anim_get_speed()",
+        "ANIM_PLAY_CARD_DURATION",
+        "ANIM_PASS_CARD_DURATION",
+        "ANIM_TRICK_COLLECT_DUR",
+        "ANIM_DEAL_CARD_DURATION",
+        "ANIM_DEAL_CARD_STAGGER",
+        "ANIM_PILE_COLLECT_DURATION",
+        "ANIM_PILE_STAGGER",
+        "ANIM_TOSS_DURATION",
+        "ANIM_SNAP_BACK_DURATION",
+        "ANIM_PASS_TOSS_DURATION",
+        "ANIM_PASS_WAIT_DURATION",
+        "ANIM_PASS_RECEIVE_DURATION",
+        "ANIM_PASS_HAND_SLIDE_DURATION",
+        "ANIM_PASS_RECEIVE_GAP_DELAY",
+        "PASS_TOSS_STAGGER",
+        "PASS_PLAYER_STAGGER",
+        "TOSS_VEL_EXTEND",
+        "TOSS_SPIN_FACTOR",
+        "TOSS_SIDEWAYS_FACTOR",
+        "TOSS_MAX_SPIN",
+        "HOVER_SCALE_TARGET",
+        "HOVER_LIFT_REF",
+        "HOVER_ANIM_SPEED",
+        "ANIM_SCORING_FLY_DURATION",
+        "ANIM_SCORING_PLAYER_STAGGER",
+        "ANIM_SCORING_CARD_STAGGER",
+        "ANIM_SCORING_MENU_DELAY",
+        "ANIM_SCORING_MENU_DURATION",
+        "ANIM_SCORING_COUNTUP_RATE",
+        "ANIM_SCORING_WIPE_DURATION",
+        "ANIM_CONTRACT_REVEAL_STAGGER",
+        "ANIM_EFFECT_FLIGHT_DURATION",
+        "ANIM_DUEL_EXCHANGE_DURATION",
+        "ANIM_REARRANGE_BLEND_RATE"
+      ],
+      "requires": [
+        "src/render/easing.h (EaseType, ease_apply, lerpf)",
+        "raylib.h (Vector2)",
+        "src/core/card.h (Card)",
+        "stdint.h (uint8_t)"
+      ],
+      "used_by": [
+        "src/render/anim.c",
+        "src/render/render.c",
+        "src/game/turn_flow.c",
+        "src/game/phase_transitions.c",
+        "src/game/pass_phase.c",
+        "src/game/update.c",
+        "src/main.c"
+      ]
+    },
+    "src/render/anim.c": {
+      "implements": "src/render/anim.h",
+      "requires": [
+        "src/render/anim.h (CardVisual, anim_set_speed, anim_get_speed, anim_start_scaled)",
+        "src/render/easing.h (ease_apply, lerpf)",
+        "math.h",
+        "stddef.h",
+        "raylib.h"
+      ]
+    },
+    "src/core/clock.h": {
+      "exports": [
+        "struct GameClock",
+        "FIXED_DT",
+        "MAX_FRAME_DT",
+        "MAX_CATCHUP",
+        "clock_init()",
+        "clock_update()"
+      ],
+      "requires": [
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/core/clock.c",
+        "src/main.c",
+        "src/server/server_main.c"
+      ]
+    },
+    "src/core/clock.c": {
+      "implements": "src/core/clock.h",
+      "requires": [
+        "src/core/clock.h",
+        "raylib.h"
+      ]
+    },
+    "src/game/ai.h": {
+      "exports": [
+        "ai_select_pass()",
+        "ai_play_card()",
+        "ai_select_card()",
+        "ai_rogue_choose()",
+        "ai_duel_choose()",
+        "ai_duel_execute()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState, PASS_CARD_COUNT, MAX_HAND_SIZE)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/game/play_phase.h (PlayPhaseState)"
+      ],
+      "used_by": [
+        "src/game/ai.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/main.c"
+      ]
+    },
+    "src/game/ai.c": {
+      "implements": "src/game/ai.h",
+      "requires": [
+        "src/game/ai.h",
+        "src/core/game_state.h",
+        "src/core/hand.h",
+        "src/core/card.h",
+        "src/render/render.h",
+        "src/phase2/phase2_state.h (curse_force_hearts[], anchor_force_suit[])",
+        "src/phase2/transmutation_logic.h (transmute_swap_between_players, transmute_curse_is_valid_lead, transmute_anchor_is_valid_lead)",
+        "src/game/play_phase.h",
+        "src/core/input.h (InputCmd)",
+        "stdbool.h"
+      ]
+    },
+    "src/game/play_phase.h": {
+      "exports": [
+        "struct PlayPhaseState (pending_transmutation, current_tti, card_played_sfx, transmute_sfx, server_trick_winner)",
+        "play_card_with_transmute(GameState, RenderState, Phase2State, PlayPhaseState, int player_id, Card card, int hint_idx)",
+        "p2_player_name()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/core/card.h (Card)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/phase2/transmutation.h (TrickTransmuteInfo)"
+      ],
+      "used_by": [
+        "src/game/play_phase.c",
+        "src/game/ai.h",
+        "src/game/ai.c",
+        "src/game/turn_flow.h",
+        "src/game/turn_flow.c",
+        "src/game/update.h",
+        "src/game/update.c",
+        "src/game/info_sync.h",
+        "src/game/info_sync.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-05 \u2014 Added int hint_idx parameter to play_card_with_transmute() to track card inventory index for transmutation hints"
+    },
+    "src/game/play_phase.c": {
+      "implements": "src/game/play_phase.h",
+      "requires": [
+        "src/game/play_phase.h",
+        "src/core/game_state.h",
+        "src/core/hand.h",
+        "src/core/trick.h",
+        "src/render/render.h",
+        "src/phase2/phase2_state.h (curse_force_hearts[], anchor_force_suit[], last_played_transmuted_card)",
+        "src/phase2/transmutation_logic.h (transmute_get_fog_transmuter, transmute_curse_is_valid_lead, transmute_curse_consume, transmute_anchor_is_valid_lead, transmute_anchor_consume)",
+        "src/phase2/transmutation.h (TrickTransmuteInfo.fogged, fog_transmuter)",
+        "src/phase2/phase2_defs.h",
+        "stdio.h"
+      ],
+      "last_changed": "2026-04-05 \u2014 Now stores last_played_transmuted_card at line 155 during transmutation effect resolution"
+    },
+    "src/game/pass_phase.h": {
+      "exports": [
+        "struct PassPhaseState (with fields: subphase, timer, dealer_ui_active, ai_dealer_pending, dealer_announced, dealer_announce_timer, dealer_dir, dealer_amt, pass_anim, received_cards[], received_count, draft_pick_pending, draft_pick_round, draft_click_consumed, prev_draft_round, timer_bonus, pass_auto_sent, toss_started[], toss_count, async_toss)",
+        "PASS_DEALER_TIME",
+        "PASS_CONTRACT_TIME",
+        "PASS_CARD_PASS_TIME",
+        "PASS_REVEAL_DURATION",
+        "PASS_AI_DEALER_DISPLAY",
+        "DEALER_AMOUNTS[]",
+        "DEALER_AMOUNT_COUNT",
+        "dealer_determine_player()",
+        "setup_dealer_ui()",
+        "dealer_announce()",
+        "advance_pass_subphase()",
+        "auto_select_human_pass()",
+        "finalize_card_pass()",
+        "pass_start_toss_anim()",
+        "pass_toss_animations_done()",
+        "pass_start_receive_anim(const GameSettings *)",
+        "pass_start_toss_anim_online(const Card *received_cards, int received_count)",
+        "pass_start_receive_anim_online(const GameSettings *)",
+        "pass_receive_animations_done()",
+        "pass_subphase_update(const GameSettings *, bool online)",
+        "setup_draft_ui()",
+        "pass_sync_online_ui()",
+        "draft_finish_round()",
+        "pass_subphase_time_limit(PassSubphase sub, float bonus)",
+        "pass_start_single_toss_online()",
+        "pass_assign_received_cards_online()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState, PassSubphase)",
+        "src/core/settings.h (GameSettings - forward decl)",
+        "src/phase2/phase2_state.h (Phase2State, DraftState)"
+      ],
+      "used_by": [
+        "src/game/pass_phase.c",
+        "src/game/process_input.h",
+        "src/game/process_input.c",
+        "src/game/update.h",
+        "src/game/update.c",
+        "src/game/phase_transitions.h",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-16 \u2014 Added timer_bonus field to PassPhaseState; changed pass_subphase_time_limit(PassSubphase) to pass_subphase_time_limit(PassSubphase, float bonus)"
+    },
+    "src/game/pass_phase.c": {
+      "implements": "src/game/pass_phase.h",
+      "requires": [
+        "src/game/pass_phase.h",
+        "src/core/game_state.h",
+        "src/core/hand.h",
+        "src/core/settings.h (GameSettings)",
+        "src/game/ai.h",
+        "src/render/anim.h (anim_start_scaled, anim_get_speed, ANIM_PASS_HAND_SLIDE_DURATION, ANIM_PASS_RECEIVE_GAP_DELAY, CardVisual)",
+        "src/render/layout.h (layout_pass_preview_positions, layout_board_center, LayoutConfig)",
+        "src/render/render.h",
+        "src/phase2/phase2_state.h (DraftState, DraftPlayerState)",
+        "src/phase2/contract_logic.h (draft_generate_pool, draft_ai_pick, draft_pick, draft_all_picked, draft_advance_round, draft_finalize, draft_is_complete)",
+        "src/phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation)",
+        "src/phase2/transmutation_logic.h",
+        "src/phase2/transmutation.h",
+        "assert.h",
+        "stdio.h"
+      ],
+      "last_changed": "2026-03-29 \u2014 Added pass_start_toss_anim_online, pass_start_receive_anim_online; modified pass_subphase_update for online animation"
+    },
+    "src/game/turn_flow.h": {
+      "exports": [
+        "enum FlowStep (FLOW_TRICK_DISPLAY, FLOW_FOG_REVEAL, FLOW_TRICK_PILE_ANIM, FLOW_ROGUE_ANIM_TO_CENTER, FLOW_ROGUE_ANIM_BACK, FLOW_DUEL_ANIM_TO_CENTER, FLOW_DUEL_ANIM_EXCHANGE, FLOW_DUEL_ANIM_RETURN, FLOW_ROGUE_SUIT_CHOOSING)",
+        "struct TurnFlow (rogue_target_player, rogue_revealed_count, rogue_staged_cv_count, rogue_staged_cv_indices[], duel_staged_cv_idx, duel_own_cv_idx, duel_ai_decided, turn_time_limit)",
+        "FLOW_TURN_TIME_LIMIT",
+        "FLOW_AI_THINK_TIME",
+        "FLOW_CARD_ANIM_TIME",
+        "FLOW_TRICK_DISPLAY_TIME",
+        "FLOW_PILE_ANIM_TIME",
+        "FLOW_TRICK_COLLECT_TIME",
+        "FLOW_BETWEEN_TRICKS_TIME",
+        "FLOW_FOG_REVEAL_TIME",
+        "FLOW_FOG_DISSOLVE_TIME",
+        "FLOW_ROGUE_CHOOSE_TIME",
+        "FLOW_ROGUE_REVEAL_TIME",
+        "FLOW_DUEL_CHOOSE_TIME",
+        "flow_init()",
+        "flow_update(bool online)",
+        "FLOW_ROGUE_SUIT_CHOOSE_TIME",
+        "FLOW_ROGUE_NO_CARDS_TIME",
+        "FLOW_ROGUE_REVEAL_TIME (changed from 2.0 to 3.0)"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState, CARDS_PER_TRICK)",
+        "src/core/settings.h (GameSettings)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/game/play_phase.h (PlayPhaseState)"
+      ],
+      "used_by": [
+        "src/game/turn_flow.c",
+        "src/game/process_input.h",
+        "src/game/process_input.c",
+        "src/game/phase_transitions.h",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added turn_time_limit field to TurnFlow struct for configurable turn timer"
+    },
+    "src/game/turn_flow.c": {
+      "implements": "src/game/turn_flow.h",
+      "requires": [
+        "src/render/render.h (RenderState, trick_history, trick_history_count, MAX_TRICKS_PER_ROUND)",
+        "src/game/turn_flow.h",
+        "src/core/game_state.h (game_state_current_player, game_state_complete_trick, game_state_complete_trick_with)",
+        "src/core/settings.h (settings_anim_multiplier, settings_ai_think_time, GameSettings)",
+        "src/core/trick.h (trick_is_complete, trick_get_winner)",
+        "src/render/render.h (render_clear_piles, render_cancel_drag, render_chat_log_push, opponent_hover_active, pile_cards, pile_card_count, cards, card_count, hand_visuals, hand_visual_counts, sync_needed, anim_play_player, last_trick_winner)",
+        "src/render/layout.h (layout_pile_position, layout_board_center)",
+        "src/render/anim.h (CardVisual, anim_start, ANIM_PILE_COLLECT_DURATION, ANIM_PILE_STAGGER, ANIM_EFFECT_FLIGHT_DURATION, ANIM_DUEL_EXCHANGE_DURATION, revealed_to, EASE_OUT_QUAD, EASE_IN_OUT_QUAD)",
+        "src/game/play_phase.h (PlayPhaseState, p2_player_name)",
+        "src/phase2/phase2_state.h (Phase2State, shield_tricks_remaining[], binding_auto_win[])",
+        "src/phase2/transmutation_logic.h (transmute_trick_get_winner, transmute_trick_count_points, transmute_on_trick_complete, transmute_apply_round_end, transmute_swap_between_players, TEFFECT_PARASITE_REDIRECT_POINTS, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS)",
+        "src/phase2/phase2_defs.h (phase2_get_transmutation)",
+        "stdio.h",
+        "stdlib.h"
+      ],
+      "last_changed": "2026-04-13 \u2014 turn timer now server-authoritative; removed local auto-play and select_valid_card helper"
+    },
+    "src/game/process_input.h": {
+      "exports": [
+        "process_input()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/game/pass_phase.h (PassPhaseState)",
+        "src/game/play_phase.h (PlayPhaseState)",
+        "src/game/turn_flow.h (FlowStep)"
+      ],
+      "used_by": [
+        "src/game/process_input.c",
+        "src/main.c"
+      ]
+    },
+    "src/game/process_input.c": {
+      "implements": "src/game/process_input.h",
+      "requires": [
+        "src/game/process_input.h",
+        "src/game/online_ui.h (OnlineUIState)",
+        "src/core/input.h (INPUT_CMD_RETURN_TO_MENU, INPUT_CMD_ROGUE_REVEAL, INPUT_CMD_DUEL_PICK, INPUT_CMD_DUEL_GIVE, INPUT_CMD_DUEL_RETURN, INPUT_CMD_ONLINE_*, INPUT_CMD_OPEN_STATS, INPUT_CMD_IDENTITY_EXPORT, INPUT_CMD_IDENTITY_IMPORT, INPUT_CMD_IDENTITY_IMPORT_CONFIRM, INPUT_CMD_IDENTITY_IMPORT_CANCEL, rogue_reveal, duel_pick, duel_give)",
+        "src/core/game_state.h (PHASE_ONLINE_MENU, PHASE_STATS)",
+        "src/core/hand.h (hand_move_card)",
+        "src/render/render.h (render_hit_test_opponent_card, pause_state, pause_btns[], pause_confirm_yes, pause_confirm_no, is_ingame_phase, online_btns[], btn_stats_back)",
+        "src/render/layout.h",
+        "src/game/pass_phase.h",
+        "src/game/play_phase.h",
+        "src/game/turn_flow.h (FLOW_ROGUE_CHOOSING, FLOW_DUEL_PICK_OPPONENT, FLOW_DUEL_PICK_OWN)",
+        "math.h"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added INPUT_CMD_IDENTITY_EXPORT, INPUT_CMD_IDENTITY_IMPORT, INPUT_CMD_IDENTITY_IMPORT_CONFIRM, INPUT_CMD_IDENTITY_IMPORT_CANCEL to processed commands"
+    },
+    "src/game/update.h": {
+      "exports": [
+        "game_update()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/core/input_cmd.h (InputCmd)",
+        "src/game/login_ui.h (LoginUIState)",
+        "src/game/online_ui.h (OnlineUIState)",
+        "src/game/settings_ui.h (SettingsUIState)",
+        "src/phase2/phase2_state.h (Phase2State)"
+      ],
+      "used_by": [
+        "src/game/update.c",
+        "src/main.c"
+      ]
+    },
+    "src/game/update.c": {
+      "implements": "src/game/update.h",
+      "requires": [
+        "src/game/update.h",
+        "src/game/online_ui.h (OnlineUIState)",
+        "src/core/input.h (INPUT_CMD_SELECT_CONTRACT, INPUT_CMD_ROGUE_REVEAL, INPUT_CMD_DUEL_PICK, INPUT_CMD_DUEL_GIVE, INPUT_CMD_DUEL_RETURN, INPUT_CMD_RETURN_TO_MENU, INPUT_CMD_CANCEL, INPUT_CMD_OPEN_SETTINGS, INPUT_CMD_OPEN_ONLINE, INPUT_CMD_OPEN_STATS, INPUT_CMD_ONLINE_*, INPUT_CMD_QUIT)",
+        "src/core/game_state.h (GameState, PHASE_ONLINE_MENU, PHASE_STATS)",
+        "src/core/settings.h",
+        "src/render/render.h (ScoringSubphase, score_subphase, score_advance_pending, contract_reveal_count, contract_reveal_timer, pause_state, settings_return_phase, settings_return_paused, is_ingame_phase)",
+        "src/render/anim.h (ANIM_CONTRACT_REVEAL_STAGGER, anim_get_speed)",
+        "src/game/pass_phase.h (setup_draft_ui, draft_finish_round, PASS_CONTRACT_TIME)",
+        "src/game/play_phase.h",
+        "src/game/settings_ui.h",
+        "src/game/turn_flow.h (TurnFlow)",
+        "src/phase2/contract_logic.h (draft_pick, draft_all_picked, contract_evaluate_all, contract_apply_rewards_all)",
+        "src/phase2/phase2_state.h (DraftState, DraftPlayerState)",
+        "src/phase2/transmutation_logic.h",
+        "src/phase2/phase2_defs.h",
+        "stdbool.h"
+      ]
+    },
+    "src/game/settings_ui.h": {
+      "exports": [
+        "struct SettingsUIState",
+        "sync_settings_values()",
+        "setting_adjust()",
+        "apply_display_settings()"
+      ],
+      "requires": [
+        "src/core/settings.h (GameSettings)"
+      ],
+      "used_by": [
+        "src/game/settings_ui.c",
+        "src/game/update.h",
+        "src/game/update.c",
+        "src/main.c"
+      ]
+    },
+    "src/game/settings_ui.c": {
+      "implements": "src/game/settings_ui.h",
+      "requires": [
+        "src/game/settings_ui.h",
+        "src/core/settings.h (auto_sort_received field)",
+        "src/render/render.h (SETTINGS_ROW_COUNT, SETTINGS_ACTIVE_COUNT for settings_rows_*[], settings_labels[], settings_value_bufs[])",
+        "stdio.h"
+      ]
+    },
+    "src/game/info_sync.h": {
+      "exports": [
+        "info_sync_update()",
+        "info_sync_playability()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/game/play_phase.h (PlayPhaseState)"
+      ],
+      "used_by": [
+        "src/game/info_sync.c",
+        "src/main.c"
+      ]
+    },
+    "src/game/info_sync.c": {
+      "implements": "src/game/info_sync.h",
+      "requires": [
+        "src/game/info_sync.h",
+        "src/core/game_state.h",
+        "src/render/render.h",
+        "src/phase2/phase2_state.h (PlayerPhase2.contracts[], PlayerPhase2.num_active_contracts, curse_force_hearts[], anchor_force_suit[])",
+        "src/phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation)",
+        "src/phase2/transmutation_logic.h (transmute_curse_is_valid_lead, transmute_anchor_is_valid_lead, transmute_is_fog, transmute_get_transmuter)",
+        "src/phase2/transmutation.h (TrickTransmuteInfo.fogged, fog_transmuter)",
+        "stdio.h"
+      ]
+    },
+    "src/game/phase_transitions.h": {
+      "exports": [
+        "phase_transition_update(bool online)",
+        "phase_transition_post_render()"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState, GamePhase)",
+        "src/game/pass_phase.h (PassPhaseState)",
+        "src/game/play_phase.h (PlayPhaseState)",
+        "src/game/turn_flow.h (TurnFlow)"
+      ],
+      "used_by": [
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ]
+    },
+    "src/game/phase_transitions.c": {
+      "implements": "src/game/phase_transitions.h",
+      "requires": [
+        "src/render/render.h (trick_history_count)",
+        "src/game/phase_transitions.h",
+        "src/core/game_state.h",
+        "src/render/render.h (render_clear_piles)",
+        "src/render/anim.h (CardVisual, anim_start, ANIM_SCORING_*)",
+        "src/render/layout.h (layout_scoring_table, layout_scoring_card_position)",
+        "src/render/particle.h",
+        "src/game/pass_phase.h",
+        "src/game/play_phase.h",
+        "src/game/turn_flow.h",
+        "src/phase2/phase2_state.h",
+        "src/phase2/contract_logic.h",
+        "src/phase2/transmutation_logic.h (transmute_effect_affects_score)",
+        "stdio.h"
+      ],
+      "last_changed": "2026-04-05 \u2014 Uses RenderState.trick_history_count"
+    },
+    "src/render/particle.h": {
+      "exports": [
+        "struct Particle",
+        "struct ParticleSystem",
+        "particle_init()",
+        "particle_spawn_burst()",
+        "particle_spawn_burst_color()",
+        "particle_update()",
+        "particle_draw()",
+        "particle_any_active()",
+        "MAX_PARTICLES"
+      ],
+      "requires": [
+        "raylib.h",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/render/particle.c",
+        "src/render/render.h",
+        "src/render/render.c",
+        "src/game/phase_transitions.c"
+      ]
+    },
+    "src/render/particle.c": {
+      "implements": "src/render/particle.h",
+      "requires": [
+        "src/render/particle.h",
+        "raylib.h",
+        "math.h",
+        "string.h"
+      ]
+    },
+    "src/phase2/contract_logic.h": {
+      "exports": [
+        "draft_generate_pool()",
+        "draft_pick()",
+        "draft_auto_pick()",
+        "draft_ai_pick()",
+        "draft_all_picked()",
+        "draft_advance_round()",
+        "draft_finalize()",
+        "draft_is_complete()",
+        "contract_state_init()",
+        "contract_round_reset()",
+        "contract_all_chosen()",
+        "contract_on_trick_complete()",
+        "contract_record_received_cards()",
+        "contract_evaluate_all()",
+        "contract_apply_rewards_all()",
+        "DRAFT_POOL_SIZE",
+        "DRAFT_ROUNDS",
+        "DRAFT_TIMER_SECONDS"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/core/trick.h (Trick)",
+        "src/phase2/phase2_state.h (Phase2State, DraftState, DraftPlayerState, DraftPair)",
+        "src/phase2/transmutation.h (TrickTransmuteInfo)"
+      ],
+      "used_by": [
+        "src/phase2/contract_logic.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/game/update.c",
+        "src/game/phase_transitions.c",
+        "src/main.c",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-03-30 \u2014 Added const GameState *gs parameter to contract_on_trick_complete() and contract_evaluate_all(); added core/game_state.h include"
+    },
+    "src/phase2/contract_logic.c": {
+      "implements": "src/phase2/contract_logic.h",
+      "requires": [
+        "src/phase2/contract_logic.h",
+        "src/phase2/phase2_state.h (Phase2State, RoundPhase2, PlayerPhase2, DraftState, DraftPlayerState, DraftPair, ContractInstance, NUM_PLAYERS, MAX_ACTIVE_CONTRACTS, last_played_transmuted_card)",
+        "src/phase2/phase2_defs.h (phase2_get_contract, phase2_get_transmutation)",
+        "src/phase2/transmutation_logic.h (transmute_round_state_init)",
+        "src/phase2/contract.h (ContractInstance, ContractDef, MAX_CONTRACT_DEFS)",
+        "src/core/trick.h (Trick)",
+        "src/core/card.h (NUM_PLAYERS, SUIT_COUNT, Card)",
+        "stdlib.h (rand)",
+        "stdio.h",
+        "string.h"
+      ],
+      "last_changed": "2026-04-05 \u2014 Initializes last_played_transmuted_card to {0,0} at line 77 in phase2_init()"
+    },
+    "src/core/card.h": {
+      "exports": [
+        "struct Card",
+        "enum Suit",
+        "enum Rank",
+        "NUM_PLAYERS",
+        "SUIT_COUNT",
+        "DECK_SIZE",
+        "MAX_HAND_SIZE",
+        "CARDS_PER_TRICK",
+        "card_to_index()",
+        "card_from_index()",
+        "card_is_none()",
+        "card_equals()",
+        "card_name()",
+        "card_points()"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/core/card.c",
+        "src/core/hand.h",
+        "src/core/deck.h",
+        "src/core/trick.h",
+        "src/render/card_render.h",
+        "src/render/anim.h",
+        "src/phase2/effect.h",
+        "src/phase2/contract.h",
+        "src/phase2/phase2_state.h",
+        "src/phase2/contract_logic.c",
+        "src/core/ai.c",
+        "src/server/server_game.c"
+      ]
+    },
+    "src/core/card.c": {
+      "implements": "src/core/card.h",
+      "requires": [
+        "src/core/card.h"
+      ]
+    },
+    "src/core/hand.h": {
+      "exports": [
+        "struct Hand",
+        "hand_init()",
+        "hand_add_card()",
+        "hand_remove_at()",
+        "hand_remove_card()",
+        "hand_contains()",
+        "hand_has_suit()",
+        "hand_sort()",
+        "hand_sort_permutation()",
+        "hand_count_points()",
+        "hand_move_card()"
+      ],
+      "requires": [
+        "src/core/card.h"
+      ],
+      "used_by": [
+        "src/core/hand.c",
+        "src/core/deck.h",
+        "src/core/player.h",
+        "src/core/trick.h",
+        "src/phase2/transmutation_logic.c",
+        "src/game/play_phase.c",
+        "src/game/pass_phase.c",
+        "src/core/ai.c",
+        "src/game/process_input.c",
+        "src/server/server_game.c"
+      ]
+    },
+    "src/core/hand.c": {
+      "implements": "src/core/hand.h",
+      "requires": [
+        "src/core/hand.h",
+        "src/core/card.h"
+      ]
+    },
+    "src/core/deck.h": {
+      "exports": [
+        "struct Deck",
+        "deck_init()",
+        "deck_shuffle()",
+        "deck_deal()",
+        "deck_deal_all()",
+        "deck_remaining()"
+      ],
+      "requires": [
+        "src/core/card.h",
+        "src/core/hand.h"
+      ],
+      "used_by": [
+        "src/core/deck.c",
+        "src/core/game_state.h"
+      ]
+    },
+    "src/core/deck.c": {
+      "implements": "src/core/deck.h",
+      "requires": [
+        "src/core/deck.h (Deck, Hand, card_from_index, hand_add_card, DECK_SIZE, NUM_PLAYERS, CARD_NONE)",
+        "stdlib.h (rand)"
+      ]
+    },
+    "src/core/trick.h": {
+      "exports": [
+        "struct Trick",
+        "trick_init()",
+        "trick_play_card()",
+        "trick_is_complete()",
+        "trick_get_winner()",
+        "trick_count_points()",
+        "trick_is_valid_play()"
+      ],
+      "requires": [
+        "src/core/card.h",
+        "src/core/hand.h"
+      ],
+      "used_by": [
+        "src/core/trick.c",
+        "src/core/game_state.h",
+        "src/phase2/contract_logic.h",
+        "src/game/play_phase.c",
+        "src/game/turn_flow.c",
+        "src/server/server_game.c"
+      ]
+    },
+    "src/core/trick.c": {
+      "implements": "src/core/trick.h",
+      "requires": [
+        "src/core/trick.h"
+      ]
+    },
+    "src/core/player.h": {
+      "exports": [
+        "struct Player",
+        "player_init()",
+        "player_new_round()",
+        "player_add_to_total()"
+      ],
+      "requires": [
+        "src/core/hand.h"
+      ],
+      "used_by": [
+        "src/core/player.c",
+        "src/core/game_state.h"
+      ]
+    },
+    "src/core/player.c": {
+      "implements": "src/core/player.h",
+      "requires": [
+        "src/core/player.h"
+      ]
+    },
+    "src/core/game_state.c": {
+      "implements": "src/core/game_state.h",
+      "requires": [
+        "src/core/game_state.h",
+        "src/core/player.h",
+        "src/core/deck.h",
+        "src/core/trick.h",
+        "src/core/hand.h",
+        "src/core/card.h"
+      ]
+    },
+    "src/core/input.h": {
+      "exports": [
+        "enum InputAction (INPUT_ACTION_CONFIRM, INPUT_ACTION_CANCEL, INPUT_ACTION_LEFT_CLICK, INPUT_ACTION_RIGHT_CLICK, INPUT_ACTION_COUNT)",
+        "struct InputState (pressed[], held[], released[], mouse_pos)",
+        "input_init()",
+        "input_poll()",
+        "input_get_state()"
+      ],
+      "requires": [
+        "src/core/input_cmd.h (InputCmd, InputCmdType, input_cmd_push, input_cmd_queue_empty)",
+        "raylib.h (Vector2, IsKeyPressed, IsKeyDown, IsKeyReleased, IsMouseButtonPressed, IsMouseButtonDown, IsMouseButtonReleased, GetMousePosition)"
+      ],
+      "used_by": [
+        "src/core/input.c",
+        "src/game/process_input.c",
+        "src/game/update.c",
+        "src/main.c"
+      ]
+    },
+    "src/core/input.c": {
+      "implements": "src/core/input.h",
+      "requires": [
+        "src/core/input.h",
+        "src/core/input_cmd.h (input_cmd_push)",
+        "raylib.h (IsKeyPressed, IsKeyDown, IsKeyReleased, IsMouseButtonPressed, IsMouseButtonDown, IsMouseButtonReleased, GetMousePosition)"
+      ]
+    },
+    "src/main.c": {
+      "implements": "client entry point and main loop",
+      "requires": [
+        "src/core/game_state.h (GameState, GamePhase, PHASE_SETTINGS)",
+        "src/core/input.h (Input, input_*)",
+        "src/core/clock.h (Clock, clock_*)",
+        "src/game/process_input.h (process_input)",
+        "src/game/update.h (game_update)",
+        "src/game/turn_flow.h (turn_flow_tick)",
+        "src/game/phase_transitions.h (phase_transitions_*)",
+        "src/game/login_ui.h (LoginUIState, login_ui_init, login_ui_update_text_input)",
+        "src/game/online_ui.h (OnlineUIState, online_ui_init, online_ui_update_text_input)",
+        "src/game/settings_ui.h (SettingsUIState, settings_ui_*)",
+        "src/render/render.h (RenderState, render_init, render_shutdown, render_sync_hands, render_update, render_draw, render_chat_log_push_trick)",
+        "src/net/client_net.h (client_net_init, client_net_shutdown, client_net_set_auth_token, client_net_connect, client_net_update, client_net_state, client_net_seat, client_net_send_cmd, client_net_has_new_state, client_net_consume_state)",
+        "src/net/lobby_client.h (lobby_client_init, lobby_client_shutdown, lobby_client_connect, lobby_client_disconnect, lobby_client_update, lobby_client_login, lobby_client_register, lobby_client_create_room, lobby_client_join_room, lobby_client_queue_matchmake, lobby_client_queue_cancel, lobby_client_state, lobby_client_error_msg, lobby_client_clear_error, lobby_client_info, lobby_client_has_room_assignment, lobby_client_consume_room_assignment)",
+        "src/net/identity.h (Identity, identity_load_or_create, identity_load_username, identity_save_username)",
+        "src/net/state_recv.h (state_recv_apply)",
+        "src/phase2/phase2_state.h (Phase2State, phase2_state_*)",
+        "raylib.h",
+        "stdio.h",
+        "stdlib.h",
+        "signal.h",
+        "string.h",
+        "getopt.h",
+        "src/render/todo_panel.h (TodoPanelState, todo_panel_init)"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added TodoPanelState local variable initialization and assignment to RenderState"
+    },
+    "src/render/layout.h": {
+      "exports": [
+        "enum PlayerPosition",
+        "struct LayoutConfig",
+        "layout_hand_positions()",
+        "layout_trick_position()",
+        "layout_score_position()",
+        "layout_name_position()",
+        "layout_pass_direction_position()",
+        "layout_confirm_button()",
+        "layout_board_rect()",
+        "layout_board_center()",
+        "layout_contract_options()",
+        "layout_left_panel_upper()",
+        "layout_left_panel_lower()",
+        "layout_pass_staging_position()",
+        "layout_pile_position()",
+        "struct ScoringTableLayout",
+        "layout_scoring_table()",
+        "layout_scoring_row_y()",
+        "layout_scoring_card_position()",
+        "struct ContractsTableLayout",
+        "layout_contracts_table()",
+        "layout_contracts_row_y()",
+        "layout_pass_preview_positions()",
+        "layout_recalculate()"
+      ],
+      "requires": [
+        "raylib.h (Vector2, Rectangle)"
+      ],
+      "used_by": [
+        "src/render/layout.c",
+        "src/render/render.h",
+        "src/render/render.c",
+        "src/core/settings.c",
+        "src/game/process_input.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/game/phase_transitions.c"
+      ]
+    },
+    "src/render/layout.c": {
+      "implements": "src/render/layout.h",
+      "requires": [
+        "src/render/layout.h (LayoutConfig, PlayerPosition, ScoringTableLayout, layout_pass_preview_positions)",
+        "src/render/card_dimens.h (CARD_WIDTH_REF, CARD_HEIGHT_REF, CARD_OVERLAP_REF)",
+        "raylib.h (Vector2)",
+        "math.h"
+      ]
+    },
+    "src/render/card_render.h": {
+      "exports": [
+        "card_render_init()",
+        "card_render_shutdown()",
+        "card_render_face()",
+        "card_render_back()",
+        "card_render_set_font()",
+        "card_render_set_filter()",
+        "card_render_transmute_init()",
+        "card_render_transmute_shutdown()",
+        "card_render_has_transmute_sprite()",
+        "card_render_transmute_face()",
+        "card_suit_color()",
+        "card_suit_symbol()",
+        "card_rank_string()"
+      ],
+      "requires": [
+        "raylib.h",
+        "src/core/card.h"
+      ],
+      "used_by": [
+        "src/render/card_render.c",
+        "src/render/render.c",
+        "src/render/help_menu.c",
+        "src/main.c"
+      ]
+    },
+    "src/render/card_render.c": {
+      "implements": "src/render/card_render.h",
+      "requires": [
+        "src/render/card_render.h",
+        "src/render/card_dimens.h",
+        "raylib.h",
+        "src/core/card.h",
+        "rlgl.h",
+        "string.h"
+      ]
+    },
+    "src/render/render.c": {
+      "implements": "src/render/render.h",
+      "requires": [
+        "src/render/render.h (SETTINGS_ROW_COUNT, SETTINGS_ACTIVE_COUNT, ScoringSubphase, RenderState, opponent_hover_active, PauseState, PAUSE_BTN_COUNT, is_ingame_phase, btn_stats_back)",
+        "src/render/particle.h",
+        "src/render/anim.h (anim_get_speed, ANIM_SCORING_* macros, ANIM_CONTRACT_REVEAL_STAGGER, CardVisual.revealed_to)",
+        "src/render/layout.h (layout_scoring_table, layout_scoring_row_y, layout_scoring_card_position, layout_wipe_boundary_x)",
+        "src/render/card_render.h",
+        "src/phase2/phase2_defs.h",
+        "src/core/game_state.h (GamePhase, PHASE_DEALING, PHASE_SCORING, PHASE_ONLINE_MENU, PHASE_STATS)",
+        "src/core/card.h",
+        "src/core/settings.h",
+        "src/game/online_ui.h (OnlineUIState, OnlineSubphase)",
+        "src/net/lobby_client.h (LobbyClientInfo)",
+        "src/net/identity.h (identity_backup_exists)",
+        "raylib.h",
+        "rlgl.h",
+        "math.h",
+        "src/render/help_menu.h (help_menu_load, help_menu_update, help_menu_draw, help_menu_draw_tooltip)",
+        "src/render/todo_panel.h (todo_panel_height, todo_panel_draw)"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added src/net/identity.h dependency for identity_backup_exists(); account settings tab integration"
+    },
+    "src/audio/audio.h": {
+      "exports": [
+        "enum MusicContext (MUSIC_NONE, MUSIC_BACKGROUND, MUSIC_COUNT)",
+        "enum SfxId (SFX_CARD_PLAY, SFX_CARD_DEAL, SFX_HEARTS_BROKEN, SFX_TRANSMUTE, SFX_SCORE_TICK, SFX_COUNT)",
+        "struct SfxStagger",
+        "struct AudioState",
+        "audio_init()",
+        "audio_shutdown()",
+        "audio_update(float dt, float anim_speed)",
+        "audio_set_music()",
+        "audio_play_sfx()",
+        "audio_apply_settings()",
+        "audio_start_stagger()"
+      ],
+      "requires": [
+        "raylib.h (Music, Sound)",
+        "src/core/settings.h (GameSettings)"
+      ],
+      "used_by": [
+        "src/audio/audio.c",
+        "src/main.c"
+      ]
+    },
+    "src/audio/audio.c": {
+      "implements": "src/audio/audio.h",
+      "requires": [
+        "src/audio/audio.h",
+        "src/core/settings.h (GameSettings)",
+        "raylib.h"
+      ]
+    },
+    "src/phase2/effect.h": {
+      "exports": [
+        "enum EffectType",
+        "struct Effect",
+        "enum EffectScope",
+        "struct ActiveEffect",
+        "MAX_ACTIVE_EFFECTS"
+      ],
+      "requires": [
+        "src/core/card.h"
+      ],
+      "used_by": [
+        "src/phase2/contract.h",
+        "src/phase2/phase2_state.h",
+        "src/phase2/phase2_defs.h",
+        "src/render/render.h"
+      ]
+    },
+    "src/phase2/contract.h": {
+      "exports": [
+        "enum ConditionType",
+        "struct ConditionParam (trick_num)",
+        "struct ContractDef",
+        "struct ContractInstance (paired_transmutation_id)",
+        "MAX_CONTRACT_DEFS",
+        "MAX_CONTRACT_REWARD",
+        "MAX_CONTRACT_TRANSMUTE_REWARD",
+        "CONTRACT_TIERS"
+      ],
+      "requires": [
+        "src/core/card.h (Card, Suit, SUIT_COUNT)",
+        "src/core/game_state.h (PASS_CARD_COUNT)",
+        "src/phase2/effect.h (Effect, EffectScope)"
+      ],
+      "used_by": [
+        "src/phase2/character.h",
+        "src/phase2/phase2_state.h",
+        "src/phase2/phase2_defs.h",
+        "src/phase2/phase2_defs.c",
+        "src/phase2/contract_logic.c",
+        "src/phase2/json_parse.c"
+      ]
+    },
+    "src/phase2/character.h": {
+      "exports": [
+        "enum FigureType",
+        "struct CharacterDef",
+        "MAX_CHARACTER_DEFS"
+      ],
+      "requires": [
+        "src/phase2/contract.h"
+      ],
+      "used_by": [
+        "src/phase2/phase2_defs.h",
+        "src/phase2/phase2_defs.c"
+      ]
+    },
+    "src/phase2/phase2_state.h": {
+      "exports": [
+        "struct DraftPair",
+        "struct DraftPlayerState",
+        "struct DraftState",
+        "struct PlayerPhase2",
+        "struct RoundPhase2 (DraftState draft, ContractInstance contracts[MAX_ACTIVE_CONTRACTS])",
+        "struct Phase2State (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[], last_played_transmute_id, last_played_resolved_effect, last_played_transmuted_card)",
+        "MAX_ACTIVE_CONTRACTS",
+        "DRAFT_GROUP_SIZE",
+        "DRAFT_PICKS_PER_PLAYER"
+      ],
+      "requires": [
+        "src/core/card.h (NUM_PLAYERS, SUIT_COUNT)",
+        "src/phase2/contract.h (ContractInstance)",
+        "src/phase2/effect.h (ActiveEffect)",
+        "src/phase2/transmutation.h (TransmuteEffect, TransmuteInventory, HandTransmuteState, TransmuteRoundState)"
+      ],
+      "used_by": [
+        "src/phase2/transmutation_logic.c",
+        "src/phase2/contract_logic.c",
+        "src/game/ai.h",
+        "src/game/play_phase.h",
+        "src/game/play_phase.c",
+        "src/game/pass_phase.h",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.h",
+        "src/game/turn_flow.c",
+        "src/game/update.h",
+        "src/game/update.c",
+        "src/game/info_sync.h",
+        "src/game/info_sync.c",
+        "src/game/phase_transitions.h",
+        "src/game/phase_transitions.c",
+        "src/main.c",
+        "src/server/server_game.h",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-04-05 \u2014 Added Card last_played_transmuted_card field to Phase2State for Mirror transmutation history tracking"
+    },
+    "src/phase2/phase2_defs.h": {
+      "exports": [
+        "g_contract_defs",
+        "g_transmutation_defs",
+        "g_character_defs",
+        "g_contract_def_count",
+        "g_transmutation_def_count",
+        "g_character_def_count",
+        "phase2_defs_init()",
+        "phase2_get_contract()",
+        "phase2_get_transmutation()",
+        "phase2_get_character()",
+        "phase2_find_transmute_by_effect()"
+      ],
+      "requires": [
+        "src/phase2/character.h",
+        "src/phase2/contract.h",
+        "src/phase2/transmutation.h"
+      ],
+      "used_by": [
+        "src/phase2/phase2_defs.c",
+        "src/phase2/contract_logic.c",
+        "src/phase2/transmutation_logic.c",
+        "src/render/render.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/game/update.c",
+        "src/game/info_sync.c",
+        "src/main.c",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-04-04 \u2014 Added phase2_find_transmute_by_effect() function to reverse-lookup transmutation by effect"
+    },
+    "src/phase2/phase2_defs.c": {
+      "implements": "src/phase2/phase2_defs.h",
+      "requires": [
+        "src/phase2/phase2_defs.h",
+        "src/phase2/transmutation.h (TransmuteEffect)",
+        "src/phase2/json_parse.h (json_parse_contract_defs, json_parse_transmutation_defs)",
+        "stdio.h",
+        "string.h"
+      ]
+    },
+    "src/vendor/cJSON.h": {
+      "exports": [
+        "cJSON (type and functions)"
+      ],
+      "requires": [],
+      "used_by": [
+        "src/phase2/json_parse.c"
+      ]
+    },
+    "src/vendor/cJSON.c": {
+      "implements": "src/vendor/cJSON.h",
+      "requires": [
+        "src/vendor/cJSON.h"
+      ]
+    },
+    "src/phase2/json_parse.h": {
+      "exports": [
+        "EnumMapping",
+        "enum_from_string()",
+        "json_load_contracts()",
+        "json_load_transmutations()",
+        "json_load_characters()"
+      ],
+      "requires": [
+        "src/phase2/contract.h",
+        "src/phase2/transmutation.h",
+        "src/phase2/character.h"
+      ],
+      "used_by": [
+        "src/phase2/json_parse.c",
+        "src/phase2/phase2_defs.c"
+      ]
+    },
+    "src/phase2/json_parse.c": {
+      "implements": "src/phase2/json_parse.h",
+      "requires": [
+        "src/phase2/json_parse.h",
+        "src/phase2/contract.h (ConditionType)",
+        "src/phase2/transmutation.h (TransmuteEffect, TEFFECT_CROWN_HIGHEST_RANK, TEFFECT_PARASITE_REDIRECT_POINTS, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN)",
+        "src/vendor/cJSON.h (cJSON, cJSON_Parse, cJSON_IsNumber, cJSON_IsString, cJSON_GetObjectItem, cJSON_Delete, cJSON_GetArraySize, cJSON_GetArrayItem)",
+        "stdio.h (fopen, fread, fclose, fprintf)",
+        "stdlib.h (malloc, free)",
+        "string.h"
+      ]
+    },
+    "src/core/settings.h": {
+      "exports": [
+        "enum WindowMode",
+        "enum AnimSpeed",
+        "struct Resolution",
+        "struct ReconnectInfo (server_ip[64], server_port, room_code[8], session_token[32], valid)",
+        "struct GameSettings (with auto_sort_received, reconnect fields)",
+        "RESOLUTIONS[]",
+        "FPS_OPTIONS[]",
+        "settings_default()",
+        "settings_load()",
+        "settings_save()",
+        "settings_apply()",
+        "settings_anim_multiplier()",
+        "settings_window_mode_name()",
+        "settings_resolution_name()",
+        "settings_fps_name()",
+        "settings_anim_speed_name()",
+        "settings_save_reconnect()",
+        "settings_clear_reconnect()"
+      ],
+      "requires": [
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/core/settings.c",
+        "src/render/render.c",
+        "src/game/turn_flow.h",
+        "src/game/turn_flow.c",
+        "src/game/update.h",
+        "src/game/update.c",
+        "src/game/settings_ui.h",
+        "src/game/settings_ui.c",
+        "src/game/pass_phase.h",
+        "src/game/pass_phase.c",
+        "src/main.c",
+        "src/audio/audio.h"
+      ],
+      "last_changed": "2026-04-01 \u2014 Removed AISpeed enum, ai_speed field from GameSettings, and settings_ai_think_time/settings_ai_speed_name functions (AI timing moved to server-side per-player delay)"
+    },
+    "src/core/settings.c": {
+      "implements": "src/core/settings.h",
+      "requires": [
+        "src/core/settings.h (loads/saves auto_sort_received and reconnect fields)",
+        "vendor/cJSON.h",
+        "raylib.h",
+        "stdio.h",
+        "stdlib.h",
+        "string.h"
+      ]
+    },
+    "src/phase2/transmutation.h": {
+      "exports": [
+        "enum TransmuteEffect (TEFFECT_NONE through TEFFECT_JOKER_LEAD_WIN \u2014 wins when leading, loses otherwise)",
+        "enum TransmuteSpecial",
+        "enum SuitMask",
+        "struct TransmutationDef",
+        "struct TransmuteInventory",
+        "struct TransmuteSlot (fogged, fog_transmuter)",
+        "struct HandTransmuteState",
+        "struct TrickTransmuteInfo (resolved_effects[], fogged[], fog_transmuter[])",
+        "struct TransmuteRoundState (rogue_pending_winner, duel_pending_winner, rogue_revealed_card, duel_revealed_card)",
+        "MAX_TRANSMUTATION_DEFS",
+        "MAX_TRANSMUTE_INVENTORY"
+      ],
+      "requires": [
+        "src/core/card.h (Card, Suit, Rank, NUM_PLAYERS, MAX_HAND_SIZE, CARDS_PER_TRICK)"
+      ],
+      "used_by": [
+        "src/phase2/phase2_state.h",
+        "src/phase2/phase2_defs.h",
+        "src/phase2/transmutation_logic.h",
+        "src/phase2/json_parse.c",
+        "src/phase2/contract_logic.c",
+        "src/game/play_phase.h",
+        "src/game/play_phase.c",
+        "src/game/info_sync.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/game/phase_transitions.c",
+        "src/game/update.c",
+        "src/main.c",
+        "src/server/server_game.h",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-04-05 \u2014 Changed TransmuteRoundState.martyr_flags from bool[NUM_PLAYERS] to int[NUM_PLAYERS] for martyr effect count tracking"
+    },
+    "src/phase2/transmutation_logic.h": {
+      "exports": [
+        "transmute_inv_init()",
+        "transmute_inv_add()",
+        "transmute_inv_remove()",
+        "transmute_hand_init()",
+        "transmute_apply(transmuter_player, fog stacking guard)",
+        "transmute_hand_remove_at()",
+        "transmute_hand_sort_sync()",
+        "transmute_is_transmuted()",
+        "transmute_get_def()",
+        "transmute_get_original()",
+        "transmute_is_fog()",
+        "transmute_get_transmuter()",
+        "transmute_get_fog_transmuter()",
+        "transmute_card_points()",
+        "transmute_can_follow_suit()",
+        "transmute_is_always_win()",
+        "transmute_is_always_lose()",
+        "transmute_trick_get_winner(const Phase2State *p2)",
+        "transmute_trick_count_points(const Trick*, const TrickTransmuteInfo*, const Phase2State*)",
+        "transmute_is_valid_play()",
+        "transmute_curse_is_valid_lead()",
+        "transmute_curse_consume()",
+        "transmute_anchor_is_valid_lead()",
+        "transmute_anchor_consume()",
+        "transmute_effect_affects_score()",
+        "transmute_resolve_effect()",
+        "transmute_is_effective_fog()",
+        "transmute_effect_name()",
+        "transmute_ai_apply()",
+        "transmute_round_state_init()",
+        "transmute_on_trick_complete()",
+        "transmute_apply_round_end()",
+        "transmute_swap_between_players()"
+      ],
+      "requires": [
+        "src/phase2/transmutation.h (TransmuteSlot.fogged/fog_transmuter, TrickTransmuteInfo.fogged/fog_transmuter, TEFFECT_ANCHOR_FORCE_LEAD_SUIT, TEFFECT_BINDING_AUTO_WIN_NEXT, TEFFECT_WOTT_SHIELD_NEXT_TRICK, TEFFECT_TRAP_DOUBLE_WITH_QOS, TEFFECT_RANDOM_TRICK_WINNER, TEFFECT_MIRROR, TEFFECT_FOG_HIDDEN, TEFFECT_WOTT_FORCE_LEAD_HEARTS, TEFFECT_CROWN_HIGHEST_RANK, TEFFECT_PARASITE_REDIRECT_POINTS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN)",
+        "src/core/hand.h (Hand, hand_contains, hand_has_suit)",
+        "src/core/trick.h (Trick)",
+        "src/phase2/phase2_defs.h (phase2_get_transmutation)",
+        "src/phase2/phase2_state.h (Phase2State, NUM_PLAYERS, shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[], last_played_transmuted_card)",
+        "src/core/game_state.h (GameState)"
+      ],
+      "used_by": [
+        "src/phase2/transmutation_logic.c",
+        "src/phase2/contract_logic.c",
+        "src/game/ai.c",
+        "src/game/play_phase.c",
+        "src/game/pass_phase.c",
+        "src/game/turn_flow.c",
+        "src/game/update.c",
+        "src/game/info_sync.c",
+        "src/game/phase_transitions.c",
+        "src/main.c",
+        "src/server/server_game.c"
+      ],
+      "last_changed": "2026-04-05 \u2014 Changed transmute_trick_count_points() signature to add const Phase2State* p2 parameter for Mirror transmutation point calculation"
+    },
+    "src/phase2/transmutation_logic.c": {
+      "implements": "src/phase2/transmutation_logic.h",
+      "requires": [
+        "src/phase2/transmutation_logic.h (transmute_trick_count_points now takes Phase2State*)",
+        "src/phase2/transmutation.h (TransmuteEffect, TEFFECT_ANCHOR_FORCE_LEAD_SUIT, TEFFECT_BINDING_AUTO_WIN_NEXT, TEFFECT_WOTT_SHIELD_NEXT_TRICK, TEFFECT_TRAP_DOUBLE_WITH_QOS, TEFFECT_RANDOM_TRICK_WINNER, TEFFECT_MIRROR, TEFFECT_WOTT_FORCE_LEAD_HEARTS, TEFFECT_CROWN_HIGHEST_RANK, TEFFECT_PARASITE_REDIRECT_POINTS, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN)",
+        "src/phase2/phase2_defs.h (phase2_get_transmutation)",
+        "src/phase2/phase2_state.h (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[], last_played_transmuted_card)",
+        "src/core/hand.h (hand_contains, hand_has_suit)",
+        "src/core/trick.h (Trick, trick_get_winner, trick_count_points)",
+        "src/core/card.h (Card, Suit, SUIT_HEARTS, card_point_value, card_points)",
+        "src/core/game_state.h (GameState, hearts_broken)",
+        "stdlib.h (rand)",
+        "stdio.h (fprintf)",
+        "string.h"
+      ],
+      "last_changed": "2026-04-05 \u2014 Updated transmute_trick_count_points() signature to take const Phase2State* p2; uses p2->last_played_transmuted_card at line 427 for Mirror effect point calculation"
+    },
+    "src/net/socket.h": {
+      "exports": [
+        "struct NetRingBuf",
+        "enum NetConnState (NET_CONN_DISCONNECTED, CONNECTING, CONNECTED, CLOSING)",
+        "enum NetDisconnectCause (NONE, CLOSED_LOCAL, CLOSED_REMOTE, ERROR)",
+        "struct NetConn",
+        "struct NetSocket",
+        "net_socket_init()",
+        "net_socket_shutdown()",
+        "net_socket_listen()",
+        "net_socket_accept()",
+        "net_socket_connect()",
+        "net_socket_update()",
+        "net_socket_send()",
+        "net_socket_recv()",
+        "net_socket_recv_consume()",
+        "net_socket_close()",
+        "net_socket_state()",
+        "net_socket_count()",
+        "net_socket_send_msg()",
+        "net_socket_recv_msg()",
+        "NET_RINGBUF_CAPACITY",
+        "NET_RINGBUF_MASK"
+      ],
+      "requires": [
+        "net/protocol.h (NetMsg, NET_ADDR_LEN, net_frame_write, net_frame_read, net_msg_serialize, net_msg_deserialize)",
+        "stdbool.h",
+        "stddef.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/net/socket.c",
+        "src/net/client_net.c",
+        "src/net/server_net.c",
+        "src/net/lobby_net.c"
+      ]
+    },
+    "src/net/socket.c": {
+      "implements": "src/net/socket.h",
+      "requires": [
+        "src/net/socket.h",
+        "src/net/protocol.h (NetMsg, NET_FRAME_HEADER_SIZE, NET_MAX_MSG_SIZE, net_frame_write, net_frame_read, net_msg_write_framed, net_msg_deserialize)",
+        "sys/socket.h",
+        "netinet/in.h",
+        "unistd.h",
+        "fcntl.h",
+        "poll.h",
+        "errno.h",
+        "string.h",
+        "stdio.h",
+        "arpa/inet.h",
+        "stdlib.h"
+      ]
+    },
+    "src/net/client_net.h": {
+      "exports": [
+        "enum ClientNetState (CLIENT_NET_DISCONNECTED, CLIENT_NET_CONNECTING, CLIENT_NET_HANDSHAKING, CLIENT_NET_CONNECTED, CLIENT_NET_RECONNECTING, CLIENT_NET_ERROR)",
+        "client_net_init()",
+        "client_net_shutdown()",
+        "client_net_set_auth_token()",
+        "client_net_set_username()",
+        "client_net_connect()",
+        "client_net_disconnect()",
+        "client_net_update()",
+        "client_net_state()",
+        "client_net_seat()",
+        "client_net_has_new_state()",
+        "client_net_peek_state()",
+        "client_net_consume_state()",
+        "client_net_ping_ms()",
+        "client_net_reject_reason()",
+        "client_net_is_reconnecting()",
+        "client_net_reconnect_attempt()",
+        "client_net_reconnect_time_remaining()",
+        "client_net_has_room_status()",
+        "client_net_consume_room_status()",
+        "client_net_has_error()",
+        "client_net_consume_error()",
+        "client_net_has_chat()",
+        "client_net_consume_chat()",
+        "client_net_consume_pass_confirmed()",
+        "client_net_reset_pass_confirmed()",
+        "client_net_has_game_over()",
+        "client_net_get_game_over()",
+        "client_net_clear_game_over()",
+        "client_net_get_reconnect_info()",
+        "client_net_send_add_ai()",
+        "client_net_send_remove_ai()",
+        "client_net_send_start_game(int ai_difficulty, int timer_option, int point_goal_idx, int gamemode)",
+        "client_net_send_cmd()"
+      ],
+      "requires": [
+        "net/protocol.h (NetPlayerView, NetMsgRoomStatus, NetMsgGameOver, NetRejectReason, PROTOCOL_VERSION, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN, NET_MAX_NAME_LEN, NetMsgPassConfirmed)",
+        "core/input_cmd.h (InputCmd)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/net/client_net.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 \u2014 Changed client_net_send_start_game signature from (int ai_difficulty) to (int, int, int, int) to pass timer_option, point_goal_idx, gamemode; also has game_over ELO functions"
+    },
+    "src/net/client_net.c": {
+      "implements": "src/net/client_net.h",
+      "requires": [
+        "src/net/client_net.h",
+        "src/net/socket.h (NetSocket, net_socket_init, net_socket_shutdown, net_socket_connect, net_socket_update, net_socket_close, net_socket_state, net_socket_send_msg, net_socket_recv_msg)",
+        "src/net/protocol.h (NetMsg, NetMsgType, NetPlayerView, NetInputCmd, PROTOCOL_VERSION, NET_ROOM_CODE_LEN, net_input_cmd_is_relevant, net_input_cmd_from_local)",
+        "src/core/input_cmd.h (InputCmd)",
+        "string.h",
+        "stdio.h",
+        "time.h (clock_gettime, CLOCK_MONOTONIC)"
+      ],
+      "last_changed": "2026-03-27 \u2014 Step 23: Force-close socket slot on disconnect to free for reuse"
+    },
+    "src/net/reconnect.h": {
+      "exports": [
+        "struct ReconnectState",
+        "RECONNECT_MAX_ATTEMPTS",
+        "RECONNECT_BASE_DELAY",
+        "RECONNECT_MAX_DELAY",
+        "reconnect_init()",
+        "reconnect_begin()",
+        "reconnect_update()",
+        "reconnect_cancel()",
+        "reconnect_is_active()",
+        "reconnect_attempt()",
+        "reconnect_time_remaining()",
+        "reconnect_exhausted()"
+      ],
+      "requires": [
+        "src/net/protocol.h (NET_ADDR_LEN, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/net/reconnect.c",
+        "src/net/client_net.c"
+      ]
+    },
+    "src/net/reconnect.c": {
+      "implements": "src/net/reconnect.h",
+      "requires": [
+        "src/net/reconnect.h",
+        "string.h",
+        "math.h"
+      ]
+    },
+    "src/net/state_recv.h": {
+      "exports": [
+        "state_recv_apply(GameState *, Phase2State *, const NetPlayerView *, bool defer_trick)"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/net/protocol.h (NetPlayerView)"
+      ],
+      "used_by": [
+        "src/net/state_recv.c",
+        "src/main.c"
+      ]
+    },
+    "src/net/state_recv.c": {
+      "implements": "src/net/state_recv.h",
+      "requires": [
+        "src/net/state_recv.h",
+        "src/net/protocol.h (NetPlayerView, NetCard, last_played_transmuted_card_suit/rank)",
+        "src/core/game_state.h (GameState)",
+        "src/core/hand.h (hand_add, hand_remove_at, hand_clear)",
+        "src/core/card.h (Card)",
+        "src/core/trick.h (Trick)",
+        "src/phase2/phase2_state.h (Phase2State, last_played_transmuted_card)",
+        "src/phase2/contract.h (ContractInstance)",
+        "src/phase2/transmutation.h (TransmuteEffect, TransmuteSlot, TrickTransmuteInfo, TransmuteRoundState, TransmuteInventory)",
+        "src/phase2/effect.h (ActiveEffect)",
+        "src/render/anim.h (CardVisual, anim_get_speed)",
+        "string.h"
+      ],
+      "last_changed": "2026-04-05 \u2014 Updated state_recv.c lines 292-295 to reconstruct last_played_transmuted_card from suit/rank fields in NetPlayerView"
+    },
+    "src/lobby/matchmaking.h": {
+      "exports": [
+        "struct MmQueueEntry",
+        "struct MmPendingMatch",
+        "struct MmMatchResult",
+        "typedef MmPendingTimeoutCb",
+        "MM_MAX_QUEUE",
+        "MM_MAX_PENDING",
+        "MM_PLAYERS_PER_MATCH",
+        "MM_PENDING_TIMEOUT",
+        "mm_init()",
+        "mm_queue_add()",
+        "mm_queue_remove()",
+        "mm_try_form_match()",
+        "mm_queue_count()",
+        "mm_pending_add()",
+        "mm_pending_find_by_code()",
+        "mm_pending_get()",
+        "mm_pending_remove()",
+        "mm_pending_remove_by_conn()",
+        "mm_pending_remove_by_server()",
+        "mm_pending_expire()"
+      ],
+      "requires": [
+        "src/net/protocol.h (NET_ROOM_CODE_LEN)",
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/lobby/matchmaking.c",
+        "src/lobby/lobby_net.c"
+      ]
+    },
+    "src/lobby/matchmaking.c": {
+      "implements": "src/lobby/matchmaking.h",
+      "requires": [
+        "src/lobby/matchmaking.h",
+        "src/net/protocol.h (NET_ROOM_CODE_LEN)",
+        "stdio.h",
+        "string.h"
+      ]
+    },
+    "src/render/help_menu.h": {
+      "exports": [
+        "struct HelpMenuNode (label[], description[], parent, children[], child_count, depth, sprite_id)",
+        "struct HelpMenuState (nodes[], node_count, loaded, open_path[], open_depth, hover_node, button_rect, column_rects[], forgiving_zone, tooltip_anim_t, tooltip_node)",
+        "#define HELP_MENU_MAX_NODES",
+        "#define HELP_MENU_MAX_LABEL",
+        "#define HELP_MENU_MAX_DESC",
+        "#define HELP_MENU_MAX_CHILDREN",
+        "#define HELP_MENU_MAX_DEPTH",
+        "help_menu_load(HelpMenuState*, const char *path, const char *mode)",
+        "help_menu_update()",
+        "help_menu_draw()",
+        "help_menu_draw_tooltip()"
+      ],
+      "requires": [
+        "raylib.h (Rectangle, Color)",
+        "stdbool.h"
+      ],
+      "used_by": [
+        "src/render/help_menu.c",
+        "src/render/render.h"
+      ],
+      "last_changed": "2026-04-06 \u2014 Added sprite_id to HelpMenuNode; help_menu_load() takes mode param; MAX_NODES 64->80"
+    },
+    "src/render/help_menu.c": {
+      "implements": "src/render/help_menu.h",
+      "requires": [
+        "src/render/help_menu.h",
+        "src/render/render.h (RenderState, LayoutConfig, hh_measure_text, hh_draw_text)",
+        "src/render/easing.h (ease_apply, EASE_OUT_QUAD)",
+        "src/render/card_render.h (card_render_has_transmute_sprite, card_render_transmute_face)",
+        "src/render/vendor/cJSON.h (cJSON, cJSON_Parse, cJSON_Delete, cJSON_IsString, cJSON_IsObject, cJSON_GetStringValue, cJSON_GetObjectItem, cJSON_IsNumber, cJSON_ArrayForEach)",
+        "raylib.h (GetMousePosition, CheckCollisionPointRec, DrawRectangleRounded, DrawRectangleRoundedLines)",
+        "stdio.h",
+        "stdlib.h",
+        "string.h"
+      ],
+      "last_changed": "2026-04-06 \u2014 Game mode selection, sprite_id parsing, transmute sprite rendering in tooltip"
+    },
+    "src/render/todo_panel.h": {
+      "exports": [
+        "struct TodoPanelState (known_bugs[], known_bugs_count, testing_required[], testing_required_count, planned_features[], planned_features_count, loaded)",
+        "TODO_PANEL_WIDTH",
+        "TODO_MAX_ITEMS",
+        "TODO_MAX_ITEM_LEN",
+        "todo_panel_init()",
+        "todo_panel_height()",
+        "todo_panel_draw()"
+      ],
+      "requires": [
+        "raylib.h (Rectangle, Font)"
+      ],
+      "used_by": [
+        "src/render/todo_panel.c",
+        "src/render/render.h",
+        "src/render/render.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 \u2014 New header: TodoPanelState struct and panel rendering functions"
+    },
+    "src/render/todo_panel.c": {
+      "implements": "src/render/todo_panel.h",
+      "requires": [
+        "src/render/todo_panel.h",
+        "src/vendor/cJSON.h (cJSON_*)",
+        "src/core/resource.h (res_read_file_text)",
+        "string.h",
+        "stdio.h",
+        "stdlib.h",
+        "raylib.h"
+      ],
+      "last_changed": "2026-04-06 \u2014 New implementation: todo_panel_init loads assets/defs/todo.json, todo_panel_height calculates display height, todo_panel_draw renders panel"
+    }
+  },
+  "change_log": [
+    {
+      "date": "2026-04-16T18:11:11Z",
+      "files_affected": [
+        "src/game/pass_phase.h",
+        "src/game/pass_phase.c",
+        "src/server/server_game.c"
+      ],
+      "change": "Function signature: pass_subphase_time_limit() now requires float bonus parameter; struct PassPhaseState has new timer_bonus field; server_game.c adds sv_timer_bonus() static function",
+      "impact": [
+        "src/game/pass_phase.c",
+        "src/game/update.c",
+        "src/game/process_input.c",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-15T18:49:46Z",
+      "file": "src/core/game_mode.h, src/core/game_mode.c, src/net/protocol.h, src/render/render.h, src/server/room.h, src/server/server_game.h, src/server/server_net.c, src/game/online_ui.h",
+      "change": "vanilla_plan.md Steps 1-9: Introduced GameMode enum (GAMEMODE_TRANSMUTATIONS=0, GAMEMODE_VANILLA=1, GAMEMODE_DRAGON_HEARTS=2) in new src/core/game_mode.h with GAMEMODE_LABELS array and gamemode_uses_phase2() helper. Added gamemode field (uint8_t) to NetMsgStartGame, Room, and ServerGame structs. Added phase2_enabled (bool) field to RenderState for gating phase2 UI. Rewired GAME_OPT_MODE_MAX macro to use GAMEMODE_COUNT. All phase2 mechanics now guarded by gamemode_uses_phase2() checks.",
+      "impact": [
+        "src/core/game_mode.c (new file implementing GAMEMODE_LABELS)",
+        "src/net/protocol.h (now includes core/game_mode.h, GAME_OPT_MODE_MAX references GAMEMODE_COUNT)",
+        "src/net/protocol.c (serializes/deserializes gamemode byte in NetMsgStartGame)",
+        "src/net/state_recv.c (deserializes phase2_enabled flag from state updates)",
+        "src/server/room.h (Room struct +uint8_t gamemode field)",
+        "src/server/server_game.h (ServerGame struct +uint8_t gamemode, depends on core/game_mode.h)",
+        "src/server/server_game.c (server_game_start copies room->gamemode, uses gamemode_uses_phase2() to enable/disable phase2, contract draft only on phase2 modes)",
+        "src/server/server_net.c (sv_handle_request_start_game clamps gamemode, uses GAME_OPT_MODE_MAX)",
+        "src/render/render.h (RenderState +bool phase2_enabled for conditional phase2 widget rendering)",
+        "src/render/render.c (gamemode picker wraps [0, GAMEMODE_DRAGON_HEARTS), phase2 widgets gated by rs->phase2_enabled)",
+        "src/game/online_ui.h (now directly includes core/game_mode.h, removed local GAMEMODE_LABELS/COUNT declarations)",
+        "src/game/info_sync.c (mirrors p2->enabled to rs->phase2_enabled, clears phase2 fields when disabled)",
+        "src/game/process_input.c (gamemode cycler wraps [0, GAMEMODE_DRAGON_HEARTS))"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-05T00:00:00Z",
+      "file": "src/render/render.h",
+      "change": "Added struct TrickRecord with fields (cards, player_ids, winner, num_played); Added macro MAX_TRICKS_PER_ROUND=13; Added fields to RenderState (chat_trick_num, chat_hover_trick_num, chat_hover_trick_rect, trick_history, trick_history_count, trick_tooltip); Added function render_chat_log_push_trick()",
+      "impact": [
+        "src/render/render.c",
+        "src/game/turn_flow.c",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-05T00:00:00Z",
+      "file": "src/phase2/phase2_state.h, src/phase2/transmutation_logic.h, src/net/protocol.h",
+      "change": "(1) phase2_state.h: Added Card last_played_transmuted_card field to Phase2State struct for tracking the card that carried the last transmutation (Mirror history). (2) transmutation_logic.h: Changed transmute_trick_count_points() signature from (const Trick*, const TrickTransmuteInfo*) to (const Trick*, const TrickTransmuteInfo*, const Phase2State*) to access p2->last_played_transmuted_card for Mirror effect point calculation. (3) protocol.h: Added uint8_t last_played_transmuted_card_suit and uint8_t last_played_transmuted_card_rank fields to NetPlayerView struct for wire serialization of the Card.",
+      "impact": [
+        "src/server/server_game.c (line 1181: transmute_trick_count_points() call updated with p2 parameter; lines 1789, 1926: stores last_played_transmuted_card)",
+        "src/net/protocol.c (lines 1571-1572, 1736-1737, 2358-2361: serializes/deserializes new NetPlayerView fields; line 2358-2361: reconstructs last_played_transmuted_card from suit/rank in net_build_player_view)",
+        "src/net/state_recv.c (lines 292-295: reconstructs last_played_transmuted_card from received suit/rank fields)",
+        "src/game/play_phase.c (line 155: stores last_played_transmuted_card during transmutation effect resolution)",
+        "src/phase2/contract_logic.c (line 77: initializes last_played_transmuted_card to {0,0} in phase2_init)",
+        "src/phase2/transmutation_logic.c (line 402: implements updated transmute_trick_count_points() signature; line 427: reads p2->last_played_transmuted_card for Mirror point calculation)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-05T00:04:09Z",
+      "file": "src/game/play_phase.h, src/server/server_game.c",
+      "change": "Added int hint_idx parameter to play_card_with_transmute() in play_phase.h and sv_play_card_with_transmute() in server_game.c. This parameter tracks the card inventory index for transmutation hint tracking.",
+      "impact": [
+        "src/game/update.c (line 214-216: already updated to pass cmd.card.card_index)",
+        "src/server/server_game.c (lines 536, 1059, 1752: all call sites updated with hint_idx values)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-04T21:41:38.529778Z",
+      "file": "src/phase2/phase2_defs.h, src/phase2/phase2_defs.c, src/render/render.h",
+      "change": "Added phase2_find_transmute_by_effect() function to reverse-lookup transmutation ID by effect; added mirror_source_tid field to RenderState struct",
+      "impact": [
+        "src/game/info_sync.c (line 110: calls phase2_find_transmute_by_effect, line 97/110: reads/writes mirror_source_tid)",
+        "src/game/phase_transitions.c (line 261,270: reads mirror_source_tid for Mirror visual effect)",
+        "src/game/play_phase.c (line 140,142: writes mirror_source_tid for Mirror detection)",
+        "src/render/render.c (line 1042: initializes mirror_source_tid)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-04T00:00:00Z",
+      "file": "src/phase2/transmutation.h, src/net/protocol.h",
+      "change": "(1) transmutation.h: Added Card rogue_revealed_card and Card duel_revealed_card fields to TransmuteRoundState struct. (2) protocol.h: Added NetCard rogue_revealed_card and NetCard duel_revealed_card fields to NetPlayerView struct; bumped PROTOCOL_VERSION from 4 to 5. (3) turn_flow.c: Updated static function rogue_launch_flight() signature to accept const Phase2State *p2 parameter (internal change only).",
+      "impact": [
+        "src/phase2/transmutation_logic.c (reads/writes new TransmuteRoundState fields)",
+        "src/net/protocol.c (serialization/deserialization of new NetPlayerView fields)",
+        "src/net/client_net.c (state queue handling for updated NetPlayerView)",
+        "src/net/state_recv.c (application of received state updates with new card fields)",
+        "src/server/server_game.c (building NetPlayerView with new card fields)",
+        "src/server/server_net.c (broadcasting updated state)",
+        "src/game/turn_flow.c (uses rogue_launch_flight with new Phase2State parameter)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-02T00:00:00Z",
+      "file": "src/server/ai_competitive.h, src/server/ai_competitive.c, src/server/server_game.h, src/server/room.h, src/net/protocol.h, src/net/client_net.h",
+      "change": "Step 26: Competitive AI and AI difficulty configuration. (1) NEW: ai_competitive.h/c with CompetitiveAIState, QSStatus enum, AIWeights/AIThresholds structs, 10 decision functions (comp_ai_*). (2) server_game.h: Added comp_ai[NUM_PLAYERS] array and ai_difficulty (uint8_t) field to ServerGame. (3) room.h: Added ai_difficulty (uint8_t) field to Room. (4) protocol.h: Added NetMsgStartGame struct (ai_difficulty) and start_game union member to NetMsg. (5) client_net.h: Changed client_net_send_start_game() signature to accept int ai_difficulty parameter.",
+      "impact": [
+        "src/server/server_game.c (initializes comp_ai array, routes AI decisions through difficulty level)",
+        "src/server/room.c (passes ai_difficulty from Room to ServerGame at game start)",
+        "src/server/server_net.c (broadcasts NetMsgStartGame with ai_difficulty to all clients)",
+        "src/net/client_net.c (serializes ai_difficulty when sending start game request)",
+        "src/net/protocol.c (serializes/deserializes NetMsgStartGame)",
+        "src/main.c (calls client_net_send_start_game() with difficulty from UI selection)",
+        "src/game/online_ui.h (may need to track AI difficulty selection in online lobby UI)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-01T22:15:00Z",
+      "file": "src/game/play_phase.h",
+      "change": "Added server_trick_winner (int) field to PlayPhaseState struct for server-authoritative trick winner tracking during Roulette effect determinism",
+      "impact": [
+        "src/game/play_phase.c (field initialization and usage)",
+        "src/game/turn_flow.c (reads server_trick_winner for effect resolution)",
+        "src/game/update.c (may read field for state updates)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-01T22:15:00Z",
+      "file": "src/server/server_game.h",
+      "change": "Added last_trick_winner (int) field to ServerGame struct for server-authoritative trick winner tracking",
+      "impact": [
+        "src/server/server_game.c (field initialization and updates after trick completion)",
+        "src/server/server_net.c (may transmit value to clients via NetPlayerView.trick_winner)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-01T22:15:00Z",
+      "file": "src/net/protocol.h",
+      "change": "Added fog_transmuter[CARDS_PER_TRICK] (int8_t) to NetTrickTransmuteView struct; added last_played_transmute_id (int16_t), last_played_resolved_effect (uint8_t), trick_winner (int8_t) to NetPlayerView struct for transmutation networking bug fixes",
+      "impact": [
+        "src/net/protocol.c (serialization/deserialization of new fields)",
+        "src/net/client_net.c (state queue handling for updated NetPlayerView)",
+        "src/net/state_recv.c (application of received state updates)",
+        "src/server/server_game.c (building NetPlayerView with new fields)",
+        "src/server/server_net.c (broadcasting updated state)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-01T20:44:12Z",
+      "file": "src/core/settings.h, src/server/server_game.h, src/render/render.h",
+      "change": "Removed client-side AI speed configuration. (1) settings.h: Removed enum AISpeed (SLOW/NORMAL/FAST), removed ai_speed field from GameSettings struct, removed settings_ai_think_time() and settings_ai_speed_name() declarations. (2) server_game.h: Added ai_play_delay (float) and ai_play_timer (float) fields to ServerGame struct for server-side per-AI random card play delays (1-3s per turn). (3) render.h: Changed SETTINGS_ROW_COUNT from 9\u21928 and SETTINGS_ACTIVE_COUNT from 9\u21928 to reflect removal of AI speed settings row. Impact: Settings menu no longer shows AI speed option; server now manages AI timing independently.",
+      "impact": [
+        "src/core/settings.c (removed AISpeed initialization and save/load)",
+        "src/server/server_game.c (uses ai_play_delay/ai_play_timer in SV_PLAY_WAIT_TURN substate)",
+        "src/game/settings_ui.c (settings_rows_* arrays sized to SETTINGS_ROW_COUNT, no longer displays AI speed)",
+        "src/render/render.c (loops over SETTINGS_ROW_COUNT, RenderState.settings_* arrays sized accordingly)",
+        "src/game/process_input.c (settings nav loops use SETTINGS_ROW_COUNT)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-31",
+      "change": "NetMsgType enum addition: NET_MSG_PASS_CONFIRMED=29; new struct NetMsgPassConfirmed (uint8_t seat); new union member pass_confirmed in NetMsg",
+      "files": [
+        "src/net/protocol.h"
+      ],
+      "impact": [
+        "src/net/client_net.c (lines TBD: needs handler for incoming NET_MSG_PASS_CONFIRMED)",
+        "src/server/server_net.c (lines TBD: needs serialization of pass confirmation)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-31",
+      "change": "client_net.h function additions: client_net_consume_pass_confirmed() (returns int), client_net_reset_pass_confirmed() (returns void)",
+      "files": [
+        "src/net/client_net.h"
+      ],
+      "impact": [
+        "src/net/client_net.c (needs implementation of both functions)",
+        "src/main.c (needs calls to these new functions in game loop)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-31",
+      "change": "ServerGame struct field addition: +prev_pass_ready[NUM_PLAYERS] bool array \u2014 tracks previous round pass readiness state per player",
+      "files": [
+        "src/server/server_game.h"
+      ],
+      "impact": [
+        "src/server/server_game.c (needs initialization and management of prev_pass_ready array)",
+        "src/server/server_net.c (may need to reference for state broadcasts)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-31",
+      "change": "PassPhaseState struct field additions: +online_toss_started[NUM_PLAYERS], +online_toss_count (int), +online_async_toss (bool); new functions pass_start_single_toss_online(), pass_assign_received_cards_online()",
+      "files": [
+        "src/game/pass_phase.h"
+      ],
+      "impact": [
+        "src/game/pass_phase.c (needs initialization of new fields and implementation of new functions)",
+        "src/main.c (needs calls to new functions for online toss handling)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-31",
+      "change": "RenderState struct field addition: +draft_waiting (bool) and +draft_wait_border_t (float) \u2014 contract draft UI waiting animation state",
+      "files": [
+        "src/render/render.h"
+      ],
+      "impact": [
+        "src/render/render.c (lines 1094-1095: initialize to false/0.0f, lines 1928-1931: animate border_t, lines 2744-2745: draw border when waiting)",
+        "src/game/pass_phase.c (lines 1364, 1376, 1388, 1395: set draft_waiting flag based on pick state)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-30",
+      "change": "RenderState struct field addition: +online_deal_anim (bool) \u2014 client-side deal animation flag for online play",
+      "files": [
+        "src/render/render.h"
+      ],
+      "impact": [
+        "src/render/render.c (line 828, 875: initialize to false)",
+        "src/main.c (line 679, 761: check and set field)",
+        "src/game/phase_transitions.c (line 109, 114: check and clear field)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-03-30",
+      "change": "PassPhaseState struct field addition: +draft_click_consumed (bool) \u2014 tracks contract pick click consumption until mouse release",
+      "files": [
+        "src/game/pass_phase.h"
+      ],
+      "impact": [
+        "src/game/pass_phase.c (needs initialization and state management)",
+        "src/game/process_input.c (may need to check/set field)",
+        "src/game/update.c (may need to reset field)"
+      ],
+      "status": "pending"
+    },
+    {
+      "date": "2026-03-29",
+      "change": "PassPhaseState struct field addition: +draft_pick_pending (bool) \u2014 tracks online pick send/confirm state",
+      "files": [
+        "src/game/pass_phase.h"
+      ],
+      "impact": [
+        "src/game/pass_phase.c (already initializes field)",
+        "src/main.c (line 714, 718: uses field)",
+        "src/game/process_input.c (line 353: checks field)",
+        "src/game/update.c (line 212: sets field)"
+      ],
+      "status": "propagated"
+    }
+  ]
+}

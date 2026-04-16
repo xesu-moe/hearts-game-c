@@ -1,12 +1,13 @@
 /* ============================================================
  * @deps-implements: play_phase.h
  * @deps-requires: play_phase.h, core/game_state.h (game_state_play_card),
- *                 core/hand.h, core/trick.h, render/render.h,
+ *                 core/hand.h, core/trick.h, render/render.h (mirror_source_tid),
  *                 phase2/phase2_state.h (curse_force_hearts[], anchor_force_suit[]),
- *                 phase2/transmutation_logic.h (transmute_curse_is_valid_lead, transmute_curse_consume, transmute_anchor_is_valid_lead, transmute_anchor_consume),
+ *                 phase2/transmutation_logic.h (transmute_curse_is_valid_lead, transmute_curse_consume,
+ *                   transmute_anchor_is_valid_lead, transmute_anchor_consume),
  *                 phase2/transmutation.h (TrickTransmuteInfo.fogged/fog_transmuter),
  *                 phase2/phase2_defs.h (phase2_get_transmutation), stdio.h
- * @deps-last-changed: 2026-03-21 — Added Anchor transmutation: force lead suit check & consume
+ * @deps-last-changed: 2026-04-04 — Sets mirror_source_tid for Mirror transmutation detection
  * ============================================================ */
 
 #include "play_phase.h"
@@ -19,16 +20,18 @@
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
-const char *p2_player_name(int player_id)
+const char *p2_player_name(int player_id, const RenderState *rs)
 {
     static const char *names[] = {"You", "West", "North", "East"};
-    if (player_id >= 0 && player_id < NUM_PLAYERS) return names[player_id];
-    return "???";
+    if (player_id < 0 || player_id >= NUM_PLAYERS) return "???";
+    if (rs && rs->player_names[player_id][0] != '\0')
+        return rs->player_names[player_id];
+    return names[player_id];
 }
 
 bool play_card_with_transmute(GameState *gs, RenderState *rs,
                               Phase2State *p2, PlayPhaseState *pps,
-                              int player_id, Card card)
+                              int player_id, Card card, int hint_idx)
 {
     if (!p2->enabled) {
         bool ok = game_state_play_card(gs, player_id, card);
@@ -39,20 +42,34 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
     Hand *hand = &gs->players[player_id].hand;
     HandTransmuteState *hts = &p2->players[player_id].hand_transmutes;
 
-    /* Find the card's hand index before it's removed */
+    /* hint_idx carries transmutation_id (-1 = non-transmuted).
+     * Match by suit+rank+transmutation state for order-independent disambiguation. */
+    int hint_tid = hint_idx;  /* repurposed: transmutation_id, not position */
     int hand_idx = -1;
     for (int i = 0; i < hand->count; i++) {
-        if (card_equals(hand->cards[i], card)) {
+        if (card_equals(hand->cards[i], card) &&
+            hts->slots[i].transmutation_id == hint_tid) {
             hand_idx = i;
             break;
         }
     }
+    /* Fallback: if exact tid match fails, take first suit+rank match */
+    if (hand_idx < 0) {
+        for (int i = 0; i < hand->count; i++) {
+            if (card_equals(hand->cards[i], card)) {
+                hand_idx = i;
+                break;
+            }
+        }
+    }
+
+
+    if (hand_idx < 0) return false;  /* Card not in hand */
 
     /* Record transmutation ID into trick info */
     int trick_slot = gs->current_trick.num_played;
     int tid = -1;
-    bool is_transmuted = (hand_idx >= 0 &&
-                          transmute_is_transmuted(hts, hand_idx));
+    bool is_transmuted = transmute_is_transmuted(hts, hand_idx);
     if (is_transmuted) {
         tid = hts->slots[hand_idx].transmutation_id;
     }
@@ -71,11 +88,11 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
             return false;
     }
 
-    bool ok;
+    if (gs->phase != PHASE_PLAYING) return false;
+    if (game_state_current_player(gs) != player_id) return false;
+    bool first_trick = (gs->tricks_played == 0);
+
     if (is_transmuted) {
-        if (gs->phase != PHASE_PLAYING) return false;
-        if (game_state_current_player(gs) != player_id) return false;
-        bool first_trick = (gs->tricks_played == 0);
         /* Curse bypasses hearts-broken restriction when leading */
         bool hb = gs->hearts_broken || (leading && p2->curse_force_hearts[player_id]);
         if (!transmute_is_valid_play(&gs->current_trick, hand, hts,
@@ -83,23 +100,23 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
                                      hb, first_trick)) {
             return false;
         }
-        if (!hand_remove_card(hand, card)) return false;
-        trick_play_card(&gs->current_trick, player_id, card);
-        if (card.suit == SUIT_HEARTS) {
-            gs->hearts_broken = true;
-        }
-        ok = true;
     } else {
         /* Curse bypasses hearts-broken for non-transmuted cards */
         bool was_broken = gs->hearts_broken;
         if (leading && p2->curse_force_hearts[player_id]) {
             gs->hearts_broken = true;
         }
-        ok = game_state_play_card(gs, player_id, card);
-        if (!ok) {
+        if (!trick_is_valid_play(&gs->current_trick, hand, card,
+                                 gs->hearts_broken, first_trick)) {
             gs->hearts_broken = was_broken;
             return false;
         }
+    }
+
+    hand_remove_at(hand, hand_idx);
+    trick_play_card(&gs->current_trick, player_id, card);
+    if (card.suit == SUIT_HEARTS) {
+        gs->hearts_broken = true;
     }
 
     /* Consume curse after leading */
@@ -132,8 +149,20 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
         TransmuteEffect resolved = transmute_resolve_effect(tid, p2);
         pps->current_tti.resolved_effects[trick_slot] = resolved;
 
-        /* Update global Mirror history */
+        /* Update Mirror animation state for this trick slot */
         if (tid >= 0) {
+            const TransmutationDef *td2 = phase2_get_transmutation(tid);
+            if (td2 && td2->effect == TEFFECT_MIRROR &&
+                resolved != TEFFECT_FOG_HIDDEN && resolved != TEFFECT_NONE) {
+                rs->mirror_source_tid[trick_slot] =
+                    phase2_find_transmute_by_effect(p2->last_played_resolved_effect);
+                rs->mirror_morphed[trick_slot] = false;
+            } else {
+                rs->mirror_source_tid[trick_slot] = -1;
+            }
+            const TransmutationDef *td_chk = phase2_get_transmutation(tid);
+            if (!td_chk || td_chk->effect != TEFFECT_MIRROR)
+                p2->last_played_transmuted_card = card;
             p2->last_played_transmute_id = tid;
             p2->last_played_resolved_effect = resolved;
         }
@@ -162,15 +191,10 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
             const TransmutationDef *tdef = phase2_get_transmutation(tid);
             if (tdef) {
                 char tmsg[CHAT_MSG_LEN];
-                if (tdef->effect == TEFFECT_MIRROR) {
-                    snprintf(tmsg, sizeof(tmsg), "[%s] Mirroring: %s",
-                             tdef->name, transmute_effect_name(
-                                 pps->current_tti.resolved_effects[trick_slot]));
-                } else {
-                    snprintf(tmsg, sizeof(tmsg), "[%s] %s",
-                             tdef->name, tdef->description);
-                }
-                render_chat_log_push_color(rs, tmsg, VIOLET);
+                snprintf(tmsg, sizeof(tmsg), "%s plays %s!",
+                         p2_player_name(player_id, rs), tdef->name);
+                render_chat_log_push_rich(rs, tmsg, PURPLE,
+                                          tdef->name, tid);
             }
         }
     }

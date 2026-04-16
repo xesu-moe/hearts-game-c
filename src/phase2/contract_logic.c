@@ -1,9 +1,9 @@
 /* ============================================================
  * @deps-implements: contract_logic.h
- * @deps-requires: contract_logic.h, phase2_state.h, phase2_defs.h,
- *                 transmutation_logic.h (transmute_round_state_init),
+ * @deps-requires: contract_logic.h, core/game_state.h (GameState),
+ *                 phase2_state.h, phase2_defs.h, transmutation_logic.h,
  *                 core/trick.h, core/card.h, stdlib.h, string.h
- * @deps-last-changed: 2026-03-22 — Replaced raylib.h with stdlib.h (rand)
+ * @deps-last-changed: 2026-03-30 — Added GameState param to contract_on_trick_complete/evaluate_all
  * ============================================================ */
 
 #include "contract_logic.h"
@@ -74,6 +74,7 @@ void contract_state_init(Phase2State *p2)
 
     p2->last_played_transmute_id = -1;
     p2->last_played_resolved_effect = TEFFECT_NONE;
+    p2->last_played_transmuted_card = (Card){0, 0};
 
     for (int i = 0; i < NUM_PLAYERS; i++) {
         p2->anchor_force_suit[i] = -1;
@@ -176,7 +177,7 @@ void draft_generate_pool(DraftState *draft)
 
     /* --- Select 16 random transmutations (no duplication) --- */
     /* Excluded IDs: transmutations not yet ready for the draft pool */
-    static const int EXCLUDED_TMUTE_IDS[] = { 11 /* The Echo */ };
+    static const int EXCLUDED_TMUTE_IDS[] = { 11 /* The Echo */, 7 /* The Duel */ };
     static const int NUM_EXCLUDED = sizeof(EXCLUDED_TMUTE_IDS) / sizeof(EXCLUDED_TMUTE_IDS[0]);
 
     int all_transmutes[MAX_TRANSMUTATION_DEFS];
@@ -346,7 +347,8 @@ static bool is_received_card(const ContractInstance *ci, Card c)
 /* Queen of Spades constant */
 static const Card QOS = { .suit = SUIT_SPADES, .rank = RANK_Q };
 
-void contract_on_trick_complete(Phase2State *p2, const Trick *trick, int winner,
+void contract_on_trick_complete(Phase2State *p2, const GameState *gs,
+                                const Trick *trick, int winner,
                                 int trick_number, const TrickTransmuteInfo *tti,
                                 bool hearts_broken_before)
 {
@@ -368,20 +370,26 @@ void contract_on_trick_complete(Phase2State *p2, const Trick *trick, int winner,
     for (int i = 0; i < trick->num_played; i++)
         player_play_idx[trick->player_ids[i]] = i;
 
-    /* --- PREVENT_MOON (check across all contracts) --- */
-    if (trick_scoring_pts > 0) {
-        int total_distributed = 0;
-        for (int p = 0; p < NUM_PLAYERS; p++) {
-            /* Use first contract's points_taken as representative */
-            if (p2->players[p].num_active_contracts > 0)
-                total_distributed += p2->players[p].contracts[0].points_taken;
-        }
-
+    /* --- PREVENT_MOON (check across all contracts) ---
+     * A non-winner player was on a moon run if they had ALL the points
+     * before this trick (sole scorer). Since round_points is already
+     * updated for the winner, we check: player p has points, winner has
+     * points (just gained), and all other players have 0. */
+    if (trick_scoring_pts > 0 && trick_number > 8) {
         for (int p = 0; p < NUM_PLAYERS; p++) {
             if (p == winner) continue;
-            int pts = (p2->players[p].num_active_contracts > 0)
-                          ? p2->players[p].contracts[0].points_taken : 0;
-            if (pts > 0 && pts == total_distributed) {
+            if (gs->players[p].round_points <= 0) continue;
+            /* p has points and is not the winner — check if all others
+             * (excluding p and winner) have 0, meaning p was sole scorer */
+            bool p_had_all = true;
+            for (int q = 0; q < NUM_PLAYERS; q++) {
+                if (q == p || q == winner) continue;
+                if (gs->players[q].round_points > 0) {
+                    p_had_all = false;
+                    break;
+                }
+            }
+            if (p_had_all) {
                 for (int c = 0; c < p2->players[winner].num_active_contracts; c++)
                     p2->players[winner].contracts[c].prevented_moon = true;
                 break;
@@ -491,8 +499,8 @@ void contract_on_trick_complete(Phase2State *p2, const Trick *trick, int winner,
  * ================================================================ */
 
 /* Evaluate a single contract instance */
-static void contract_evaluate_one(Phase2State *p2, int player_id,
-                                   ContractInstance *ci)
+static void contract_evaluate_one(Phase2State *p2, const GameState *gs,
+                                   int player_id, ContractInstance *ci)
 {
     if (ci->contract_id < 0) return;
 
@@ -606,7 +614,7 @@ static void contract_evaluate_one(Phase2State *p2, int player_id,
         break;
 
     case COND_SHOOT_THE_MOON:
-        success = (ci->points_taken == 26);
+        success = gs->moon_shot && (player_id == gs->moon_shooter);
         break;
 
     case COND_PREVENT_MOON:
@@ -634,13 +642,13 @@ static void contract_evaluate_one(Phase2State *p2, int player_id,
         ci->failed = true;
 }
 
-void contract_evaluate_all(Phase2State *p2, int player_id)
+void contract_evaluate_all(Phase2State *p2, const GameState *gs, int player_id)
 {
     if (player_id < 0 || player_id >= NUM_PLAYERS) return;
     PlayerPhase2 *pp = &p2->players[player_id];
 
     for (int c = 0; c < pp->num_active_contracts; c++)
-        contract_evaluate_one(p2, player_id, &pp->contracts[c]);
+        contract_evaluate_one(p2, gs, player_id, &pp->contracts[c]);
 }
 
 void contract_apply_rewards_all(Phase2State *p2, int player_id)

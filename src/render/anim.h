@@ -5,7 +5,7 @@
  * @deps-exports: struct CardVisual, anim_start_scaled(), ANIM_PASS_HAND_SLIDE_DURATION, ANIM_PASS_RECEIVE_GAP_DELAY
  * @deps-requires: easing.h (EaseType), raylib.h (Vector2), core/card.h (Card), stdint.h
  * @deps-used-by: render.c, anim.c, game/pass_phase.c, game/turn_flow.c, game/update.c
- * @deps-last-changed: 2026-03-22 — Hand slide timing: added ANIM_PASS_HAND_SLIDE_DURATION and ANIM_PASS_RECEIVE_GAP_DELAY constants for hand card animation
+ * @deps-last-changed: 2026-04-05 — Added scoring_hidden field to CardVisual for conditionally hiding untriggered Trap cards in scoring screen
  * ============================================================ */
 
 #include <stdbool.h>
@@ -105,6 +105,7 @@ typedef struct CardVisual {
     bool     dimmed;          /* true = draw dark overlay (unplayable card) */
     bool     shielded;        /* true = points negated by Shield effect */
     bool     inverted;        /* true = points negated by Inversion (down arrow) */
+    bool     scoring_hidden;  /* true = hide from scoring screen (e.g. untriggered Trap) */
 } CardVisual;
 
 /* ---- Animation Speed ---- */

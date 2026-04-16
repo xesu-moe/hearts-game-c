@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "rlgl.h"
+#include "core/resource.h"
 
 #define CARD_CORNER_RADIUS 0.15f
 
@@ -24,6 +25,7 @@
 static Texture2D s_spritesheet;
 static Texture2D s_card_back;
 static bool      s_textures_loaded = false;
+
 
 /* ---- Transmutation sprite state ---- */
 
@@ -95,8 +97,8 @@ static Rectangle card_source_rect(Card card)
 
 bool card_render_init(void)
 {
-    s_spritesheet = LoadTexture("assets/cards_spritesheet.png");
-    s_card_back   = LoadTexture("assets/card_back.png");
+    s_spritesheet = res_load_texture("assets/cards_spritesheet.png");
+    s_card_back   = res_load_texture("assets/card_back.png");
 
     s_textures_loaded = IsTextureValid(s_spritesheet) && IsTextureValid(s_card_back);
 
@@ -303,25 +305,33 @@ void card_render_transmute_init(void)
 
     /* Keep in sync with assets/defs/transmutations.json IDs */
     static const struct { int id; const char *path; } SPRITE_MAP[] = {
-        {  4, "assets/sprites-temp/gatherer-final.png"   },
-        {  6, "assets/sprites-temp/pendulum-final.png"   },
-        {  7, "assets/sprites-temp/duel-final.png"       },
-        {  9, "assets/sprites-temp/mirror-final.png"     },
-        { 12, "assets/sprites-temp/trap-final.png"       },
-        { 13, "assets/sprites-temp/shield-final.png"     },
-        { 14, "assets/sprites-temp/curse-final.png"      },
-        { 15, "assets/sprites-temp/anchor-final.png"     },
-        { 16, "assets/sprites-temp/crown-final.png"      },
-        { 17, "assets/sprites-temp/parasite-final.png"   },
-        { 18, "assets/sprites-temp/bounty-final.png"     },
-        { 19, "assets/sprites-temp/inversion-final.png"  },
-        { 20, "assets/sprites-temp/binding-final.png"    },
+        {  0, "assets/sprites-temp/redjoker-final.png"     },
+        {  1, "assets/sprites-temp/blackjoker-final.png"   },
+        {  2, "assets/sprites-temp/shadowqueen-final.png"  },
+        {  3, "assets/sprites-temp/martyr-final.png"       },
+        {  4, "assets/sprites-temp/gatherer-final.png"     },
+        {  5, "assets/sprites-temp/rogue-final.png"        },
+        {  6, "assets/sprites-temp/pendulum-final.png"     },
+        {  7, "assets/sprites-temp/duel-final.png"         },
+        {  8, "assets/sprites-temp/fog-final.png"          },
+        {  9, "assets/sprites-temp/mirror-final.png"       },
+        { 10, "assets/sprites-temp/roulette-final.png"     },
+        { 12, "assets/sprites-temp/trap-final.png"         },
+        { 13, "assets/sprites-temp/shield-final.png"       },
+        { 14, "assets/sprites-temp/curse-final.png"        },
+        { 15, "assets/sprites-temp/anchor-final.png"       },
+        { 16, "assets/sprites-temp/crown-final.png"        },
+        { 17, "assets/sprites-temp/parasite-final.png"     },
+        { 18, "assets/sprites-temp/bounty-final.png"       },
+        { 19, "assets/sprites-temp/inversion-final.png"    },
+        { 20, "assets/sprites-temp/binding-final.png"      },
+        { 21, "assets/sprites-temp/joker-final.png"        },
     };
     int count = (int)(sizeof(SPRITE_MAP) / sizeof(SPRITE_MAP[0]));
 
     int loaded = 0;
     for (int i = 0; i < count; i++) {
-        Texture2D tex = LoadTexture(SPRITE_MAP[i].path);
+        Texture2D tex = res_load_texture(SPRITE_MAP[i].path);
         if (IsTextureValid(tex)) {
             SetTextureFilter(tex, TEXTURE_FILTER_BILINEAR);
             s_transmute_sprites[SPRITE_MAP[i].id] = tex;

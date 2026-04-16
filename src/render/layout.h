@@ -92,10 +92,14 @@ typedef struct ScoringTableLayout {
     float table_x;      /* left edge of column 0 */
     float title_y;      /* "Round Complete" title Y */
     float header_y;     /* column header row Y */
-    float col_w;        /* width of each column */
+    float col_w;        /* width of Player column (also used for line width) */
+    float col_total_x;  /* X of Total column */
+    float col_round_x;  /* X of Round column */
+    float col_cards_x;  /* X of Cards column */
+    float table_w;       /* total table width */
     float row_h;        /* height of each player row */
     float line_y;       /* Y of separator line under header */
-    int   num_cols;     /* number of columns (3) */
+    int   num_cols;     /* number of columns (4) */
 } ScoringTableLayout;
 
 /* Compute scoring table geometry for a given slide offset (0 = fully visible,

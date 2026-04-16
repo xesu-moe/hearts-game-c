@@ -1,10 +1,10 @@
 /* ============================================================
  * @deps-implements: transmutation_logic.h
- * @deps-requires: transmutation_logic.h, transmutation.h (TransmuteEffect, TEFFECT_BOUNTY_REDIRECT_QOS, TEFFECT_INVERSION_NEGATE_POINTS, TEFFECT_JOKER_LEAD_WIN),
- *                 phase2_defs.h (phase2_get_transmutation), phase2_state.h (shield_tricks_remaining[], curse_force_hearts[], anchor_force_suit[], binding_auto_win[]),
- *                 core/hand.h (hand_contains, hand_has_suit), core/trick.h, core/card.h (SUIT_HEARTS, Card, Suit),
+ * @deps-requires: transmutation_logic.h, transmutation.h (TransmuteRoundState.rogue_revealed_card, duel_revealed_card),
+ *                 phase2_defs.h, phase2_state.h (shield_tricks_remaining[], curse_force_hearts[]),
+ *                 core/hand.h (hand_contains, hand_has_suit), core/trick.h, core/card.h (SUIT_HEARTS, Card),
  *                 core/game_state.h (GameState, hearts_broken), string.h, stdio.h, stdlib.h
- * @deps-last-changed: 2026-03-22 — Removed raylib.h, replaced GetRandomValue with rand()
+ * @deps-last-changed: 2026-04-04 — Uses TransmuteRoundState rogue/duel revealed card fields for Rogue/Duel mechanics
  * ============================================================ */
 
 #include "transmutation_logic.h"
@@ -73,6 +73,14 @@ bool transmute_apply(Hand *hand, HandTransmuteState *hts,
 
     const TransmutationDef *td = phase2_get_transmutation(transmutation_id);
     if (!td) return false;
+
+    /* Restricted cards */
+    Card target = hand->cards[hand_index];
+    if (target.suit == SUIT_CLUBS && target.rank == RANK_2)
+        return false;  /* 2 of Clubs: never transmutable */
+    if (target.suit == SUIT_SPADES && target.rank == RANK_Q &&
+        td->effect != TEFFECT_FOG_HIDDEN)
+        return false;  /* Queen of Spades: fog only */
 
     bool is_fog = (td->effect == TEFFECT_FOG_HIDDEN);
     bool already_transmuted = (hts->slots[hand_index].transmutation_id >= 0);
@@ -221,10 +229,51 @@ bool transmute_is_always_lose(const HandTransmuteState *hts, int idx)
     return td && td->special == TRANSMUTE_ALWAYS_LOSE;
 }
 
+/* Resolve Mirror card identity for trick winner purposes.
+ * Returns true if morphed, writing suit/rank to out params.
+ * Returns false if card should keep its physical identity (not Mirror,
+ * not morphing, morphing Fog, or source lookup failed). */
+static bool resolve_mirror_card_identity(const TrickTransmuteInfo *tti, int idx,
+                                         Suit *out_suit, Rank *out_rank)
+{
+    if (!tti || tti->transmutation_ids[idx] < 0) return false;
+    const TransmutationDef *td = phase2_get_transmutation(tti->transmutation_ids[idx]);
+    if (!td || td->effect != TEFFECT_MIRROR) return false;
+
+    TransmuteEffect resolved = tti->resolved_effects[idx];
+    if (resolved == TEFFECT_NONE || resolved == TEFFECT_FOG_HIDDEN) return false;
+
+    int source_id = phase2_find_transmute_by_effect(resolved);
+    if (source_id < 0) return false;
+    const TransmutationDef *source = phase2_get_transmutation(source_id);
+    if (!source) return false;
+
+    *out_suit = source->result_suit;
+    *out_rank = source->result_rank;
+    return true;
+}
+
 int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti,
                                const Phase2State *p2)
 {
     if (!trick_is_complete(trick)) return -1;
+
+    /* Mirror card identity resolution: create local copy with morphed cards.
+     * For any Mirror that morphed (resolved effect is not NONE/FOG), replace
+     * its suit/rank with the source transmutation's result_suit/result_rank.
+     * If Mirror is the lead card, also update lead_suit. */
+    Trick resolved_trick = *trick;
+    if (tti) {
+        for (int i = 0; i < CARDS_PER_TRICK; i++) {
+            Suit s;
+            Rank r;
+            if (resolve_mirror_card_identity(tti, i, &s, &r)) {
+                resolved_trick.cards[i].suit = s;
+                resolved_trick.cards[i].rank = r;
+                if (i == 0) resolved_trick.lead_suit = s;
+            }
+        }
+    }
 
     /* Check for ALWAYS_WIN / ALWAYS_LOSE / Roulette / Binding / Crown / Joker */
     bool has_special = false;
@@ -249,7 +298,7 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     /* Binding: check if any player in the trick has auto-win active */
     if (!has_special && p2) {
         for (int i = 0; i < CARDS_PER_TRICK; i++) {
-            int pid = trick->player_ids[i];
+            int pid = resolved_trick.player_ids[i];
             if (pid >= 0 && pid < NUM_PLAYERS && p2->binding_auto_win[pid]) {
                 has_special = true;
                 break;
@@ -258,25 +307,25 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     }
 
     if (!has_special) {
-        return trick_get_winner(trick);
+        return trick_get_winner(&resolved_trick);
     }
 
     /* If only Binding triggered has_special (no tti), resolve Binding then fallback */
     if (!tti) {
         if (p2) {
             for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                int pid = trick->player_ids[i];
+                int pid = resolved_trick.player_ids[i];
                 if (pid >= 0 && pid < NUM_PLAYERS && p2->binding_auto_win[pid])
                     return pid;
             }
         }
-        return trick_get_winner(trick);
+        return trick_get_winner(&resolved_trick);
     }
 
     /* Leading Joker: absolute priority — beats everything including ALWAYS_WIN.
      * Only the lead card (index 0) can trigger this. */
     if (tti->resolved_effects[0] == TEFFECT_JOKER_LEAD_WIN) {
-        return trick->player_ids[0];
+        return resolved_trick.player_ids[0];
     }
 
     /* Find the ALWAYS_WIN card (last one wins if multiple) — highest priority */
@@ -292,14 +341,14 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
     }
 
     if (always_win_idx >= 0) {
-        return trick->player_ids[always_win_idx];
+        return resolved_trick.player_ids[always_win_idx];
     }
 
     /* Binding: auto-win (weaker than jokers, stronger than Roulette).
      * Non-leading Joker overrides Binding — that player still loses. */
     if (p2) {
         for (int i = 0; i < CARDS_PER_TRICK; i++) {
-            int pid = trick->player_ids[i];
+            int pid = resolved_trick.player_ids[i];
             if (pid >= 0 && pid < NUM_PLAYERS && p2->binding_auto_win[pid]) {
                 /* Skip if this player's card is a non-leading Joker */
                 if (i > 0 && tti->resolved_effects[i] == TEFFECT_JOKER_LEAD_WIN)
@@ -327,7 +376,7 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
             }
             if (num_candidates > 0) {
                 int pick = (rand() % num_candidates);
-                return trick->player_ids[candidates[pick]];
+                return resolved_trick.player_ids[candidates[pick]];
             }
             break; /* All excluded — fall through to normal */
         }
@@ -348,12 +397,12 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
                 /* Non-leading Joker: excluded (always loses) */
                 if (j > 0 && tti->resolved_effects[j] == TEFFECT_JOKER_LEAD_WIN)
                     continue;
-                if (best_idx < 0 || trick->cards[j].rank > best_rank) {
+                if (best_idx < 0 || resolved_trick.cards[j].rank > best_rank) {
                     best_idx = j;
-                    best_rank = trick->cards[j].rank;
+                    best_rank = resolved_trick.cards[j].rank;
                 }
             }
-            if (best_idx >= 0) return trick->player_ids[best_idx];
+            if (best_idx >= 0) return resolved_trick.player_ids[best_idx];
             break;
         }
     }
@@ -373,25 +422,26 @@ int transmute_trick_get_winner(const Trick *trick, const TrickTransmuteInfo *tti
         if (i > 0 && tti->resolved_effects[i] == TEFFECT_JOKER_LEAD_WIN)
             continue;
 
-        if (trick->cards[i].suit == trick->lead_suit) {
-            if (best_idx < 0 || trick->cards[i].rank > best_rank) {
+        if (resolved_trick.cards[i].suit == resolved_trick.lead_suit) {
+            if (best_idx < 0 || resolved_trick.cards[i].rank > best_rank) {
                 best_idx = i;
-                best_rank = trick->cards[i].rank;
+                best_rank = resolved_trick.cards[i].rank;
             }
         }
     }
 
     if (best_idx >= 0) {
-        return trick->player_ids[best_idx];
+        return resolved_trick.player_ids[best_idx];
     }
 
     /* All lead-suit cards are ALWAYS_LOSE or non-leading Jokers.
      * Cannot happen for Joker alone: index 0 (leading) is always caught
      * at the leading-Joker check above. Fallback to standard resolution. */
-    return trick_get_winner(trick);
+    return trick_get_winner(&resolved_trick);
 }
 
-int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti)
+int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *tti,
+                                 const Phase2State *p2)
 {
     if (!tti) return trick_count_points(trick);
 
@@ -413,6 +463,9 @@ int transmute_trick_count_points(const Trick *trick, const TrickTransmuteInfo *t
                 phase2_get_transmutation(tti->transmutation_ids[i]);
             if (td && td->custom_points >= 0) {
                 card_pts = td->custom_points;
+            } else if (td && td->effect == TEFFECT_MIRROR && p2) {
+                /* Mirror inherits point value from the source card */
+                card_pts = card_points(p2->last_played_transmuted_card);
             } else {
                 card_pts = card_points(trick->cards[i]);
             }
@@ -668,6 +721,13 @@ void transmute_round_state_init(TransmuteRoundState *trs)
     memset(trs, 0, sizeof(*trs));
     trs->rogue_pending_winner = -1;
     trs->duel_pending_winner = -1;
+    trs->rogue_chosen_suit = -1;
+    trs->rogue_chosen_target = -1;
+    trs->rogue_revealed_count = -1;
+    trs->duel_chosen_card_idx = -1;
+    trs->duel_chosen_target = -1;
+    trs->duel_revealed_card = (Card){-1, -1};
+    trs->duel_was_swap = -1;
 }
 
 void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,
@@ -692,7 +752,7 @@ void transmute_on_trick_complete(Phase2State *p2, const Trick *trick,
         TransmuteEffect eff = tti->resolved_effects[i];
 
         if (eff == TEFFECT_WOTT_DUPLICATE_ROUND_POINTS) {
-            p2->round.transmute_round.martyr_flags[winner] = true;
+            p2->round.transmute_round.martyr_flags[winner] += 1;
             fprintf(stderr, "TRANSMUTE: Martyr effect flagged for player %d\n",
                      winner);
         } else if (eff == TEFFECT_WOTT_REDUCE_SCORE_3) {
@@ -748,21 +808,9 @@ void transmute_apply_round_end(Phase2State *p2,
 {
     if (!p2) return;
 
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (p2->round.transmute_round.martyr_flags[i]) {
-            int dup = round_points[i];
-            round_points[i] += dup;
-            total_scores[i] += dup;
-            fprintf(stderr,
-                     "TRANSMUTE: Martyr doubles player %d round_points (%d -> %d), \n"
-                     "new total = %d",
-                     i, dup, round_points[i], total_scores[i]);
-        }
-    }
-
     /* Gatherer/Pendulum: reduce scores (floor at 0 for reductions).
      * Negative values (from Inversion flipping) add points instead.
-     * Applied after Martyr so the adjustment offsets final values. */
+     * Applied BEFORE Martyr so the multiplier applies to the adjusted value. */
     for (int i = 0; i < NUM_PLAYERS; i++) {
         int red = p2->round.transmute_round.gatherer_reduction[i];
         if (red > 0) {
@@ -782,6 +830,23 @@ void transmute_apply_round_end(Phase2State *p2,
                      "TRANSMUTE: Inverted Gatherer adds %d to player %d, \n"
                      "round = %d, total = %d",
                      -red, i, round_points[i], total_scores[i]);
+        }
+    }
+
+    /* Martyr: multiply round points by 2^count (1 martyr = x2, 2 = x4, 3 = x8).
+     * Applied AFTER Gatherer so the multiplier applies to the adjusted value. */
+    for (int i = 0; i < NUM_PLAYERS; i++) {
+        int count = p2->round.transmute_round.martyr_flags[i];
+        if (count > 0) {
+            int multiplier = 1 << count; /* 2^count */
+            int original = round_points[i];
+            int added = original * (multiplier - 1);
+            round_points[i] += added;
+            total_scores[i] += added;
+            fprintf(stderr,
+                     "TRANSMUTE: Martyr x%d player %d round_points (%d -> %d), \n"
+                     "new total = %d",
+                     multiplier, i, original, round_points[i], total_scores[i]);
         }
     }
 }
@@ -840,6 +905,10 @@ void transmute_ai_apply(Hand *hand, HandTransmuteState *hts,
             Rank best_rank = 0;
             bool found = false;
             for (int i = 0; i < hand->count; i++) {
+                /* Skip restricted cards */
+                Card c = hand->cards[i];
+                if (c.suit == SUIT_CLUBS && c.rank == RANK_2) continue;
+                if (c.suit == SUIT_SPADES && c.rank == RANK_Q && !ai_is_fog) continue;
                 if (ai_is_fog) {
                     /* Fog: skip already-fogged, allow transmuted */
                     if (hts->slots[i].fogged) continue;
@@ -857,6 +926,10 @@ void transmute_ai_apply(Hand *hand, HandTransmuteState *hts,
             Rank worst_rank = RANK_A;
             bool found = false;
             for (int i = 0; i < hand->count; i++) {
+                /* Skip restricted cards */
+                Card c = hand->cards[i];
+                if (c.suit == SUIT_CLUBS && c.rank == RANK_2) continue;
+                if (c.suit == SUIT_SPADES && c.rank == RANK_Q && !ai_is_fog) continue;
                 if (ai_is_fog) {
                     if (hts->slots[i].fogged) continue;
                 } else {

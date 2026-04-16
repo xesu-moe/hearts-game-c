@@ -21,7 +21,7 @@ Card card_from_index(int index)
 
 bool card_is_none(Card card)
 {
-    return card.suit < 0 || card.rank < 0;
+    return (int)card.suit < 0 || (int)card.rank < 0;
 }
 
 bool card_equals(Card a, Card b)

@@ -7,7 +7,7 @@
  *                 game/pass_phase.h, game/play_phase.h, game/turn_flow.h,
  *                 phase2/phase2_state.h
  * @deps-used-by: main.c
- * @deps-last-changed: 2026-03-23 — Step 10: Added bool online parameter
+ * @deps-last-changed: 2026-04-01
  * ============================================================ */
 
 #include <stdbool.h>
@@ -27,8 +27,7 @@ void phase_transition_update(GameState *gs, RenderState *rs,
                              Phase2State *p2, PassPhaseState *pps,
                              PlayPhaseState *pls, TurnFlow *flow,
                              GamePhase *prev_phase,
-                             bool *prev_hearts_broken,
-                             bool online);
+                             bool *prev_hearts_broken);
 
 /* Hearts-broken particle burst. Call AFTER render_update().
  * Updates prev_hearts_broken. */

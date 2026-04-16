@@ -9,16 +9,12 @@
 
 #include "net/socket.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
+
+/* Platform headers (socket, poll, etc.) come via net/platform.h in socket.h */
 
 /* ================================================================
  * Ring Buffer (static internal)
@@ -111,10 +107,7 @@ static void ringbuf_consume(NetRingBuf *rb, size_t len)
 
 static int set_nonblocking(int fd)
 {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0)
-        return -1;
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    return net_set_nonblocking(fd);
 }
 
 static void format_addr(struct sockaddr_in *addr, char *out, size_t out_len)
@@ -138,7 +131,7 @@ static void conn_reset(NetConn *c)
 static void conn_close_fd(NetConn *c, NetDisconnectCause cause)
 {
     if (c->fd >= 0) {
-        close(c->fd);
+        net_close_fd(c->fd);
         c->fd = -1;
     }
     c->state = NET_CONN_DISCONNECTED;
@@ -225,7 +218,7 @@ int net_socket_listen(NetSocket *ns, uint16_t port)
         return -1;
 
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    net_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -234,17 +227,17 @@ int net_socket_listen(NetSocket *ns, uint16_t port)
     addr.sin_port = htons(port);
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd);
+        net_close_fd(fd);
         return -1;
     }
 
     if (listen(fd, 16) < 0) {
-        close(fd);
+        net_close_fd(fd);
         return -1;
     }
 
     if (set_nonblocking(fd) < 0) {
-        close(fd);
+        net_close_fd(fd);
         return -1;
     }
 
@@ -265,12 +258,12 @@ int net_socket_accept(NetSocket *ns)
 
     int slot = find_free_slot(ns);
     if (slot < 0) {
-        close(fd);
+        net_close_fd(fd);
         return -1;
     }
 
     if (set_nonblocking(fd) < 0) {
-        close(fd);
+        net_close_fd(fd);
         return -1;
     }
 
@@ -281,6 +274,33 @@ int net_socket_accept(NetSocket *ns)
     format_addr(&peer_addr, c->remote_addr, sizeof(c->remote_addr));
 
     return slot;
+}
+
+/* ================================================================
+ * DNS Resolution
+ * ================================================================ */
+
+int net_resolve_hostname(char *host_buf, size_t buf_len)
+{
+    /* Already a numeric IPv4? Skip DNS. */
+    struct in_addr tmp;
+    if (inet_pton(AF_INET, host_buf, &tmp) == 1)
+        return 0;
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host_buf, NULL, &hints, &res) != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return -1;
+    }
+    struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
+    inet_ntop(AF_INET, &addr->sin_addr, host_buf, (socklen_t)buf_len);
+    freeaddrinfo(res);
+    return 0;
 }
 
 /* ================================================================
@@ -306,7 +326,7 @@ int net_socket_connect(NetSocket *ns, const char *ip, uint16_t port)
         return -1;
 
     if (set_nonblocking(fd) < 0) {
-        close(fd);
+        net_close_fd(fd);
         return -1;
     }
 
@@ -319,10 +339,10 @@ int net_socket_connect(NetSocket *ns, const char *ip, uint16_t port)
     if (ret == 0) {
         /* Connected immediately (rare for TCP) */
         c->state = NET_CONN_CONNECTED;
-    } else if (errno == EINPROGRESS) {
+    } else if (net_socket_errno() == EINPROGRESS) {
         c->state = NET_CONN_CONNECTING;
     } else {
-        close(fd);
+        net_close_fd(fd);
         conn_reset(c);
         return -1;
     }
@@ -338,7 +358,7 @@ static void handle_connect_complete(NetConn *c)
 {
     int err = 0;
     socklen_t errlen = sizeof(err);
-    if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0 ||
+    if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, (char *)&err, &errlen) < 0 ||
         err != 0) {
         conn_close_fd(c, NET_CAUSE_ERROR);
         return;
@@ -374,7 +394,8 @@ static void handle_recv(NetConn *c)
         /* Peer closed */
         conn_close_fd(c, NET_CAUSE_CLOSED_REMOTE);
     } else {
-        if (errno != EAGAIN && errno != EWOULDBLOCK)
+        int err = net_socket_errno();
+        if (err != EAGAIN && err != EWOULDBLOCK)
             conn_close_fd(c, NET_CAUSE_ERROR);
     }
 }
@@ -405,7 +426,8 @@ static void handle_send(NetConn *c)
                 c->send_buf.head += (size_t)n2;
         }
     } else if (n < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK)
+        int err = net_socket_errno();
+        if (err != EAGAIN && err != EWOULDBLOCK)
             conn_close_fd(c, NET_CAUSE_ERROR);
     }
 }
@@ -452,13 +474,9 @@ void net_socket_update(NetSocket *ns)
     }
 
     int nfds = ns->max_conns + 1;
-    int ret = poll(ns->pollfds, (nfds_t)nfds, 0);
+    int ret = net_poll(ns->pollfds, nfds, 0);
     if (ret <= 0)
         return;
-
-    /* Accept new connections */
-    if (ns->pollfds[0].revents & POLLIN)
-        net_socket_accept(ns);
 
     /* Process each connection */
     for (int i = 0; i < ns->max_conns; i++) {
@@ -592,7 +610,7 @@ int net_socket_count(const NetSocket *ns)
 
 int net_socket_send_msg(NetSocket *ns, int conn_id, const NetMsg *msg)
 {
-    uint8_t buf[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
+    static uint8_t buf[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
     int len = net_msg_write_framed(msg, buf, sizeof(buf));
     if (len < 0)
         return -1;
@@ -610,7 +628,7 @@ bool net_socket_recv_msg(NetSocket *ns, int conn_id, NetMsg *msg)
         return false;
 
     /* Linearize recv buffer for frame parsing */
-    uint8_t linear[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
+    static uint8_t linear[NET_FRAME_HEADER_SIZE + NET_MAX_MSG_SIZE];
     size_t to_peek = avail < sizeof(linear) ? avail : sizeof(linear);
     ringbuf_peek(&c->recv_buf, linear, to_peek);
 

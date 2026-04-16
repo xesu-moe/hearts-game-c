@@ -1,0 +1,261 @@
+{
+  "version": 1,
+  "last_updated": "2026-04-06T00:00:00Z",
+  "files": {
+    "src/game/online_ui.h": {
+      "exports": [
+        "enum OnlineSubphase",
+        "struct OnlineUIState (timer_option, point_goal, gamemode fields added)",
+        "extern const int TIMER_BONUS_VALUES[]",
+        "extern const char *TIMER_LABELS[]",
+        "extern const int TIMER_OPTION_COUNT",
+        "extern const int POINT_GOAL_VALUES[]",
+        "extern const char *POINT_GOAL_LABELS[]",
+        "extern const int POINT_GOAL_COUNT",
+        "extern const char *GAMEMODE_LABELS[]",
+        "extern const int GAMEMODE_COUNT",
+        "online_ui_init()",
+        "online_ui_update_text_input()"
+      ],
+      "requires": [
+        "src/net/protocol.h (NET_ROOM_CODE_LEN, NET_ADDR_LEN, NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)"
+      ],
+      "used_by": [
+        "src/game/online_ui.c",
+        "src/main.c",
+        "src/game/update.c",
+        "src/render/render.c"
+      ],
+      "last_changed": "2026-04-06 — Added timer_option, point_goal, gamemode fields to OnlineUIState; added extern declarations for 8 game option table symbols"
+    },
+    "src/net/protocol.h": {
+      "exports": [
+        "enum NetMsgType (NET_MSG_SERVER_ELO_RESULT = 66)",
+        "struct NetMsgStartGame (ai_difficulty, timer_option, point_goal_idx, gamemode)",
+        "struct NetPlayerView (turn_time_limit field added)"
+      ],
+      "requires": [
+        "src/core/card.h (Card, Suit, Rank, NUM_PLAYERS)",
+        "src/core/input_cmd.h (InputCmd, InputCmdType)"
+      ],
+      "used_by": [
+        "src/net/protocol.c",
+        "src/net/socket.c",
+        "src/net/client_net.c",
+        "src/server/server_net.c",
+        "src/server/room.c",
+        "src/game/online_ui.h",
+        "src/lobby/lobby_client.h",
+        "src/lobby/lobby_net.c"
+      ],
+      "last_changed": "2026-04-06 — Added timer_option, point_goal_idx, gamemode to NetMsgStartGame; added turn_time_limit to NetPlayerView"
+    },
+    "src/net/client_net.h": {
+      "exports": [
+        "enum ClientNetState",
+        "client_net_send_start_game(int ai_difficulty, int timer_option, int point_goal_idx, int gamemode)"
+      ],
+      "requires": [
+        "src/net/protocol.h (NetPlayerView, NetMsgGameOver, NetRejectReason, PROTOCOL_VERSION, NET_ROOM_CODE_LEN, NET_AUTH_TOKEN_LEN)",
+        "src/net/reconnect.h (ReconnectState)",
+        "src/core/input_cmd.h (InputCmd)"
+      ],
+      "used_by": [
+        "src/net/client_net.c",
+        "src/main.c",
+        "src/net/state_recv.c"
+      ],
+      "last_changed": "2026-04-06 — Changed client_net_send_start_game signature from (int ai_difficulty) to (int, int, int, int) to pass game options"
+    },
+    "src/server/room.h": {
+      "exports": [
+        "enum SlotStatus",
+        "enum RoomStatus",
+        "struct Room (timer_option, point_goal_idx, gamemode, elo_received, elo_prev[4], elo_new[4] fields added)"
+      ],
+      "requires": [
+        "src/server/server_game.h (ServerGame, server_game_init, server_game_start, server_game_tick, server_game_is_over)",
+        "src/net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)"
+      ],
+      "used_by": [
+        "src/server/room.c",
+        "src/server/server_net.c",
+        "src/server/lobby_link.c"
+      ],
+      "last_changed": "2026-04-06 — Added timer_option, point_goal_idx, gamemode fields; added elo_received, elo_prev[4], elo_new[4]"
+    },
+    "src/server/server_game.h": {
+      "exports": [
+        "enum ServerPassSubstate",
+        "enum ServerPlaySubstate",
+        "struct ServerGame (timer_option, point_goal_idx, gamemode fields added)"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/core/input_cmd.h (InputCmd)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/phase2/transmutation.h (TrickTransmuteInfo)",
+        "src/server/ai_competitive.h (CompetitiveAIState)"
+      ],
+      "used_by": [
+        "src/server/server_game.c",
+        "src/server/server_main.c",
+        "src/server/server_net.c",
+        "src/server/room.h"
+      ],
+      "last_changed": "2026-04-06 — Added timer_option, point_goal_idx, gamemode fields to ServerGame"
+    },
+    "src/core/game_state.h": {
+      "exports": [
+        "enum GamePhase",
+        "enum PassDirection",
+        "enum PassSubphase",
+        "struct GameState (score_limit field added)"
+      ],
+      "requires": [
+        "src/core/player.h (Player)",
+        "src/core/deck.h (Deck)",
+        "src/core/trick.h (Trick)"
+      ],
+      "used_by": [
+        "src/core/game_state.c",
+        "src/render/render.h",
+        "src/render/render.c",
+        "src/server/server_game.c",
+        "src/game/update.c",
+        "src/game/turn_flow.h",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 — Added score_limit field for configurable game-over score"
+    },
+    "src/game/turn_flow.h": {
+      "exports": [
+        "enum FlowStep",
+        "struct TurnFlow (turn_time_limit field added)"
+      ],
+      "requires": [
+        "src/core/game_state.h (GameState)",
+        "src/core/settings.h (GameSettings)",
+        "src/phase2/phase2_state.h (Phase2State)",
+        "src/game/play_phase.h (PlayPhaseState)"
+      ],
+      "used_by": [
+        "src/game/turn_flow.c",
+        "src/game/process_input.c",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 — Added turn_time_limit field for configurable turn timer"
+    },
+    "src/render/render.h": {
+      "exports": [
+        "struct RenderState (elo_has_data, elo_prev[4], elo_new[4], btn_opt_timer_prev, btn_opt_timer_next, btn_opt_points_prev, btn_opt_points_next, btn_opt_mode_prev, btn_opt_mode_next fields added)"
+      ],
+      "requires": [
+        "raylib.h",
+        "src/render/anim.h (CardVisual)",
+        "src/render/layout.h (LayoutConfig)",
+        "src/core/game_state.h (GameState)",
+        "src/core/card.h (Card)"
+      ],
+      "used_by": [
+        "src/render/render.c",
+        "src/game/process_input.c",
+        "src/game/update.c",
+        "src/game/info_sync.c",
+        "src/game/play_phase.c",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "last_changed": "2026-04-06 — Added elo_has_data, elo_prev[4], elo_new[4] fields for ELO display; added 6 game option UI button fields"
+    }
+  },
+  "change_log": [
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/game/online_ui.h",
+      "change": "Added timer_option (int), point_goal (int), gamemode (int) fields to OnlineUIState struct; added 8 extern declarations for game option tables",
+      "impact": [
+        "src/main.c (accesses oui.timer_option, oui.point_goal, oui.gamemode)",
+        "src/game/online_ui.c (initializes fields, defines tables)",
+        "src/render/render.c (displays game options via GAMEMODE_LABELS, TIMER_LABELS, POINT_GOAL_LABELS)",
+        "src/game/update.c (reads/updates option state)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/net/protocol.h",
+      "change": "Added timer_option (uint8_t), point_goal_idx (uint8_t), gamemode (uint8_t) to NetMsgStartGame; added turn_time_limit (float) to NetPlayerView",
+      "impact": [
+        "src/net/client_net.c (sends NetMsgStartGame with new fields)",
+        "src/server/server_net.c (receives and extracts NetMsgStartGame; builds NetPlayerView with turn_time_limit)",
+        "src/net/protocol.c (serialization/deserialization code for new fields)",
+        "src/main.c (receives turn_time_limit in state updates)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/net/client_net.h",
+      "change": "Changed client_net_send_start_game() signature from client_net_send_start_game(int ai_difficulty) to client_net_send_start_game(int ai_difficulty, int timer_option, int point_goal_idx, int gamemode)",
+      "impact": [
+        "src/main.c (line 781: call site must pass 4 arguments instead of 1)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/server/room.h",
+      "change": "Added timer_option, point_goal_idx, gamemode fields to Room struct; added elo_received, elo_prev[4], elo_new[4] for ELO results",
+      "impact": [
+        "src/server/room.c (initializes and manages new fields)",
+        "src/server/server_net.c (reads room options when broadcasting start game; applies ELO results)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/server/server_game.h",
+      "change": "Added timer_option, point_goal_idx, gamemode fields to ServerGame struct",
+      "impact": [
+        "src/server/server_game.c (initializes fields at game start, sets score_limit from point_goal_idx)",
+        "src/server/server_net.c (reads gamemode for player view building)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/core/game_state.h",
+      "change": "Added score_limit (int) field to GameState struct for configurable game-over score",
+      "impact": [
+        "src/server/server_game.c (sets gs->score_limit = point_goals[pi])",
+        "src/core/game_state.c (uses score_limit in game_state_is_game_over)",
+        "src/main.c (implicitly: uses gs->score_limit through game logic)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/game/turn_flow.h",
+      "change": "Added turn_time_limit (float) field to TurnFlow struct for configurable turn timer",
+      "impact": [
+        "src/game/turn_flow.c (initializes to FLOW_TURN_TIME_LIMIT, resets after each play)",
+        "src/main.c (lines 998-999: sets flow.turn_time_limit from view.turn_time_limit)",
+        "src/game/process_input.c (uses turn_time_limit for UI)",
+        "src/game/phase_transitions.c (uses turn_time_limit)"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-06T00:00:00Z",
+      "file": "src/render/render.h",
+      "change": "Added elo_has_data (bool), elo_prev[4] (int32_t), elo_new[4] (int32_t) for ELO result display; added 6 UIButton fields (btn_opt_timer_prev/next, btn_opt_points_prev/next, btn_opt_mode_prev/next)",
+      "impact": [
+        "src/render/render.c (initializes ELO fields, allocates UI buttons, draws game option selectors)",
+        "src/main.c (sets elo_has_data, elo_prev, elo_new from game_over message)"
+      ],
+      "status": "propagated"
+    }
+  ]
+}

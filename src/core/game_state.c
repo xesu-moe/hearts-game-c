@@ -9,7 +9,6 @@
 #include <string.h>
 
 #define TRICKS_PER_ROUND 13
-#define ALL_POINTS       26
 
 void game_state_init(GameState *gs)
 {
@@ -17,8 +16,9 @@ void game_state_init(GameState *gs)
     for (int i = 0; i < NUM_PLAYERS; i++) {
         player_init(&gs->players[i], i, i == 0);
     }
-    gs->phase = PHASE_MENU;
+    gs->phase = PHASE_LOGIN;
     gs->round_number = 0;
+    gs->moon_shooter = -1;
 }
 
 bool game_state_start_game(GameState *gs)
@@ -40,6 +40,7 @@ bool game_state_start_game(GameState *gs)
 void game_state_reset_to_menu(GameState *gs)
 {
     game_state_init(gs);
+    gs->phase = PHASE_MENU;
 }
 
 int game_state_find_two_of_clubs(const GameState *gs)
@@ -75,6 +76,8 @@ void game_state_new_round(GameState *gs)
     gs->pass_card_count = DEFAULT_PASS_CARD_COUNT;
     gs->hearts_broken = false;
     gs->tricks_played = 0;
+    gs->moon_shot = false;
+    gs->moon_shooter = -1;
 
     /* Always clear trick to prevent stale cards from previous round */
     trick_init(&gs->current_trick, -1);
@@ -92,6 +95,7 @@ void game_state_new_round(GameState *gs)
     for (int i = 0; i < NUM_PLAYERS; i++) {
         for (int j = 0; j < MAX_PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
+            gs->pass_selection_hints[i][j] = -1;
         }
         gs->pass_ready[i] = false;
     }
@@ -119,10 +123,13 @@ bool game_state_select_pass(GameState *gs, int player_id,
         }
     }
 
-    /* Check no duplicates */
+    /* Check no duplicates (use pass_selection_hints to distinguish
+     * same suit+rank cards with different transmutation states) */
     for (int i = 0; i < card_count; i++) {
         for (int j = i + 1; j < card_count; j++) {
-            if (card_equals(cards[i], cards[j])) {
+            if (card_equals(cards[i], cards[j]) &&
+                gs->pass_selection_hints[player_id][i] ==
+                gs->pass_selection_hints[player_id][j]) {
                 return false;
             }
         }
@@ -183,6 +190,7 @@ bool game_state_execute_pass(GameState *gs)
         gs->pass_ready[i] = false;
         for (int j = 0; j < MAX_PASS_CARD_COUNT; j++) {
             gs->pass_selections[i][j] = CARD_NONE;
+            gs->pass_selection_hints[i][j] = -1;
         }
     }
 
@@ -243,19 +251,26 @@ bool game_state_complete_trick_with(GameState *gs, int winner, int points)
 
     if (gs->tricks_played >= TRICKS_PER_ROUND) {
         /* Shoot-the-moon check.
-         * NOTE: Inversion (Phase 2) negates point cards per-trick, making
-         * it effectively impossible to reach exactly 26. This is by design —
-         * Inversion blocks moon-shooting as a natural consequence. */
+         * If exactly one player has all the points (> 0) and everyone else
+         * has 0, that player hit the moon. Their points become 0 and every
+         * other player receives that same amount — regardless of total. */
+        int scorer = -1;
+        int scorers_count = 0;
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            if (gs->players[i].round_points == ALL_POINTS) {
-                gs->players[i].round_points = 0;
-                for (int j = 0; j < NUM_PLAYERS; j++) {
-                    if (j != i) {
-                        gs->players[j].round_points = ALL_POINTS;
-                    }
-                }
-                break;
+            if (gs->players[i].round_points > 0) {
+                scorer = i;
+                scorers_count++;
             }
+        }
+        if (scorers_count == 1) {
+            int moon_points = gs->players[scorer].round_points;
+            gs->players[scorer].round_points = 0;
+            for (int j = 0; j < NUM_PLAYERS; j++) {
+                if (j != scorer)
+                    gs->players[j].round_points = moon_points;
+            }
+            gs->moon_shot = true;
+            gs->moon_shooter = scorer;
         }
 
         for (int i = 0; i < NUM_PLAYERS; i++) {
@@ -292,8 +307,9 @@ bool game_state_is_valid_play(const GameState *gs, int player_id, Card card)
 
 bool game_state_is_game_over(const GameState *gs)
 {
+    int limit = gs->score_limit > 0 ? gs->score_limit : GAME_OVER_SCORE;
     for (int i = 0; i < NUM_PLAYERS; i++) {
-        if (gs->players[i].total_score >= GAME_OVER_SCORE) {
+        if (gs->players[i].total_score >= limit) {
             return true;
         }
     }

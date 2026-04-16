@@ -1,1 +1,31 @@
 *.o
+*.d
+hollow-hearts
+*.exe
+build/
+vendor/raylib/
+linux-hearts-*
+*_plan.md
+dist.sh
+run.sh
+update.sh 
+*.yaml
+
+# Binaries
+hh-server
+hh-lobby
+
+# Cache / IDE
+.cache/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Settings (user-local)
+settings.json
+
+# Compile commands (generated)
+compile_commands.json
+run.sh

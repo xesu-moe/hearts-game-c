@@ -3,18 +3,10 @@
 
 /* ============================================================
  * @deps-exports: enum GamePhase, enum PassDirection, enum PassSubphase,
- *                struct GameState, game_state_init(), game_state_start_game(),
- *                game_state_reset_to_menu(), game_state_new_round(),
- *                game_state_current_player(), game_state_play_card(),
- *                game_state_complete_trick(), game_state_complete_trick_with(),
- *                game_state_is_valid_play(), game_state_is_game_over(),
- *                game_state_advance_scoring(), game_state_get_winners()
+ *                struct GameState (pass_selection_hints field added)
  * @deps-requires: player.h (Player), deck.h (Deck), trick.h (Trick)
- * @deps-used-by: game_state.c, render.h, render.c, ai.h, play_phase.h,
- *                pass_phase.h, pass_phase.c, turn_flow.h, turn_flow.c,
- *                process_input.h, process_input.c, update.h, update.c,
- *                info_sync.h, info_sync.c, phase_transitions.h, main.c
- * @deps-last-changed: 2026-03-22 — Added PASS_SUB_REVEAL to PassSubphase, skip_human_pass_sort to GameState
+ * @deps-used-by: render.h, render.c, server_game.c, core/game_state.c
+ * @deps-last-changed: 2026-04-05 — Added pass_selection_hints[NUM_PLAYERS][MAX_PASS_CARD_COUNT]
  * ============================================================ */
 
 #include <stdbool.h>
@@ -31,6 +23,9 @@ typedef enum GamePhase {
     PHASE_SCORING,
     PHASE_GAME_OVER,
     PHASE_SETTINGS,
+    PHASE_LOGIN,       /* Client-only: lobby auth screen (never sent over wire) */
+    PHASE_ONLINE_MENU, /* Client-only: online submenu (create/join/queue) */
+    PHASE_STATS,       /* Client-only: stats display screen */
     PHASE_COUNT
 } GamePhase;
 
@@ -80,10 +75,18 @@ typedef struct GameState {
     Trick         current_trick;
     int           tricks_played;  /* 0..12 within a round */
 
+    /* Moon tracking (set at end of round by complete_trick_with) */
+    bool          moon_shot;      /* true if a player hit the moon this round */
+    int           moon_shooter;   /* player index who hit the moon (-1 if none) */
+
     /* Passing state */
     Card          pass_selections[NUM_PLAYERS][MAX_PASS_CARD_COUNT];
+    int           pass_selection_hints[NUM_PLAYERS][MAX_PASS_CARD_COUNT]; /* transmutation_id hint per selection, -1 = normal */
     bool          pass_ready[NUM_PLAYERS];
     bool          skip_human_pass_sort; /* when true, don't sort human hand after pass */
+
+    /* Runtime game options (0 = use compiled defaults) */
+    int           score_limit;    /* game over when any player >= this; 0 = GAME_OVER_SCORE */
 } GameState;
 
 /* Initialize game: set up 4 players (player 0 = human), phase = PHASE_MENU */

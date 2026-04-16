@@ -1,14 +1,18 @@
 /* ============================================================
- * @deps-exports: Room, PlayerSlot, ConnSlotInfo, SlotStatus, RoomStatus,
+ * @deps-exports: Room (elo_received, elo_prev[4], elo_new[4]), PlayerSlot,
+ *                ConnSlotInfo, SlotStatus, RoomStatus,
  *                room_manager_init(), room_create(), room_destroy(),
  *                room_join(), room_leave(), room_find_by_code(),
  *                room_find_by_conn(), room_get(), room_active_count(),
- *                room_tick(), room_tick_all(),
- *                ROOM_CODE_LEN, MAX_ROOMS
+ *                room_tick(), room_tick_all(), room_cleanup_finished(),
+ *                room_update_timers(), room_reconnect(), ROOM_CODE_LEN, MAX_ROOMS,
+ *                DISCONNECT_GRACE_SEC
  * @deps-requires: server/server_game.h (ServerGame, server_game_init,
  *                 server_game_start, server_game_tick, server_game_is_over),
- *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS)
- * @deps-last-changed: 2026-03-23 — Initial creation (Step 5: Server Room Management)
+ *                 net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN),
+ *                 core/game_mode.h (GameMode)
+ * @deps-used-by: room.c, lobby_link.c, server_net.c
+ * @deps-last-changed: 2026-04-15 — vanilla_plan.md Step 2: include core/game_mode.h for GameMode
  * ============================================================ */
 
 #ifndef ROOM_H
@@ -19,13 +23,15 @@
 
 #include "server_game.h"
 #include "net/protocol.h"
+#include "core/game_mode.h"
 
 /* ================================================================
  * Constants
  * ================================================================ */
 
-#define ROOM_CODE_LEN 5   /* 4 chars + NUL */
-#define MAX_ROOMS     100
+#define ROOM_CODE_LEN          5     /* 4 chars + NUL */
+#define MAX_ROOMS              100
+#define DISCONNECT_GRACE_SEC   30.0f /* seconds before AI takeover */
 
 /* ================================================================
  * Enums
@@ -60,7 +66,10 @@ typedef struct PlayerSlot {
     SlotStatus status;
     int        conn_id;   /* index into NetSocket.conns[], -1 if not connected */
     int        player_id; /* seat 0-3, same as array index */
-    uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* stub — no-op validation */
+    uint8_t    auth_token[NET_AUTH_TOKEN_LEN]; /* random reconnect token */
+    uint8_t    lobby_token[NET_AUTH_TOKEN_LEN]; /* session token from lobby */
+    float      disconnect_timer; /* seconds since disconnect, -1 if N/A */
+    char       name[NET_MAX_NAME_LEN]; /* display name from handshake */
 } PlayerSlot;
 
 typedef struct Room {
@@ -69,6 +78,21 @@ typedef struct Room {
     PlayerSlot  slots[NET_MAX_PLAYERS];
     ServerGame  game;
     int         connected_count; /* number of SLOT_CONNECTED players */
+    uint8_t     ai_difficulty;   /* 0=casual, 1=competitive */
+    uint8_t     timer_option;   /* index into TIMER_BONUS_VALUES */
+    uint8_t     point_goal_idx; /* index into POINT_GOAL_VALUES */
+    uint8_t     gamemode;       /* 0=Transmutations, 1=Vanilla, 2=Dragon Hearts */
+    /* Broadcast change detection — skip sending when nothing changed */
+    struct {
+        int phase, num_played, tricks_played, round_number;
+        int hand_counts[NET_MAX_PLAYERS];
+    } last_broadcast;
+    bool force_broadcast;
+    /* ELO data from lobby (populated asynchronously after game over) */
+    bool    elo_received;
+    float   elo_wait_timer;             /* seconds waiting for lobby ELO response */
+    int32_t elo_prev[NET_MAX_PLAYERS];  /* -1 = AI/unranked */
+    int32_t elo_new[NET_MAX_PLAYERS];   /* -1 = AI/unranked */
 } Room;
 
 /* ================================================================
@@ -82,6 +106,10 @@ void room_manager_init(void);
  * Returns room index (0..MAX_ROOMS-1) on success, -1 if full. */
 int room_create(void);
 
+/* Create a new room with a lobby-assigned code.
+ * Returns room index (0..MAX_ROOMS-1) on success, -1 if full. */
+int room_create_with_code(const char *code);
+
 /* Destroy a room, setting it to INACTIVE.
  * Does NOT close network connections or free ConnSlotInfo. */
 void room_destroy(int room_index);
@@ -91,10 +119,25 @@ void room_destroy(int room_index);
  * ================================================================ */
 
 /* Join a player to a room. Finds first EMPTY slot, sets CONNECTED.
- * If all 4 slots fill, auto-starts the game (WAITING → PLAYING).
  * Returns assigned seat (0-3) on success, -1 if full or not WAITING. */
 int room_join(int room_index, int conn_id,
-              const uint8_t auth_token[NET_AUTH_TOKEN_LEN]);
+              const uint8_t auth_token[NET_AUTH_TOKEN_LEN],
+              const char *name);
+
+/* Add an AI player to the next empty slot in a WAITING room.
+ * Sets status to SLOT_AI, assigns name "Bot N".
+ * Returns assigned seat (0-3) on success, -1 if no empty slot or not WAITING. */
+int room_add_ai(int room_index);
+
+/* Remove the last AI player from a WAITING room.
+ * Finds the highest-seat AI slot and sets it to EMPTY.
+ * Returns removed seat (0-3) on success, -1 if no AI or not WAITING. */
+int room_remove_ai(int room_index);
+
+/* Start the game in a WAITING room. All 4 slots must be filled.
+ * Transitions room to PLAYING. Only the room creator should call this.
+ * Returns 0 on success, -1 on error. */
+int room_start(int room_index);
 
 /* Remove a player from a room.
  * WAITING: sets slot EMPTY; destroys room if all left.
@@ -127,7 +170,26 @@ int room_active_count(void);
  * If game ends, transitions to FINISHED. */
 void room_tick(int room_index);
 
-/* Tick all PLAYING rooms, then destroy all FINISHED rooms. */
+/* Tick all PLAYING rooms. FINISHED rooms are left intact for
+ * one broadcast cycle so clients receive the game-over state. */
 void room_tick_all(void);
+
+/* Destroy all FINISHED rooms. Call after broadcasting final state. */
+void room_cleanup_finished(void);
+
+/* ================================================================
+ * Disconnect & Reconnect (Step 11)
+ * ================================================================ */
+
+/* Tick disconnect timers for all slots in a room.
+ * Converts DISCONNECTED → SLOT_AI after grace period.
+ * Returns true if room should be destroyed (0 humans, all grace periods expired). */
+bool room_update_timers(int room_index, float dt);
+
+/* Attempt to reconnect a player by matching session token.
+ * Scans DISCONNECTED and AI slots. On match, restores SLOT_CONNECTED
+ * and sets is_human=true. Returns seat (0-3) or -1. */
+int room_reconnect(int room_index, int conn_id,
+                   const uint8_t token[NET_AUTH_TOKEN_LEN]);
 
 #endif /* ROOM_H */
