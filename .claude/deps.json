@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-04-06T00:00:00Z",
+  "last_updated": "2026-04-16T18:11:11Z",
   "files": {
     "src/render/card_dimens.h": {
       "exports": [
@@ -47,6 +47,33 @@
       "requires": [
         "src/core/input_cmd.h"
       ]
+    },
+    "src/core/game_mode.h": {
+      "exports": [
+        "enum GameMode (GAMEMODE_TRANSMUTATIONS, GAMEMODE_VANILLA, GAMEMODE_DRAGON_HEARTS, GAMEMODE_COUNT)",
+        "extern const char *GAMEMODE_LABELS[]",
+        "gamemode_uses_phase2() [static inline]"
+      ],
+      "requires": [
+        "stdbool.h",
+        "stdint.h"
+      ],
+      "used_by": [
+        "src/core/game_mode.c",
+        "src/net/protocol.h",
+        "src/server/server_game.h",
+        "src/server/room.h",
+        "src/server/server_net.c",
+        "src/game/online_ui.h"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: added direct consumers in server_game.h, room.h, server_net.c, online_ui.h"
+    },
+    "src/core/game_mode.c": {
+      "implements": "src/core/game_mode.h",
+      "requires": [
+        "src/core/game_mode.h"
+      ],
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 1: introduced GAMEMODE_LABELS array with transmutations/vanilla/dragon_hearts labels"
     },
     "src/net/protocol.h": {
       "exports": [
@@ -129,6 +156,8 @@
       ],
       "requires": [
         "src/core/card.h (Card, Suit, Rank, NUM_PLAYERS, SUIT_COUNT, CARDS_PER_TRICK)",
+        "src/core/game_mode.h (GameMode, GAMEMODE_COUNT, GAMEMODE_LABELS, gamemode_uses_phase2)",
+        "src/core/input_cmd.h (InputCmd, InputCmdType)",
         "stdint.h",
         "stddef.h",
         "stdbool.h"
@@ -143,7 +172,7 @@
         "src/lobby/lobby_net.c",
         "src/main.c"
       ],
-      "last_changed": "2026-04-06 \u2014 Added NET_MSG_SERVER_ELO_RESULT enum value, NetMsgServerEloResult struct, and ELO result fields to NetMsgGameOver; added timer_option, point_goal_idx, gamemode to NetMsgStartGame; added turn_time_limit to NetPlayerView"
+      "last_changed": "2026-04-15 \u2014 Rewired GAME_OPT_MODE_MAX to reference GAMEMODE_COUNT from core/game_mode.h"
     },
     "src/net/protocol.c": {
       "implements": "src/net/protocol.h",
@@ -277,6 +306,7 @@
       ],
       "requires": [
         "src/core/game_state.h (GameState)",
+        "src/core/game_mode.h (GameMode, gamemode_uses_phase2)",
         "src/core/input_cmd.h (InputCmd)",
         "src/phase2/phase2_state.h (Phase2State)",
         "src/server/ai_competitive.h (CompetitiveAIState)",
@@ -289,7 +319,7 @@
         "src/server/room.h",
         "src/server/server_net.c"
       ],
-      "last_changed": "2026-04-13 \u2014 Added turn_timer and turn_timer_seq fields for server-authoritative turn timing"
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: include core/game_mode.h for GameMode/gamemode_uses_phase2"
     },
     "src/server/server_game.c": {
       "implements": "src/server/server_game.h",
@@ -308,7 +338,7 @@
         "stdlib.h",
         "string.h"
       ],
-      "last_changed": "2026-04-05 \u2014 Changed static sv_ai_select_pass signature from (GameState*, int) to (ServerGame*, int); uses pass_selection_hints field from GameState"
+      "last_changed": "2026-04-16 \u2014 Added static sv_timer_bonus(const ServerGame*) function; modified sv_full_turn_time() to call it"
     },
     "src/server/server_net.h": {
       "exports": [
@@ -335,12 +365,13 @@
         "src/net/socket.h (NetSocket, net_socket_init, net_socket_shutdown, net_socket_listen, net_socket_update, net_socket_accept, net_socket_state, NET_CONN_DISCONNECTED)",
         "src/net/protocol.h (NetMsg, NetMsgType, NetPlayerView, net_build_player_view, net_input_cmd_to_local)",
         "src/core/game_state.h (PassSubphase, game_state_current_player)",
+        "src/core/game_mode.h (GAME_OPT_MODE_MAX via GAMEMODE_COUNT)",
         "src/core/input_cmd.h (InputCmd)",
         "stdio.h",
         "stdlib.h",
         "string.h"
       ],
-      "last_changed": "2026-03-27 \u2014 Removed SV_PASS_TRANSMUTE_WAIT mapping"
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: include core/game_mode.h for GAME_OPT_MODE_MAX clamping"
     },
     "src/server/server_main.c": {
       "implements": "game server entry point",
@@ -421,14 +452,15 @@
       ],
       "requires": [
         "src/server/server_game.h (ServerGame, server_game_init, server_game_start, server_game_tick, server_game_is_over)",
-        "src/net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_ROOM_CODE_LEN, NET_MAX_NAME_LEN)"
+        "src/net/protocol.h (NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_ROOM_CODE_LEN, NET_MAX_NAME_LEN)",
+        "src/core/game_mode.h (GameMode)"
       ],
       "used_by": [
         "src/server/room.c",
         "src/server/lobby_link.c",
         "src/server/server_net.c"
       ],
-      "last_changed": "2026-04-06 \u2014 Added timer_option, point_goal_idx, gamemode fields; also added elo_received, elo_prev[4], elo_new[4] for ELO results"
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: include core/game_mode.h for GameMode"
     },
     "src/server/room.c": {
       "implements": "src/server/room.h",
@@ -754,14 +786,13 @@
         "extern const int POINT_GOAL_VALUES[]",
         "extern const char *POINT_GOAL_LABELS[]",
         "extern const int POINT_GOAL_COUNT",
-        "extern const char *GAMEMODE_LABELS[]",
-        "extern const int GAMEMODE_COUNT",
         "MATCH_FOUND_DURATION",
         "online_ui_init()",
         "online_ui_update_text_input()"
       ],
       "requires": [
         "src/net/protocol.h (NET_ROOM_CODE_LEN, NET_ADDR_LEN, NET_AUTH_TOKEN_LEN, NET_MAX_PLAYERS, NET_MAX_NAME_LEN)",
+        "src/core/game_mode.h (GameMode, GAMEMODE_COUNT, GAMEMODE_LABELS)",
         "stdbool.h",
         "stdint.h"
       ],
@@ -771,7 +802,7 @@
         "src/game/update.c",
         "src/render/render.c"
       ],
-      "last_changed": "2026-04-06 \u2014 Added timer_option, point_goal, gamemode fields to OnlineUIState; added 8 extern declarations for game option tables"
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Step 2: direct include of core/game_mode.h"
     },
     "src/game/online_ui.c": {
       "implements": "src/game/online_ui.h",
@@ -831,7 +862,7 @@
       "exports": [
         "struct DragState (hand_slot_origin, hand_slot_current, is_play_drag, rearrange_map[], rearrange_count, is_transmute_drag, transmute_slot_origin, transmute_slot_current)",
         "struct TrickRecord (cards[], player_ids[], winner, num_played)",
-        "struct RenderState (score_subphase, score_wipe_progress, score_contracts_rt, score_contracts_rt_loaded, score_advance_pending, scoring_screen_done[bool], score_auto_timer[float], pile_cards[], pile_card_count, pass_staged[], pass_staged_count, contract_reveal_count, contract_reveal_timer, draft_btn_labels[][], draft_btn_subtitles[][], draft_round_display, draft_picks_made, draft_waiting[bool], draft_wait_border_t[float], contract_result_text[], contract_result_name[], contract_result_desc[], contract_result_success[], contract_result_count, MAX_CONTRACT_RESULTS, info_contract_name[][], info_contract_desc[][], info_contract_count, settings_tab, settings_tab_btns[], pause_state, pause_btns[], pause_confirm_yes, pause_confirm_no, settings_return_phase, settings_return_paused, opponent_hover_active, online_btns[], btn_online_join_submit, btn_online_cancel, btn_online_try_again, btn_opt_timer_prev, btn_opt_timer_next, btn_opt_points_prev, btn_opt_points_next, btn_opt_mode_prev, btn_opt_mode_next, online_ui, stat_elo[int32_t], stat_games_played[uint32_t], stat_games_won[uint32_t], transmute_btn_ids[], transmute_btn_count, pending_transmutation_id, transmute_card_rects[], transmute_card_y, transmute_info_text[][], transmute_info_count, hand_transmute_ids[], trick_transmute_ids[], mirror_source_tid, deal_complete[bool], online_deal_anim[bool], suit_hover_active[bool], suit_indicator_rects[SUIT_COUNT], suit_hover_idx[int], suit_border_t[float], rogue_target_player[int], staged_rogue_cv_count[int], staged_rogue_cv_indices[MAX_HAND_SIZE], chat_trick_num[], chat_hover_trick_num, chat_hover_trick_rect, trick_history[], trick_history_count, trick_tooltip, elo_has_data[bool], elo_prev[4], elo_new[4], btn_account_export, btn_account_import, btn_account_confirm_yes, btn_account_confirm_no, account_confirm_active, account_status_text[], account_status_timer, btn_login_import)",
+        "struct RenderState (score_subphase, score_wipe_progress, score_contracts_rt, score_contracts_rt_loaded, score_advance_pending, scoring_screen_done[bool], score_auto_timer[float], pile_cards[], pile_card_count, pass_staged[], pass_staged_count, contract_reveal_count, contract_reveal_timer, draft_btn_labels[][], draft_btn_subtitles[][], draft_round_display, draft_picks_made, draft_waiting[bool], draft_wait_border_t[float], contract_result_text[], contract_result_name[], contract_result_desc[], contract_result_success[], contract_result_count, MAX_CONTRACT_RESULTS, info_contract_name[][], info_contract_desc[][], info_contract_count, settings_tab, settings_tab_btns[], pause_state, pause_btns[], pause_confirm_yes, pause_confirm_no, settings_return_phase, settings_return_paused, opponent_hover_active, online_btns[], btn_online_join_submit, btn_online_cancel, btn_online_try_again, btn_opt_timer_prev, btn_opt_timer_next, btn_opt_points_prev, btn_opt_points_next, btn_opt_mode_prev, btn_opt_mode_next, online_ui, phase2_enabled[bool], stat_elo[int32_t], stat_games_played[uint32_t], stat_games_won[uint32_t], transmute_btn_ids[], transmute_btn_count, pending_transmutation_id, transmute_card_rects[], transmute_card_y, transmute_info_text[][], transmute_info_count, hand_transmute_ids[], trick_transmute_ids[], mirror_source_tid, deal_complete[bool], online_deal_anim[bool], suit_hover_active[bool], suit_indicator_rects[SUIT_COUNT], suit_hover_idx[int], suit_border_t[float], rogue_target_player[int], staged_rogue_cv_count[int], staged_rogue_cv_indices[MAX_HAND_SIZE], chat_trick_num[], chat_hover_trick_num, chat_hover_trick_rect, trick_history[], trick_history_count, trick_tooltip, elo_has_data[bool], elo_prev[4], elo_new[4], btn_account_export, btn_account_import, btn_account_confirm_yes, btn_account_confirm_no, account_confirm_active, account_status_text[], account_status_timer, btn_login_import)",
         "struct PassStagedCard",
         "enum ScoringSubphase (SCORE_SUB_CARDS_FLY, SCORE_SUB_DISPLAY, SCORE_SUB_COUNT_UP, SCORE_SUB_DONE, SCORE_SUB_CONTRACTS)",
         "enum PauseState (PAUSE_INACTIVE, PAUSE_MENU, PAUSE_CONFIRM_MENU, PAUSE_CONFIRM_QUIT)",
@@ -880,7 +911,7 @@
         "CHAT_MSG_LEN",
         "const TodoPanelState *todo_panel (field in RenderState)"
       ],
-      "last_changed": "2026-04-06 \u2014 Added SETTINGS_TAB_ACCOUNT to SettingsTab enum, bumped SETTINGS_TAB_COUNT; added btn_account_export, btn_account_import, btn_account_confirm_yes, btn_account_confirm_no (UIButton), account_confirm_active (bool), account_status_text (char[128]), account_status_timer (float), btn_login_import (UIButton) to RenderState",
+      "last_changed": "2026-04-15 \u2014 vanilla_plan.md Steps 1-9: Added phase2_enabled (bool) field to RenderState for gating phase2 UI widgets in vanilla mode",
       "requires": [
         "raylib.h (Rectangle, Vector2, Color, RenderTexture2D, Shader)",
         "src/render/particle.h",
@@ -1103,7 +1134,7 @@
     },
     "src/game/pass_phase.h": {
       "exports": [
-        "struct PassPhaseState (with fields: online_pass_anim, online_received_cards[], online_received_count, draft_pick_pending, draft_click_consumed, online_toss_started[NUM_PLAYERS], online_toss_count, online_async_toss)",
+        "struct PassPhaseState (with fields: subphase, timer, dealer_ui_active, ai_dealer_pending, dealer_announced, dealer_announce_timer, dealer_dir, dealer_amt, pass_anim, received_cards[], received_count, draft_pick_pending, draft_pick_round, draft_click_consumed, prev_draft_round, timer_bonus, pass_auto_sent, toss_started[], toss_count, async_toss)",
         "PASS_DEALER_TIME",
         "PASS_CONTRACT_TIME",
         "PASS_CARD_PASS_TIME",
@@ -1127,7 +1158,7 @@
         "setup_draft_ui()",
         "pass_sync_online_ui()",
         "draft_finish_round()",
-        "pass_subphase_time_limit()",
+        "pass_subphase_time_limit(PassSubphase sub, float bonus)",
         "pass_start_single_toss_online()",
         "pass_assign_received_cards_online()"
       ],
@@ -1146,7 +1177,7 @@
         "src/game/phase_transitions.c",
         "src/main.c"
       ],
-      "last_changed": "2026-03-31 \u2014 Added online_toss_started[], online_toss_count, online_async_toss fields to PassPhaseState and pass_start_single_toss_online(), pass_assign_received_cards_online() function declarations"
+      "last_changed": "2026-04-16 \u2014 Added timer_bonus field to PassPhaseState; changed pass_subphase_time_limit(PassSubphase) to pass_subphase_time_limit(PassSubphase, float bonus)"
     },
     "src/game/pass_phase.c": {
       "implements": "src/game/pass_phase.h",
@@ -2480,6 +2511,44 @@
   },
   "change_log": [
     {
+      "date": "2026-04-16T18:11:11Z",
+      "files_affected": [
+        "src/game/pass_phase.h",
+        "src/game/pass_phase.c",
+        "src/server/server_game.c"
+      ],
+      "change": "Function signature: pass_subphase_time_limit() now requires float bonus parameter; struct PassPhaseState has new timer_bonus field; server_game.c adds sv_timer_bonus() static function",
+      "impact": [
+        "src/game/pass_phase.c",
+        "src/game/update.c",
+        "src/game/process_input.c",
+        "src/game/phase_transitions.c",
+        "src/main.c"
+      ],
+      "status": "propagated"
+    },
+    {
+      "date": "2026-04-15T18:49:46Z",
+      "file": "src/core/game_mode.h, src/core/game_mode.c, src/net/protocol.h, src/render/render.h, src/server/room.h, src/server/server_game.h, src/server/server_net.c, src/game/online_ui.h",
+      "change": "vanilla_plan.md Steps 1-9: Introduced GameMode enum (GAMEMODE_TRANSMUTATIONS=0, GAMEMODE_VANILLA=1, GAMEMODE_DRAGON_HEARTS=2) in new src/core/game_mode.h with GAMEMODE_LABELS array and gamemode_uses_phase2() helper. Added gamemode field (uint8_t) to NetMsgStartGame, Room, and ServerGame structs. Added phase2_enabled (bool) field to RenderState for gating phase2 UI. Rewired GAME_OPT_MODE_MAX macro to use GAMEMODE_COUNT. All phase2 mechanics now guarded by gamemode_uses_phase2() checks.",
+      "impact": [
+        "src/core/game_mode.c (new file implementing GAMEMODE_LABELS)",
+        "src/net/protocol.h (now includes core/game_mode.h, GAME_OPT_MODE_MAX references GAMEMODE_COUNT)",
+        "src/net/protocol.c (serializes/deserializes gamemode byte in NetMsgStartGame)",
+        "src/net/state_recv.c (deserializes phase2_enabled flag from state updates)",
+        "src/server/room.h (Room struct +uint8_t gamemode field)",
+        "src/server/server_game.h (ServerGame struct +uint8_t gamemode, depends on core/game_mode.h)",
+        "src/server/server_game.c (server_game_start copies room->gamemode, uses gamemode_uses_phase2() to enable/disable phase2, contract draft only on phase2 modes)",
+        "src/server/server_net.c (sv_handle_request_start_game clamps gamemode, uses GAME_OPT_MODE_MAX)",
+        "src/render/render.h (RenderState +bool phase2_enabled for conditional phase2 widget rendering)",
+        "src/render/render.c (gamemode picker wraps [0, GAMEMODE_DRAGON_HEARTS), phase2 widgets gated by rs->phase2_enabled)",
+        "src/game/online_ui.h (now directly includes core/game_mode.h, removed local GAMEMODE_LABELS/COUNT declarations)",
+        "src/game/info_sync.c (mirrors p2->enabled to rs->phase2_enabled, clears phase2 fields when disabled)",
+        "src/game/process_input.c (gamemode cycler wraps [0, GAMEMODE_DRAGON_HEARTS))"
+      ],
+      "status": "propagated"
+    },
+    {
       "date": "2026-04-05T00:00:00Z",
       "file": "src/render/render.h",
       "change": "Added struct TrickRecord with fields (cards, player_ids, winner, num_played); Added macro MAX_TRICKS_PER_ROUND=13; Added fields to RenderState (chat_trick_num, chat_hover_trick_num, chat_hover_trick_rect, trick_history, trick_history_count, trick_tooltip); Added function render_chat_log_push_trick()",
@@ -2703,31 +2772,6 @@
         "src/game/update.c (line 212: sets field)"
       ],
       "status": "propagated"
-    },
-    {
-      "date": "2026-03-29",
-      "change": "Transmute card drag refactor: DragState struct +is_transmute_drag, +transmute_slot_origin, +transmute_slot_current fields; RenderState struct -transmute_btns[MAX_TRANSMUTE_BTNS] (UIButton array), -transmute_btn_labels[MAX_TRANSMUTE_BTNS][32], +transmute_card_rects[MAX_TRANSMUTE_BTNS] (Rectangle array), +transmute_card_y (float); added render_start_transmute_drag() and render_commit_transmute_reorder() public functions.",
-      "files": [
-        "src/render/render.h"
-      ],
-      "status": "propagated"
-    },
-    {
-      "date": "2026-03-27",
-      "change": "Step 23: Room create/cancel/re-create bug fix. Added NET_MSG_SERVER_ROOM_DESTROYED protocol message, lobby_client_cancel_create/join(), lobby_link_notify_room_destroyed(), stale assignment guard, socket slot force-close.",
-      "files": [
-        "src/net/protocol.h",
-        "src/net/protocol.c",
-        "src/net/lobby_client.h",
-        "src/net/lobby_client.c",
-        "src/server/lobby_link.h",
-        "src/server/lobby_link.c",
-        "src/server/room.c",
-        "src/lobby/lobby_net.c",
-        "src/main.c",
-        "src/net/client_net.c"
-      ],
-      "status": "additive"
     }
   ]
 }

@@ -6,7 +6,10 @@ build/
 vendor/raylib/
 linux-hearts-*
 *_plan.md
-*.sh
+dist.sh
+run.sh
+update.sh 
+*.yaml
 
 # Binaries
 hh-server
