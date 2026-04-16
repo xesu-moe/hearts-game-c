@@ -20,11 +20,13 @@
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
-const char *p2_player_name(int player_id)
+const char *p2_player_name(int player_id, const RenderState *rs)
 {
     static const char *names[] = {"You", "West", "North", "East"};
-    if (player_id >= 0 && player_id < NUM_PLAYERS) return names[player_id];
-    return "???";
+    if (player_id < 0 || player_id >= NUM_PLAYERS) return "???";
+    if (rs && rs->player_names[player_id][0] != '\0')
+        return rs->player_names[player_id];
+    return names[player_id];
 }
 
 bool play_card_with_transmute(GameState *gs, RenderState *rs,
@@ -190,7 +192,7 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
             if (tdef) {
                 char tmsg[CHAT_MSG_LEN];
                 snprintf(tmsg, sizeof(tmsg), "%s plays %s!",
-                         p2_player_name(player_id), tdef->name);
+                         p2_player_name(player_id, rs), tdef->name);
                 render_chat_log_push_rich(rs, tmsg, PURPLE,
                                           tdef->name, tid);
             }

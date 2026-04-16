@@ -5086,7 +5086,7 @@ static void draw_phase_scoring(const GameState *gs, const RenderState *rs)
             (rs->score_subphase == SCORE_SUB_CONTRACTS &&
              rs->contract_reveal_count >= rs->contract_result_count);
         if (awaiting) {
-            int secs = (int)ceilf(10.0f - rs->score_auto_timer);
+            int secs = (int)ceilf(rs->score_auto_limit - rs->score_auto_timer);
             if (secs < 0) secs = 0;
             char timer_text[16];
             snprintf(timer_text, sizeof(timer_text), "%d", secs);
@@ -5538,7 +5538,6 @@ static void draw_transmute_tooltip(const RenderState *rs)
 
 static void draw_trick_tooltip(const RenderState *rs)
 {
-    if (!rs->phase2_enabled) return;
     if (rs->trick_tooltip.trick_num <= 0 ||
         rs->trick_tooltip.anim_t <= 0.0f)
         return;

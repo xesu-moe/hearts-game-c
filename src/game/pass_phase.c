@@ -22,12 +22,12 @@
 #include "phase2/transmutation_logic.h"
 #include "phase2/phase2_defs.h"
 
-float pass_subphase_time_limit(PassSubphase sub)
+float pass_subphase_time_limit(PassSubphase sub, float bonus)
 {
     switch (sub) {
-    case PASS_SUB_DEALER:    return PASS_DEALER_TIME;
-    case PASS_SUB_CONTRACT:  return PASS_CONTRACT_TIME;
-    case PASS_SUB_CARD_PASS: return PASS_CARD_PASS_TIME;
+    case PASS_SUB_DEALER:    return PASS_DEALER_TIME + bonus;
+    case PASS_SUB_CONTRACT:  return PASS_CONTRACT_TIME + bonus;
+    case PASS_SUB_CARD_PASS: return PASS_CARD_PASS_TIME + bonus;
     case PASS_SUB_TOSS_ANIM: return 0.0f;  /* driven by animation completion */
     case PASS_SUB_TOSS_WAIT: return ANIM_PASS_WAIT_DURATION * anim_get_speed();
     case PASS_SUB_REVEAL:    return PASS_REVEAL_DURATION * anim_get_speed();
@@ -180,7 +180,7 @@ void advance_pass_subphase(PassPhaseState *pps, GameState *gs,
     pps->draft_pick_pending = false;
     pps->draft_click_consumed = false;
     rs->pass_subphase = next;
-    rs->pass_subphase_remaining = pass_subphase_time_limit(next);
+    rs->pass_subphase_remaining = pass_subphase_time_limit(next, pps->timer_bonus);
     rs->pass_status_text = NULL;
 
     switch (next) {
@@ -822,7 +822,7 @@ static void pass_start_reveal(PassPhaseState *pps, GameState *gs,
     pps->subphase = PASS_SUB_REVEAL;
     pps->timer = 0.0f;
     rs->pass_subphase = PASS_SUB_REVEAL;
-    rs->pass_subphase_remaining = pass_subphase_time_limit(PASS_SUB_REVEAL);
+    rs->pass_subphase_remaining = pass_subphase_time_limit(PASS_SUB_REVEAL, pps->timer_bonus);
     rs->pass_status_text = NULL;
 }
 
@@ -864,7 +864,7 @@ void draft_finish_round(PassPhaseState *pps, GameState *gs,
 
         setup_draft_ui(rs, p2);
         pps->timer = 0.0f;
-        rs->pass_subphase_remaining = PASS_CONTRACT_TIME;
+        rs->pass_subphase_remaining = PASS_CONTRACT_TIME + pps->timer_bonus;
     }
 }
 
@@ -876,7 +876,7 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
     /* During PHASE_SETTINGS: only tick the timer so it stays accurate,
      * but don't process subphase transitions or AI logic. */
     if (gs->phase == PHASE_SETTINGS) {
-        float limit = pass_subphase_time_limit(pps->subphase);
+        float limit = pass_subphase_time_limit(pps->subphase, pps->timer_bonus);
         pps->timer += dt;
         float remaining = limit - pps->timer;
         if (remaining < 0.0f) remaining = 0.0f;
@@ -884,7 +884,7 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
         return;
     }
 
-    float limit = pass_subphase_time_limit(pps->subphase);
+    float limit = pass_subphase_time_limit(pps->subphase, pps->timer_bonus);
     pps->timer += dt;
     float remaining = limit - pps->timer;
     if (remaining < 0.0f) remaining = 0.0f;
@@ -897,14 +897,14 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
         if (cur_round != pps->prev_draft_round) {
             pps->prev_draft_round = cur_round;
             pps->timer = 0.0f;
-            rs->pass_subphase_remaining = PASS_CONTRACT_TIME;
+            rs->pass_subphase_remaining = PASS_CONTRACT_TIME + pps->timer_bonus;
             pps->draft_pick_pending = false;
         }
     }
 
     /* Timeout: auto-pick draft contract */
     if (pps->subphase == PASS_SUB_CONTRACT &&
-        pps->timer >= PASS_CONTRACT_TIME && !pps->draft_pick_pending) {
+        pps->timer >= PASS_CONTRACT_TIME + pps->timer_bonus && !pps->draft_pick_pending) {
         DraftState *draft = &p2->round.draft;
         if (draft->active && !draft->players[0].has_picked_this_round) {
             input_cmd_push((InputCmd){
@@ -918,7 +918,7 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
 
     /* Timeout: auto-select pass cards and confirm (one-shot) */
     if (pps->subphase == PASS_SUB_CARD_PASS &&
-        pps->timer >= PASS_CARD_PASS_TIME &&
+        pps->timer >= PASS_CARD_PASS_TIME + pps->timer_bonus &&
         !gs->pass_ready[0] && !pps->pass_auto_sent) {
         int count = gs->pass_card_count;
         if (count > MAX_PASS_CARD_COUNT) count = MAX_PASS_CARD_COUNT;
@@ -975,13 +975,13 @@ void pass_subphase_update(PassPhaseState *pps, GameState *gs,
         break;
     case PASS_SUB_TOSS_WAIT:
         rs->pass_wait_timer += dt;
-        if (rs->pass_wait_timer >= pass_subphase_time_limit(PASS_SUB_TOSS_WAIT)) {
+        if (rs->pass_wait_timer >= pass_subphase_time_limit(PASS_SUB_TOSS_WAIT, pps->timer_bonus)) {
             pass_start_reveal(pps, gs, rs);
         }
         break;
     case PASS_SUB_REVEAL:
         if (pass_reveal_animations_done(rs)) {
-            if (pps->timer >= pass_subphase_time_limit(PASS_SUB_REVEAL)) {
+            if (pps->timer >= pass_subphase_time_limit(PASS_SUB_REVEAL, pps->timer_bonus)) {
                 pass_start_receive_anim(pps, gs, rs, settings);
             }
         }

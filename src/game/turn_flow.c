@@ -37,10 +37,13 @@ static void trick_to_pile_transition(TurnFlow *flow, GameState *gs,
                                         ? &flow->saved_tti : &pps->current_tti;
 
     int winner;
-    if (flow->has_saved_trick && pps->server_trick_winner >= 0) {
-        /* Online mode: use server-authoritative winner (Roulette determinism) */
+    if (!p2->enabled) {
+        /* Vanilla Hearts: deterministic winner, compute locally */
+        winner = trick_get_winner(trick);
+    } else if (flow->has_saved_trick && pps->server_trick_winner >= 0) {
+        /* Phase2 online: use server-authoritative winner (Roulette) */
         winner = pps->server_trick_winner;
-    } else if (p2->enabled && trick_is_complete(trick)) {
+    } else if (trick_is_complete(trick)) {
         winner = transmute_trick_get_winner(trick, tti, p2);
     } else {
         winner = trick_get_winner(trick);
@@ -276,7 +279,7 @@ static bool try_start_rogue(TurnFlow *flow, GameState *gs, RenderState *rs,
     if (rw == 0) {
         /* Human winner: wait for click with hover */
         flow->step = FLOW_ROGUE_CHOOSING;
-        flow->timer = FLOW_ROGUE_CHOOSE_TIME;
+        flow->timer = FLOW_ROGUE_CHOOSE_TIME + (flow->turn_time_limit - FLOW_TURN_TIME_LIMIT);
         rs->opponent_hover_active = true;
         rs->opponent_hover_player = -1;
         rs->opponent_border_t = 0.0f;
@@ -323,7 +326,7 @@ static bool try_start_duel(TurnFlow *flow, GameState *gs, RenderState *rs,
     if (dw == 0) {
         /* Human winner: wait for click with hover */
         flow->step = FLOW_DUEL_PICK_OPPONENT;
-        flow->timer = FLOW_DUEL_CHOOSE_TIME;
+        flow->timer = FLOW_DUEL_CHOOSE_TIME + (flow->turn_time_limit - FLOW_TURN_TIME_LIMIT);
         rs->opponent_hover_active = true;
         rs->opponent_hover_player = -1;
         rs->opponent_border_t = 0.0f;
@@ -628,7 +631,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 /* No cards of that suit */
                 char msg[CHAT_MSG_LEN];
                 snprintf(msg, sizeof(msg), "%s hasn't got any %s cards",
-                         p2_player_name(rp),
+                         p2_player_name(rp, rs),
                          (const char *[]){"Clubs","Diamonds","Spades","Hearts"}
                             [p2->round.transmute_round.rogue_chosen_suit]);
                 render_chat_log_push(rs, msg);
@@ -639,7 +642,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             } else {
                 char msg[CHAT_MSG_LEN];
                 snprintf(msg, sizeof(msg), "Rogue: Revealing %d of %s's cards!",
-                         rcount, p2_player_name(rp));
+                         rcount, p2_player_name(rp, rs));
                 rogue_launch_flights(flow, rs, p2, rp, rcount, msg, anim_m);
             }
         }
@@ -825,7 +828,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
                 }
                 char msg[CHAT_MSG_LEN];
                 snprintf(msg, sizeof(msg), "Duel: %s swaps a card with %s!",
-                         p2_player_name(dw), p2_player_name(dp));
+                         p2_player_name(dw, rs), p2_player_name(dp, rs));
                 render_chat_log_push(rs, msg);
                 flow->step = FLOW_DUEL_ANIM_EXCHANGE;
                 flow->timer = ANIM_DUEL_EXCHANGE_DURATION * anim_m;
@@ -836,7 +839,7 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             } else {
                 /* Human winner: pick own card */
                 flow->step = FLOW_DUEL_PICK_OWN;
-                flow->timer = FLOW_DUEL_CHOOSE_TIME;
+                flow->timer = FLOW_DUEL_CHOOSE_TIME + (flow->turn_time_limit - FLOW_TURN_TIME_LIMIT);
                 rs->duel_border_active = true;
                 rs->duel_border_progress = 0.0f;
             }
@@ -937,10 +940,11 @@ void flow_update(TurnFlow *flow, GameState *gs, RenderState *rs,
             }
             break;
         }
-        /* Drive border progress: 0→1 over FLOW_DUEL_CHOOSE_TIME */
+        /* Drive border progress: 0→1 over duel choose time (base + bonus) */
         if (rs->duel_border_active) {
+            float duel_total = FLOW_DUEL_CHOOSE_TIME + (flow->turn_time_limit - FLOW_TURN_TIME_LIMIT);
             rs->duel_border_progress =
-                1.0f - (flow->timer / FLOW_DUEL_CHOOSE_TIME);
+                1.0f - (flow->timer / duel_total);
             if (rs->duel_border_progress > 1.0f)
                 rs->duel_border_progress = 1.0f;
             if (rs->duel_border_progress < 0.0f)

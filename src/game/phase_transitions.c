@@ -44,6 +44,7 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         rs->scoring_screen_done = false;
         rs->scoring_ready_sent = false;
         rs->score_auto_timer = 0.0f;
+        rs->score_auto_limit = 10.0f; /* overridden by update.c with bonus */
 
         /* Snapshot scores: displayed_total shows pre-round total */
         for (int i = 0; i < NUM_PLAYERS; i++) {
@@ -194,7 +195,7 @@ void phase_transition_update(GameState *gs, RenderState *rs,
         render_clear_piles(rs);
         rs->trick_history_count = 0;
         rs->sync_needed = true;
-        for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
+            for (int ti = 0; ti < CARDS_PER_TRICK; ti++) {
             pls->current_tti.transmutation_ids[ti] = -1;
             pls->current_tti.transmuter_player[ti] = -1;
             pls->current_tti.resolved_effects[ti] = TEFFECT_NONE;

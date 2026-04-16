@@ -34,6 +34,6 @@ bool play_card_with_transmute(GameState *gs, RenderState *rs,
                               int player_id, Card card, int hint_idx);
 
 /* Get display name for a player ID. */
-const char *p2_player_name(int player_id);
+const char *p2_player_name(int player_id, const RenderState *rs);
 
 #endif /* PLAY_PHASE_H */

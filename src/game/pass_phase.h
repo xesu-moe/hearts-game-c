@@ -2,12 +2,12 @@
 #define PASS_PHASE_H
 
 /* ============================================================
- * @deps-exports: PassPhaseState (includes prev_draft_round field),
- *                PASS_*_TIME, advance_pass_subphase, pass_subphase_update
+ * @deps-exports: PassPhaseState (timer_bonus field), PASS_*_TIME,
+ *                pass_subphase_time_limit(PassSubphase, float bonus)
  * @deps-requires: core/game_state.h (GameState, PassSubphase),
  *                 core/settings.h (GameSettings), phase2/phase2_state.h
  * @deps-used-by: pass_phase.c, process_input.c, update.c, main.c
- * @deps-last-changed: 2026-03-31 — Added prev_draft_round (int) field to PassPhaseState
+ * @deps-last-changed: 2026-04-16 — Added timer_bonus field to PassPhaseState; changed function signature
  * ============================================================ */
 
 #include <stdbool.h>
@@ -21,7 +21,7 @@ typedef struct GameSettings GameSettings;
 
 #define PASS_DEALER_TIME         30.0f
 #define PASS_CONTRACT_TIME       15.0f  /* must match DRAFT_TIMER_SECONDS */
-#define PASS_CARD_PASS_TIME      20.0f
+#define PASS_CARD_PASS_TIME      30.0f
 #define PASS_REVEAL_DURATION     2.0f   /* show received cards face-up in staging */
 #define PASS_AI_DEALER_DISPLAY   1.2f   /* brief delay for AI dealer choice */
 #define PASS_DEALER_ANNOUNCE     1.0f   /* show dealer choice message before contracts */
@@ -48,6 +48,7 @@ typedef struct PassPhaseState {
     int          draft_pick_round;   /* round number when pending pick was sent */
     bool         draft_click_consumed; /* true after contract pick until mouse released */
     int          prev_draft_round;    /* track draft round changes to reset timer */
+    float        timer_bonus;         /* extra seconds from room timer option */
     bool         pass_auto_sent;      /* online: pass timeout commands already pushed */
     /* Async toss tracking */
     bool         toss_started[NUM_PLAYERS]; /* per-seat: toss anim fired */
@@ -119,6 +120,6 @@ void pass_sync_ui(PassPhaseState *pps, GameState *gs,
 void draft_finish_round(PassPhaseState *pps, GameState *gs,
                         RenderState *rs, Phase2State *p2);
 
-float pass_subphase_time_limit(PassSubphase sub);
+float pass_subphase_time_limit(PassSubphase sub, float bonus);
 
 #endif /* PASS_PHASE_H */

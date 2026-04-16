@@ -27,11 +27,11 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                  SettingsUIState *sui, GameSettings *settings,
                  TurnFlow *flow, float dt, bool *quit_requested)
 {
-    (void)flow; /* rogue/duel commands handled inline in main.c routing */
-
-    /* Scoring auto-advance: push synthetic CONFIRM after 15s.
+    /* Scoring auto-advance: push synthetic CONFIRM after 10s + timer bonus.
      * Must be outside the command loop so it ticks every frame. */
     if (gs->phase == PHASE_SCORING) {
+        float bonus = flow->turn_time_limit - FLOW_TURN_TIME_LIMIT;
+        rs->score_auto_limit = 10.0f + bonus;
         bool awaiting_input =
             (rs->score_subphase == SCORE_SUB_DISPLAY) ||
             (rs->score_subphase == SCORE_SUB_DONE) ||
@@ -39,7 +39,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
              rs->contract_reveal_count >= rs->contract_result_count);
         if (awaiting_input && !rs->scoring_ready_sent) {
             rs->score_auto_timer += dt;
-            if (rs->score_auto_timer >= 10.0f) {
+            if (rs->score_auto_timer >= rs->score_auto_limit) {
                 InputCmd auto_cmd = {0};
                 auto_cmd.type = INPUT_CMD_CONFIRM;
                 input_cmd_push(auto_cmd);
@@ -287,7 +287,7 @@ void game_update(GameState *gs, RenderState *rs, Phase2State *p2,
                                     /* Player name in text field */
                                     snprintf(rs->contract_result_text[result_idx],
                                              sizeof(rs->contract_result_text[result_idx]),
-                                             "%s", p2_player_name(i));
+                                             "%s", p2_player_name(i, rs));
                                     snprintf(rs->contract_result_name[result_idx],
                                              sizeof(rs->contract_result_name[result_idx]),
                                              "%s", tmute_name);

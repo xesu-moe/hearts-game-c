@@ -339,7 +339,8 @@ typedef struct RenderState {
     float           contract_reveal_timer;  /* countdown to next reveal */
     bool            scoring_screen_done;    /* online: true when scoring UI completes */
     bool            scoring_ready_sent;     /* true after last-screen CONFIRM sent to server */
-    float           score_auto_timer;       /* 15s auto-advance countdown (online) */
+    float           score_auto_timer;       /* auto-advance countdown (online) */
+    float           score_auto_limit;       /* 10s + timer bonus */
 
     int             scoring_cards_per_player[NUM_PLAYERS]; /* card count per row for effect indicators */
     int             scoring_martyr[NUM_PLAYERS];           /* martyr effect count per player (2^count multiplier) */

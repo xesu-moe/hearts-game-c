@@ -1,10 +1,10 @@
 /* ============================================================
  * @deps-implements: server_game.h
- * @deps-requires: server_game.h, core/game_state.h (GameState.pass_selection_hints),
+ * @deps-requires: server_game.h, core/game_state.h (GameState),
  *                 core/hand.h, core/trick.h, core/card.h, core/input_cmd.h,
- *                 phase2/phase2_state.h, phase2/transmutation.h, phase2/phase2_defs.h,
- *                 phase2/contract_logic.h, phase2/transmutation_logic.h, stdio.h, stdlib.h, string.h
- * @deps-last-changed: 2026-04-05 — sv_ai_select_pass(ServerGame*, int) now uses pass_selection_hints
+ *                 phase2/phase2_state.h, phase2/phase2_defs.h,
+ *                 phase2/contract_logic.h, phase2/transmutation_logic.h, stdio.h, stdlib.h
+ * @deps-last-changed: 2026-04-16 — Added static sv_timer_bonus(const ServerGame*); sv_full_turn_time() calls it
  * ============================================================ */
 
 #include "server_game.h"
@@ -26,7 +26,7 @@
 
 /* Server-side fallback timeouts: client PASS_*_TIME + 5s grace period */
 #define SV_DRAFT_TIMEOUT    20.0f  /* PASS_CONTRACT_TIME (15s) + 5s */
-#define SV_PASS_TIMEOUT     25.0f  /* PASS_CARD_PASS_TIME (20s) + 5s */
+#define SV_PASS_TIMEOUT     35.0f  /* PASS_CARD_PASS_TIME (30s) + 5s */
 #define SV_SCORING_TIMEOUT  20.0f  /* max wait for scoring confirmation */
 #define SV_DEALER_TIMEOUT   15.0f  /* max wait for each dealer decision */
 #define SV_DUEL_TIMEOUT      8.0f  /* max wait for duel pick/give */
@@ -40,14 +40,19 @@ static float sv_duel_ai_delay(void)
            (SV_DUEL_AI_DELAY_MAX - SV_DUEL_AI_DELAY_MIN);
 }
 
-/* Server-side turn time table — must match TIMER_BONUS_VALUES in
+/* Server-side timer bonus table — must match TIMER_BONUS_VALUES in
  * src/game/online_ui.c (kept local so server doesn't link client UI code). */
-static float sv_full_turn_time(const ServerGame *sg)
+static float sv_timer_bonus(const ServerGame *sg)
 {
     static const int bonus[] = { 0, 5, 10, 15, 20 };
     int ti = sg->timer_option;
     if (ti < 0 || ti >= (int)(sizeof(bonus) / sizeof(bonus[0]))) ti = 0;
-    return 30.0f + (float)bonus[ti];
+    return (float)bonus[ti];
+}
+
+static float sv_full_turn_time(const ServerGame *sg)
+{
+    return 30.0f + sv_timer_bonus(sg);
 }
 
 /* ---- Forward declarations for internal helpers ---- */
@@ -194,6 +199,7 @@ void server_game_start(ServerGame *sg)
 
     sg->game_active = true;
     sg->dealer_player = -1;
+    sg->last_trick_winner = -1;
     sg->pass_substate = SV_PASS_IDLE;
     sg->play_substate = SV_PLAY_IDLE;
     sg->draft_round = 0;
@@ -321,6 +327,18 @@ void server_game_tick(ServerGame *sg)
             sg->dealer_player    = -1;
             sg->pass_substate    = SV_PASS_CARD_SELECT;
             sg->pass_phase_timer = 0.0f;
+            /* Random 3-6s delay per AI for natural pass timing */
+            for (int i = 0; i < NUM_PLAYERS; i++) {
+                if (!sg->gs.players[i].is_human)
+                    sg->ai_pass_delay[i] = 3.0f + (float)(rand() % 3001) / 1000.0f;
+                else
+                    sg->ai_pass_delay[i] = 0.0f;
+            }
+            printf("[VANILLA PASS] Entering SV_PASS_CARD_SELECT, timer=%.3f\n",
+                   sg->pass_phase_timer);
+            for (int i = 0; i < NUM_PLAYERS; i++)
+                printf("  seat %d: is_human=%d ai_pass_delay=%.3f\n",
+                       i, sg->gs.players[i].is_human, sg->ai_pass_delay[i]);
         }
 
         sg->draft_round = 0;
@@ -758,7 +776,7 @@ bool server_game_apply_cmd(ServerGame *sg, int seat, const InputCmd *cmd,
                 int dw = p2->round.transmute_round.duel_pending_winner;
                 sg->play_substate = SV_PLAY_DUEL_PICK_WAIT;
                 sg->duel_timer = gs->players[dw].is_human
-                    ? 0.0f : (SV_DUEL_TIMEOUT - sv_duel_ai_delay());
+                    ? 0.0f : (SV_DUEL_TIMEOUT + sv_timer_bonus(sg) - sv_duel_ai_delay());
             } else {
                 sg->play_substate = SV_PLAY_WAIT_TURN;
             }
@@ -899,7 +917,7 @@ static void sv_do_pass_phase(ServerGame *sg)
             sg->state_dirty = true;
         }
         /* Human: wait for DEALER_DIR command, with timeout fallback */
-        if (sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
+        if (sg->pass_phase_timer > SV_DEALER_TIMEOUT + sv_timer_bonus(sg)) {
             gs->pass_direction = (PassDirection)(rand() % 3);
             printf("Server timeout: auto-picked direction %s for dealer %s\n",
                    sv_dir_name(gs->pass_direction),
@@ -925,7 +943,7 @@ static void sv_do_pass_phase(ServerGame *sg)
                    gs->pass_card_count);
             sg->pass_substate = SV_PASS_DEALER_CONFIRM;
             sg->state_dirty = true;
-        } else if (sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
+        } else if (sg->pass_phase_timer > SV_DEALER_TIMEOUT + sv_timer_bonus(sg)) {
             static const int amounts[] = {2, 3, 4};
             gs->pass_card_count = amounts[rand() % 3];
             printf("Server timeout: auto-picked %d cards for dealer %s\n",
@@ -939,7 +957,7 @@ static void sv_do_pass_phase(ServerGame *sg)
     case SV_PASS_DEALER_CONFIRM:
         assert(sg->p2.enabled);
         if (!gs->players[sg->dealer_player].is_human ||
-            sg->pass_phase_timer > SV_DEALER_TIMEOUT) {
+            sg->pass_phase_timer > SV_DEALER_TIMEOUT + sv_timer_bonus(sg)) {
             if (gs->players[sg->dealer_player].is_human)
                 printf("Server timeout: auto-confirmed dealer %s\n",
                        sv_player_name(sg->dealer_player));
@@ -990,7 +1008,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         }
 
         /* Server fallback: auto-pick for humans after grace period */
-        if (sg->pass_phase_timer > SV_DRAFT_TIMEOUT) {
+        if (sg->pass_phase_timer > SV_DRAFT_TIMEOUT + sv_timer_bonus(sg)) {
             for (int p = 0; p < NUM_PLAYERS; p++) {
                 if (gs->players[p].is_human && !draft->players[p].has_picked_this_round) {
                     draft_pick(draft, p, 0);
@@ -1031,6 +1049,8 @@ static void sv_do_pass_phase(ServerGame *sg)
         for (int p = 0; p < NUM_PLAYERS; p++) {
             if (!gs->players[p].is_human && !gs->pass_ready[p] &&
                 sg->pass_phase_timer >= sg->ai_pass_delay[p]) {
+                printf("[AI PASS] seat %d confirming pass, timer=%.3f delay=%.3f\n",
+                       p, sg->pass_phase_timer, sg->ai_pass_delay[p]);
                 if (sg->ai_difficulty == 1) {
                     int pc = gs->pass_card_count;
                     Card pass_cards[MAX_PASS_CARD_COUNT];
@@ -1060,7 +1080,7 @@ static void sv_do_pass_phase(ServerGame *sg)
         }
 
         /* Server fallback: auto-select pass cards for humans after grace period */
-        if (sg->pass_phase_timer > SV_PASS_TIMEOUT) {
+        if (sg->pass_phase_timer > SV_PASS_TIMEOUT + sv_timer_bonus(sg)) {
             for (int p = 0; p < NUM_PLAYERS; p++) {
                 if (gs->players[p].is_human && !gs->pass_ready[p]) {
                     sv_ai_select_pass(sg, p);
@@ -1356,7 +1376,7 @@ static void sv_do_play_phase(ServerGame *sg)
 
     case SV_PLAY_DUEL_PICK_WAIT:
         sg->duel_timer += FIXED_DT;
-        if (sg->duel_timer >= SV_DUEL_TIMEOUT) {
+        if (sg->duel_timer >= SV_DUEL_TIMEOUT + sv_timer_bonus(sg)) {
             /* Auto-pick a random opponent (same logic as sv_execute_duel_ai target selection) */
             GameState *gs = &sg->gs;
             Phase2State *p2 = &sg->p2;
@@ -1425,7 +1445,7 @@ static void sv_do_play_phase(ServerGame *sg)
                 /* Bots: pre-offset timer for AI delay; humans: start at 0.
                  * GIVE phase gets +2s extra thinking time. */
                 sg->duel_timer = is_bot
-                    ? (SV_DUEL_TIMEOUT - sv_duel_ai_delay() - 2.0f) : 0.0f;
+                    ? (SV_DUEL_TIMEOUT + sv_timer_bonus(sg) - sv_duel_ai_delay() - 2.0f) : 0.0f;
             }
             sg->state_dirty = true;
         }
@@ -1433,7 +1453,7 @@ static void sv_do_play_phase(ServerGame *sg)
 
     case SV_PLAY_DUEL_GIVE_WAIT:
         sg->duel_timer += FIXED_DT;
-        if (sg->duel_timer >= SV_DUEL_TIMEOUT) {
+        if (sg->duel_timer >= SV_DUEL_TIMEOUT + sv_timer_bonus(sg)) {
             int dw = sg->p2.round.transmute_round.duel_pending_winner;
             bool is_bot = (dw >= 0 && !sg->gs.players[dw].is_human);
             /* Bot with swap decision: execute the exchange */
@@ -1816,7 +1836,7 @@ static void sv_check_post_trick_effects(ServerGame *sg, int winner)
         sg->play_substate = SV_PLAY_DUEL_PICK_WAIT;
         /* Bots: pre-offset timer so SV_DUEL_TIMEOUT fires after 1-2s delay */
         sg->duel_timer = gs->players[dw].is_human
-            ? 0.0f : (SV_DUEL_TIMEOUT - sv_duel_ai_delay());
+            ? 0.0f : (SV_DUEL_TIMEOUT + sv_timer_bonus(sg) - sv_duel_ai_delay());
         sg->state_dirty = true;
         return;
     }
@@ -1970,7 +1990,7 @@ static void sv_do_scoring(ServerGame *sg)
         if (!sg->scoring_ready[i]) { all_ready = false; break; }
     }
 
-    if (!all_ready && sg->scoring_wait_timer < SV_SCORING_TIMEOUT)
+    if (!all_ready && sg->scoring_wait_timer < SV_SCORING_TIMEOUT + sv_timer_bonus(sg))
         return; /* Keep waiting */
 
     if (!all_ready) {

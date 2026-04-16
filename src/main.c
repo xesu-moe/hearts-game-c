@@ -665,7 +665,7 @@ int main(int argc, char **argv)
                         flow.rogue_target_player = tp;
                         flow.rogue_reveal_player = tp;
                         flow.step = FLOW_ROGUE_SUIT_CHOOSING;
-                        flow.timer = FLOW_ROGUE_SUIT_CHOOSE_TIME;
+                        flow.timer = FLOW_ROGUE_SUIT_CHOOSE_TIME + (flow.turn_time_limit - FLOW_TURN_TIME_LIMIT);
                         rs.opponent_hover_active = false;
                         rs.suit_hover_active = true;
                         rs.suit_hover_idx = -1;
@@ -911,6 +911,8 @@ int main(int argc, char **argv)
             gs.pass_card_count > 0) {
             int confirmed_seat;
             while ((confirmed_seat = client_net_consume_pass_confirmed()) >= 0) {
+                printf("[CLIENT PASS] confirmed seat=%d subphase=%d\n",
+                       confirmed_seat, pps.subphase);
                 if (confirmed_seat >= 0 && confirmed_seat < NUM_PLAYERS)
                     gs.pass_ready[confirmed_seat] = true;
                 if (!pps.toss_started[confirmed_seat])
@@ -1052,17 +1054,20 @@ int main(int argc, char **argv)
                         /* Async mode: tosses already in flight. Assign
                          * received card identities to staged cards and
                          * fire catch-up tosses for any late seats. */
+                        printf("[CLIENT PASS] PLAYING arrived, async_toss=true, catching up\n");
                         pass_assign_received_cards(&pps, &rs,
                                                           received, recv_count);
                         /* Fire catch-up tosses for any seats not yet started */
                         for (int p = 0; p < NUM_PLAYERS; p++) {
                             if (!pps.toss_started[p]) {
+                                printf("[CLIENT PASS]   catch-up toss seat %d\n", p);
                                 pass_start_single_toss(&pps, &gs, &rs, p);
                             }
                         }
                         pps.pass_anim = true;
                     } else {
                         /* No async tosses happened — fall back to batched */
+                        printf("[CLIENT PASS] PLAYING arrived, async_toss=false, using BATCHED\n");
                         pass_start_toss_anim_batched(&pps, &gs, &rs,
                                                     received, recv_count);
                     }
@@ -1079,8 +1084,10 @@ int main(int argc, char **argv)
             state_recv_apply(&gs, &p2, &view, false);
 
             /* Apply configured turn time limit from server */
-            if (view.turn_time_limit > 0.0f && view.turn_time_limit <= 120.0f)
+            if (view.turn_time_limit >= FLOW_TURN_TIME_LIMIT && view.turn_time_limit <= 120.0f) {
                 flow.turn_time_limit = view.turn_time_limit;
+                pps.timer_bonus = view.turn_time_limit - FLOW_TURN_TIME_LIMIT;
+            }
 
             /* Latch the server-authoritative turn timer for display.
              * The server resets this on every active-seat change, so
@@ -1091,20 +1098,25 @@ int main(int argc, char **argv)
                 rs.turn_time_remaining = view.turn_timer;
 
             /* Apply trick transmutation info from server to PlayPhaseState
-             * so info_sync can detect Mirror and other per-slot effects */
-            for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                const NetTrickTransmuteView *ttv = &view.trick_transmutes;
-                int my = view.my_seat;
-                pls.current_tti.transmutation_ids[i] = ttv->transmutation_ids[i];
-                pls.current_tti.resolved_effects[i] =
-                    (TransmuteEffect)ttv->resolved_effects[i];
-                pls.current_tti.fogged[i] = ttv->fogged[i];
-                pls.current_tti.transmuter_player[i] =
-                    (ttv->transmuter_player[i] < 0) ? ttv->transmuter_player[i]
-                    : (ttv->transmuter_player[i] - my + NUM_PLAYERS) % NUM_PLAYERS;
-                pls.current_tti.fog_transmuter[i] =
-                    (ttv->fog_transmuter[i] < 0) ? ttv->fog_transmuter[i]
-                    : (ttv->fog_transmuter[i] - my + NUM_PLAYERS) % NUM_PLAYERS;
+             * so info_sync can detect Mirror and other per-slot effects.
+             * Skip in vanilla mode: trick_transmutes is not serialized when
+             * phase2_enabled is false, so the deserialized values are zeroes
+             * (from memset) rather than -1, which would render as red jokers. */
+            if (p2.enabled) {
+                for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                    const NetTrickTransmuteView *ttv = &view.trick_transmutes;
+                    int my = view.my_seat;
+                    pls.current_tti.transmutation_ids[i] = ttv->transmutation_ids[i];
+                    pls.current_tti.resolved_effects[i] =
+                        (TransmuteEffect)ttv->resolved_effects[i];
+                    pls.current_tti.fogged[i] = ttv->fogged[i];
+                    pls.current_tti.transmuter_player[i] =
+                        (ttv->transmuter_player[i] < 0) ? ttv->transmuter_player[i]
+                        : (ttv->transmuter_player[i] - my + NUM_PLAYERS) % NUM_PLAYERS;
+                    pls.current_tti.fog_transmuter[i] =
+                        (ttv->fog_transmuter[i] < 0) ? ttv->fog_transmuter[i]
+                        : (ttv->fog_transmuter[i] - my + NUM_PLAYERS) % NUM_PLAYERS;
+                }
             }
 
             /* Inject client-side deal animation on new round.
@@ -1113,7 +1125,8 @@ int main(int argc, char **argv)
              * Skip on reconnect: phase_before_apply will be PHASE_ONLINE_MENU
              * or PHASE_MENU, not an in-game phase. */
             if (gs.round_number != prev_round &&
-                is_ingame_phase(phase_before_apply)) {
+                (is_ingame_phase(phase_before_apply) ||
+                 phase_before_apply == PHASE_ONLINE_MENU)) {
                 gs.phase = PHASE_DEALING;
                 rs.deal_anim = true;
                 rs.sync_needed = true;
@@ -1144,21 +1157,25 @@ int main(int argc, char **argv)
                  view.dealer_seat == view.my_seat &&
                  pps.subphase == PASS_SUB_DEALER);
 
-            for (int i = 0; i < CARDS_PER_TRICK; i++) {
-                pls.current_tti.transmutation_ids[i] =
-                    view.trick_transmutes.transmutation_ids[i];
-                int tp = view.trick_transmutes.transmuter_player[i];
-                pls.current_tti.transmuter_player[i] =
-                    (tp >= 0) ? (int)((tp - view.my_seat + NUM_PLAYERS)
-                                      % NUM_PLAYERS) : -1;
-                pls.current_tti.resolved_effects[i] =
-                    (TransmuteEffect)view.trick_transmutes.resolved_effects[i];
-                pls.current_tti.fogged[i] =
-                    view.trick_transmutes.fogged[i];
-                int ft = view.trick_transmutes.fog_transmuter[i];
-                pls.current_tti.fog_transmuter[i] =
-                    (ft >= 0) ? (int)((ft - view.my_seat + NUM_PLAYERS)
-                                      % NUM_PLAYERS) : -1;
+            /* Second TTI copy — also guard for vanilla mode (same reason
+             * as the first copy above: zeroed network data vs -1 sentinel). */
+            if (p2.enabled) {
+                for (int i = 0; i < CARDS_PER_TRICK; i++) {
+                    pls.current_tti.transmutation_ids[i] =
+                        view.trick_transmutes.transmutation_ids[i];
+                    int tp = view.trick_transmutes.transmuter_player[i];
+                    pls.current_tti.transmuter_player[i] =
+                        (tp >= 0) ? (int)((tp - view.my_seat + NUM_PLAYERS)
+                                          % NUM_PLAYERS) : -1;
+                    pls.current_tti.resolved_effects[i] =
+                        (TransmuteEffect)view.trick_transmutes.resolved_effects[i];
+                    pls.current_tti.fogged[i] =
+                        view.trick_transmutes.fogged[i];
+                    int ft = view.trick_transmutes.fog_transmuter[i];
+                    pls.current_tti.fog_transmuter[i] =
+                        (ft >= 0) ? (int)((ft - view.my_seat + NUM_PLAYERS)
+                                          % NUM_PLAYERS) : -1;
+                }
             }
 
             /* Server-authoritative trick winner (Roulette determinism) */
